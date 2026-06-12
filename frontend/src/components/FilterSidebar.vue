@@ -49,21 +49,8 @@ async function reset() {
         </a-select>
       </div>
       <div class="group">
-        <div class="label">批次状态</div>
-        <a-radio-group v-model="store.filters.status" direction="vertical">
-          <a-radio value="">全部</a-radio>
-          <a-radio value="pass">通过</a-radio>
-          <a-radio value="warn">警告</a-radio>
-          <a-radio value="fail">失败</a-radio>
-        </a-radio-group>
-      </div>
-      <div class="group">
         <div class="label">创建时间</div>
         <a-range-picker size="small" style="width: 100%" />
-      </div>
-      <div class="group" style="display:flex; justify-content:space-between; align-items:center">
-        <span>仅看我的批次</span>
-        <a-switch size="small" />
       </div>
 
       <a-button type="primary" long @click="apply">应用筛选</a-button>

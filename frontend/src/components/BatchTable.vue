@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api } from '../api'
-import { useStore, STATUS_META } from '../store'
+import { useStore } from '../store'
 
 const store = useStore()
 
@@ -12,13 +12,9 @@ const columns = [
   { title: '批次ID', dataIndex: 'batch_id', slotName: 'id' },
   { title: '项目', dataIndex: 'project' },
   { title: '分支 / 版本', dataIndex: 'branch' },
-  { title: '参照基线 / 批次', dataIndex: 'ref_label', slotName: 'ref' },
   { title: '平台', dataIndex: 'platform', slotName: 'platform' },
   { title: '场景数', dataIndex: 'scene_count' },
-  { title: '对比数', dataIndex: 'compare_count' },
-  { title: '状态', dataIndex: 'status', slotName: 'status' },
   { title: '差异率(均值)', dataIndex: 'diff_avg', slotName: 'diff', sortable: { sortDirections: ['ascend', 'descend'] } },
-  { title: '创建人', dataIndex: 'creator' },
   { title: '创建时间', dataIndex: 'created_at', sortable: { sortDirections: ['ascend', 'descend'] } },
   { title: '操作', slotName: 'ops', width: 150 },
 ]
@@ -85,10 +81,9 @@ function batchLabel(b) {
 }
 
 function exportCsv() {
-  const head = '批次ID,项目,分支/版本,参照,平台,场景数,对比数,状态,差异率(均值),创建人,创建时间'
+  const head = '批次ID,项目,分支/版本,平台,场景数,差异率(均值),创建时间'
   const rows = store.comparisons.map(c =>
-    [c.batch_id, c.project, c.branch, c.ref_label, c.platform, c.scene_count, c.compare_count,
-     STATUS_META[c.status].label, c.diff_avg + '%', c.creator, c.created_at].join(','))
+    [c.batch_id, c.project, c.branch, c.platform, c.scene_count, c.diff_avg + '%', c.created_at].join(','))
   const blob = new Blob(['﻿' + head + '\n' + rows.join('\n')], { type: 'text/csv' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
@@ -113,15 +108,7 @@ function exportCsv() {
       :row-class="(r) => r.id === store.selectedComparison?.id ? 'row-selected' : ''"
       @row-click="(r) => store.selectComparison(r)">
       <template #id="{ record }"><span class="mono">#{{ record.batch_id }}</span></template>
-      <template #ref="{ record }">
-        <a-tooltip :content="`参照批次 #${record.ref_batch_id} (${record.ref_branch})`">
-          <span>{{ record.ref_label }}</span>
-        </a-tooltip>
-      </template>
       <template #platform="{ record }">{{ PLATFORM_ICON[record.platform] || '' }} {{ record.platform }}</template>
-      <template #status="{ record }">
-        <a-tag :color="STATUS_META[record.status].color" size="small">{{ STATUS_META[record.status].label }}</a-tag>
-      </template>
       <template #diff="{ record }">
         <span class="mono" :class="{ 'diff-fail': record.status === 'fail' }">{{ record.diff_avg.toFixed(2) }}%</span>
       </template>
