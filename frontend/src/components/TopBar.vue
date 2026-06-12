@@ -12,18 +12,12 @@ const tabs = [
 
 <template>
   <header class="topbar panel-border-b">
-    <div class="logo">📷 ShotDiff</div>
+    <div class="logo">📷 PixelComparison</div>
     <nav class="tabs">
       <button v-for="t in tabs" :key="t.key" class="tab"
         :class="{ active: active === t.key }"
         @click="$emit('update:active', t.key)">{{ t.label }}</button>
     </nav>
-    <div class="right">
-      <a-input-search placeholder="搜索批次 / 场景 / 版本 / 标签" style="width: 260px" allow-clear />
-      <a-badge dot :offset="[-4, 4]"><a-button shape="circle" size="small">🔔</a-button></a-badge>
-      <a-avatar :size="28" style="background: rgb(var(--arcoblue-6))">张</a-avatar>
-      <span>张三</span>
-    </div>
   </header>
 </template>
 
@@ -40,5 +34,4 @@ const tabs = [
   content: ""; position: absolute; left: 12px; right: 12px; bottom: 0;
   height: 2px; background: rgb(var(--arcoblue-6)); border-radius: 2px;
 }
-.right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
 </style>
