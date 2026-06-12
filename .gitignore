@@ -1,0 +1,11 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# 运行时数据(SQLite 库 + 上报的截图/热力图)
+backend/data/
+
+# Node
+frontend/node_modules/
+frontend/dist/
