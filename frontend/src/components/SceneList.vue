@@ -45,7 +45,7 @@ function onSearch(val) {
         :model-value="store.sceneSearch" @input="onSearch" @clear="onSearch('')" />
     </div>
 
-    <div class="cols text-secondary"><span style="flex:1">场景名称</span><span style="width:52px">状态</span><span style="width:56px; text-align:right">差异率</span></div>
+    <div class="cols text-secondary"><span style="flex:1">场景名称</span><span style="width:56px; text-align:right">差异率</span></div>
 
     <a-spin :loading="store.loading" class="list-wrap">
       <div class="list">
@@ -54,7 +54,6 @@ function onSearch(val) {
           @click="store.selectScene(s.id)">
           <img :src="s.thumb_url" loading="lazy" alt="">
           <span class="name" :title="s.name">{{ s.name }}</span>
-          <a-tag :color="STATUS_META[s.status].color" size="small">{{ STATUS_META[s.status].label }}</a-tag>
           <span class="diff mono" :class="{ 'diff-fail': s.status === 'fail' }">
             {{ s.diff_pct !== null ? s.diff_pct.toFixed(2) + '%' : '—' }}
           </span>
