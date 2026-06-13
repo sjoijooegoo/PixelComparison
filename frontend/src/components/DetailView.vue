@@ -73,24 +73,24 @@ onUnmounted(() => {
 
       <!-- 三视图 / 原图对比 -->
       <div v-if="store.viewMode !== 'slide' || !paired" class="views">
-        <div class="card">
-          <div class="cap">当前版本 ({{ store.selectedComparison?.branch }})</div>
+        <div class="view-col">
+          <div class="cap"><i class="cap-dot dot-cur"></i>当前版本 ({{ store.selectedComparison?.branch }})</div>
           <div v-if="detail.current_url" class="frame">
             <img :src="detail.current_url" :style="{ width: store.zoom + '%' }" alt="当前版本">
           </div>
           <div v-else class="frame empty">当前批次无此场景</div>
           <div class="meta text-secondary">批次 #{{ store.selectedComparison?.batch_id }}</div>
         </div>
-        <div class="card">
-          <div class="cap">参照版本 ({{ store.selectedComparison?.ref_label }})</div>
+        <div class="view-col">
+          <div class="cap"><i class="cap-dot dot-ref"></i>参照版本 ({{ store.selectedComparison?.ref_label }})</div>
           <div v-if="detail.baseline_url" class="frame">
             <img :src="detail.baseline_url" :style="{ width: store.zoom + '%' }" alt="参照版本">
           </div>
           <div v-else class="frame empty">参照批次中无此场景</div>
           <div class="meta text-secondary">参照批次 #{{ store.selectedComparison?.ref_batch_id }}</div>
         </div>
-        <div v-if="store.viewMode === 'tri'" class="card">
-          <div class="cap">差异热力图</div>
+        <div v-if="store.viewMode === 'tri'" class="view-col">
+          <div class="cap"><i class="cap-dot dot-heat"></i>差异热力图</div>
           <div v-if="detail.heatmap_url" class="frame">
             <img :src="detail.heatmap_url" :style="{ width: store.zoom + '%' }" alt="差异热力图">
           </div>
@@ -120,11 +120,18 @@ onUnmounted(() => {
 <style scoped>
 .detail { flex: 1; min-width: 0; padding: 12px 16px; overflow-y: auto; }
 .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.head h3 { margin: 0; font-size: 15px; }
+.head h3 { margin: 0; font-size: 14px; }
 .views { display: flex; gap: 12px; margin-top: 12px; align-items: flex-start; }
-.card { flex: 1; min-width: 0; }
-.cap { font-size: 12px; color: var(--color-text-2); margin-bottom: 6px; }
-.frame { background: #0d1117; border-radius: 6px; overflow: auto; }
+.view-col { flex: 1; min-width: 0; }
+.cap { font-size: 12px; color: var(--color-text-2); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+.cap-dot { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 8px; }
+.dot-cur { background: rgb(var(--arcoblue-6)); }
+.dot-ref { background: var(--color-text-4); }
+.dot-heat { background: linear-gradient(135deg, #00b3ff, #ffe000, #e00000); }
+.frame {
+  background: #0d1117; border-radius: 8px; overflow: auto;
+  border: 1px solid var(--color-border-2);
+}
 .frame img { display: block; min-width: 100%; }
 .frame.empty {
   aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
@@ -145,9 +152,9 @@ onUnmounted(() => {
   box-shadow: 0 0 4px rgba(0,0,0,.6);
 }
 .handle::after {
-  content: "◀ ▶"; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
-  background: #fff; color: #1d2129; font-size: 9px; padding: 5px 7px; border-radius: 12px;
-  white-space: nowrap; box-shadow: 0 1px 4px rgba(0,0,0,.3);
+  content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  width: 28px; height: 28px; border-radius: 50%; box-shadow: 0 1px 6px rgba(0,0,0,.35);
+  background: #fff url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><path d="M5.2 3.8 2 7l3.2 3.2M8.8 3.8 12 7l-3.2 3.2" fill="none" stroke="%234e5969" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>') center no-repeat;
 }
 .tag {
   position: absolute; top: 10px; padding: 2px 8px; border-radius: 4px;

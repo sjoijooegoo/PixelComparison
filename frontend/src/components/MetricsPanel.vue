@@ -11,7 +11,6 @@ const rows = computed(() => {
   const m = metrics.value
   if (!m) return []
   return [
-    ['差异率(像素)', m.diff_pct.toFixed(2) + '%', store.detail.status === 'fail'],
     ['差异像素数', m.diff_pixels.toLocaleString()],
     ['总像素数', m.total_pixels.toLocaleString()],
     ['最大差异(单像素)', m.max_diff],
@@ -21,6 +20,12 @@ const rows = computed(() => {
     ['PSNR', m.psnr + ' dB'],
   ]
 })
+
+const HERO_COLOR = {
+  fail: 'rgb(var(--red-6))',
+  warn: 'rgb(var(--orange-6))',
+  pass: 'rgb(var(--green-6))',
+}
 
 const CH_COLORS = { R: '#f53f3f', G: '#00b42a', B: '#165dff' }
 
@@ -68,6 +73,12 @@ onMounted(drawHist)
 <template>
   <aside class="metrics panel-border-l">
     <template v-if="metrics">
+      <div class="hero">
+        <div class="hero-label text-secondary">差异率(像素)</div>
+        <div class="hero-value mono" :style="{ color: HERO_COLOR[store.detail.status] || 'var(--color-text-1)' }">
+          {{ metrics.diff_pct.toFixed(2) }}<span class="hero-unit">%</span>
+        </div>
+      </div>
       <a-collapse :default-active-key="['overall', 'hist']" :bordered="false">
         <a-collapse-item header="总体指标" key="overall">
           <div v-for="[k, v, bad] in rows" :key="k" class="row">
@@ -100,6 +111,10 @@ onMounted(drawHist)
 
 <style scoped>
 .metrics { width: 230px; flex: 0 0 230px; overflow-y: auto; min-height: 0; }
+.hero { padding: 16px 16px 12px; border-bottom: 1px solid var(--color-border-1); }
+.hero-label { font-size: 12px; margin-bottom: 2px; }
+.hero-value { font-size: 26px; font-weight: 700; line-height: 1.2; letter-spacing: -.5px; }
+.hero-unit { font-size: 15px; font-weight: 600; margin-left: 1px; }
 .row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; font-size: 12px; }
 .hist { width: 100%; height: 120px; background: var(--color-fill-1); border-radius: 6px; }
 :deep(.arco-collapse-item-header) { font-weight: 600; }

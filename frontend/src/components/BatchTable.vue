@@ -6,7 +6,11 @@ import { useStore } from '../store'
 
 const store = useStore()
 
-const PLATFORM_ICON = { Windows: '🪟', PS5: '🎮', 'Xbox Series X|S': '🟢' }
+const PLATFORM_BADGE = {
+  Windows: { abbr: 'WIN', cls: 'pf-win' },
+  PS5: { abbr: 'PS5', cls: 'pf-ps' },
+  'Xbox Series X|S': { abbr: 'XBX', cls: 'pf-xb' },
+}
 
 const columns = [
   { title: '批次ID', dataIndex: 'batch_id', slotName: 'id' },
@@ -94,7 +98,7 @@ function exportCsv() {
 </script>
 
 <template>
-  <section class="batch-panel panel-border-b">
+  <section class="batch-panel card">
     <div class="head">
       <h3>批次对比列表 ({{ store.comparisonTotal }})</h3>
       <div style="flex:1"></div>
@@ -108,13 +112,17 @@ function exportCsv() {
       :row-class="(r) => r.id === store.selectedComparison?.id ? 'row-selected' : ''"
       @row-click="(r) => store.selectComparison(r)">
       <template #id="{ record }"><span class="mono">#{{ record.batch_id }}</span></template>
-      <template #platform="{ record }">{{ PLATFORM_ICON[record.platform] || '' }} {{ record.platform }}</template>
+      <template #platform="{ record }">
+        <span v-if="PLATFORM_BADGE[record.platform]" class="pf-badge"
+          :class="PLATFORM_BADGE[record.platform].cls">{{ PLATFORM_BADGE[record.platform].abbr }}</span>
+        {{ record.platform }}
+      </template>
       <template #diff="{ record }">
         <span class="mono" :class="{ 'diff-fail': record.status === 'fail' }">{{ record.diff_avg.toFixed(2) }}%</span>
       </template>
       <template #ops="{ record }">
-        <a-button size="mini" type="primary" @click.stop="store.selectComparison(record)">查看结果</a-button>
-        <a-button size="mini" type="text" @click.stop="Message.info('更多操作:重跑 / 设为基线 / 删除')">⋯</a-button>
+        <a-button size="mini" type="text" @click.stop="store.selectComparison(record)">查看结果</a-button>
+        <a-button size="mini" type="text" class="more-btn" @click.stop="Message.info('更多操作:重跑 / 设为基线 / 删除')">⋯</a-button>
       </template>
     </a-table>
 
@@ -146,9 +154,10 @@ function exportCsv() {
 <style scoped>
 .batch-panel { flex: 0 0 auto; }
 .head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
-.head h3 { margin: 0; font-size: 15px; }
+.head h3 { margin: 0; font-size: 14px; }
 :deep(.arco-table-tr) { cursor: pointer; }
-:deep(.row-selected .arco-table-td) { background: rgb(var(--arcoblue-1)); }
+:deep(.row-selected .arco-table-td) { background: var(--color-fill-2); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
+.more-btn { color: var(--color-text-3); }
 .form-row { margin-bottom: 16px; }
 .form-label { font-size: 12px; color: var(--color-text-2); margin-bottom: 6px; }
 .form-hint { font-size: 12px; margin-top: 6px; }

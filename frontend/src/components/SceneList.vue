@@ -18,6 +18,13 @@ const chips = computed(() => {
   return base
 })
 
+function diffClass(s) {
+  if (s.status === 'fail') return 'diff-fail'
+  if (s.status === 'warn') return 'diff-warn'
+  if (s.diff_pct === null || s.diff_pct < 0.005) return 'diff-dim'
+  return ''
+}
+
 let searchTimer
 function onSearch(val) {
   clearTimeout(searchTimer)
@@ -30,7 +37,7 @@ function onSearch(val) {
 </script>
 
 <template>
-  <section class="scene-panel panel-border-r">
+  <section class="scene-panel card">
     <div class="head">
       <b style="color: rgb(var(--arcoblue-6))">对比结果</b>
       <div class="chips">
@@ -53,8 +60,9 @@ function onSearch(val) {
           :class="{ selected: s.id === store.detail?.id }"
           @click="store.selectScene(s.id)">
           <img :src="s.thumb_url" loading="lazy" alt="">
+          <i class="sdot" :class="'sdot-' + s.status"></i>
           <span class="name" :title="s.name">{{ s.name }}</span>
-          <span class="diff mono" :class="{ 'diff-fail': s.status === 'fail' }">
+          <span class="diff mono" :class="diffClass(s)">
             {{ s.diff_pct !== null ? s.diff_pct.toFixed(2) + '%' : '—' }}
           </span>
         </div>
@@ -79,12 +87,15 @@ function onSearch(val) {
 .list-wrap { flex: 1; min-height: 0; }
 .list { height: 100%; overflow-y: auto; }
 .item {
-  display: flex; align-items: center; gap: 6px; padding: 6px 12px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer;
   border-bottom: 1px solid var(--color-border-1);
 }
 .item:hover { background: var(--color-fill-1); }
-.item.selected { background: rgb(var(--arcoblue-1)); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
-.item img { width: 40px; height: 24px; object-fit: cover; border-radius: 3px; background: #222; flex: 0 0 40px; }
+.item.selected { background: var(--color-fill-2); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
+.item img {
+  width: 56px; height: 32px; object-fit: cover; border-radius: 4px;
+  background: #222; flex: 0 0 56px; border: 1px solid var(--color-border-2);
+}
 .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .diff { width: 52px; text-align: right; font-size: 12px; }
 .foot { padding: 8px 12px; border-top: 1px solid var(--color-border-2); display: flex; justify-content: center; }

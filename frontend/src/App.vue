@@ -24,8 +24,10 @@ onMounted(() => store.init())
         <BatchTable />
         <div class="lower">
           <SceneList />
-          <DetailView />
-          <MetricsPanel />
+          <div class="detail-wrap card">
+            <DetailView />
+            <MetricsPanel />
+          </div>
         </div>
       </main>
     </div>

@@ -17,7 +17,7 @@ async function reset() {
 </script>
 
 <template>
-  <aside class="sidebar panel-border-r">
+  <aside class="sidebar card">
     <div class="scroll">
       <div class="head">
         <b>筛选条件</b>
