@@ -61,12 +61,12 @@ BATCHES = [
          platform="Windows", captured_at="2024-06-08T16:00:00",
          pool="starfall", scenes=[1, 2, 3, 4, 5, 6, 7, 8], variants={2: 3, 4: 2, 6: 3, 8: 2}),
 
-    # —— Starfall · PS5:1.3.0 基线 → 1.3.1 回归(1 失败 + 1 警告) ——
+    # —— Starfall · iOS:1.3.0 基线 → 1.3.1 回归(1 失败 + 1 警告) ——
     dict(id="20240601_1030", project="Project_Starfall", branch="release/1.3.0",
-         platform="PS5", captured_at="2024-06-01T10:30:00",
+         platform="iOS", captured_at="2024-06-01T10:30:00",
          pool="starfall", scenes=[1, 2, 3, 4, 5, 6, 7, 8], variants={}),
     dict(id="20240608_1630", project="Project_Starfall", branch="release/1.3.1",
-         platform="PS5", captured_at="2024-06-08T16:30:00",
+         platform="iOS", captured_at="2024-06-08T16:30:00",
          pool="starfall", scenes=[1, 2, 3, 4, 5, 6, 7, 8], variants={3: 3, 5: 2}),
 
     # —— Starfall · Windows · 1.3.2:删场景 07、增场景 09(演示 缺失/新增) ——
@@ -74,12 +74,12 @@ BATCHES = [
          platform="Windows", captured_at="2024-06-15T09:00:00",
          pool="starfall", scenes=[1, 2, 3, 4, 5, 6, 8, 9], variants={2: 2, 4: 3}),
 
-    # —— Nebula · Windows:develop 基线 → 回归(演示多项目 + 项目筛选) ——
+    # —— Nebula · Android:develop 基线 → 回归(演示多项目 + 项目筛选) ——
     dict(id="20240610_1100", project="Project_Nebula", branch="develop",
-         platform="Windows", captured_at="2024-06-10T11:00:00",
+         platform="Android", captured_at="2024-06-10T11:00:00",
          pool="nebula", scenes=[1, 2, 3, 4], variants={}),
     dict(id="20240614_1100", project="Project_Nebula", branch="develop",
-         platform="Windows", captured_at="2024-06-14T11:00:00",
+         platform="Android", captured_at="2024-06-14T11:00:00",
          pool="nebula", scenes=[1, 2, 3, 4], variants={2: 3, 3: 2}),
 ]
 

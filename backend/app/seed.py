@@ -71,7 +71,7 @@ def seed() -> None:
     # ---- 1. 基线采集批次 -> 晋升为基线 ----
     print("生成基线批次…")
     bl_win = create_batch(db, "20240510_0900", "release/1.1.5", "Windows", "CI机器人", "2024-05-10 09:00", baseline_specs)
-    bl_ps5 = create_batch(db, "20240510_0930", "release/1.1.5", "PS5", "CI机器人", "2024-05-10 09:30", baseline_specs)
+    bl_ps5 = create_batch(db, "20240510_0930", "release/1.1.5", "iOS", "CI机器人", "2024-05-10 09:30", baseline_specs)
     bl_old = create_batch(db, "20240426_1800", "release/1.1.4", "Windows", "CI机器人", "2024-04-26 18:00", baseline_specs)
     v115_win = promote_baseline(db, bl_win, "v1.1.5")
     v115_ps5 = promote_baseline(db, bl_ps5, "v1.1.5")
@@ -84,7 +84,7 @@ def seed() -> None:
         + [(*NEW_SCENE, 0)]
     b1 = create_batch(db, "20240524_1530", "release/1.2.0", "Windows", "张三", "2024-05-24 15:30", b1_scenes)
 
-    b2 = create_batch(db, "20240524_1022", "release/1.2.0", "PS5", "李四", "2024-05-24 10:22",
+    b2 = create_batch(db, "20240524_1022", "release/1.2.0", "iOS", "李四", "2024-05-24 10:22",
                       with_variants(SCENES, rnd, p_fail=0.0, p_warn=0.25))
     b3 = create_batch(db, "20240523_2147", "release/1.2.0", "Windows", "王五", "2024-05-23 21:47",
                       with_variants(SCENES, rnd, p_fail=0.05, p_warn=0.1))

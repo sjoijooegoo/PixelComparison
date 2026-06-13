@@ -7,7 +7,7 @@
     "id": "20240614_1100",
     "project": "Project_Nebula",
     "branch": "develop",
-    "platform": "Windows",
+    "platform": "Android",
     "creator": "render-farm-ci"
   },
   "scenes": [
