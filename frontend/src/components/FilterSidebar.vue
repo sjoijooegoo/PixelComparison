@@ -6,7 +6,6 @@ const store = useStore()
 
 async function apply() {
   await store.loadBatches()
-  if (store.batches.length) await store.selectBatch(store.batches[0])
   Message.success('筛选已应用')
 }
 

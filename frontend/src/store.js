@@ -15,17 +15,23 @@ export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { projects: [], platforms: [], branches: [], baselines: [] },
     filters: { project: '', platform: '', branch: '', baseline: '', status: '' },
-    comparisons: [],
-    comparisonTotal: 0,
-    selectedComparison: null,
 
-    sceneFilter: '',     // '' | fail | warn | pass | added | missing
+    // 顶部:原始批次列表
+    batches: [],
+    batchTotal: 0,
+    // 对比的两侧选择(角色)
+    currentBatch: null,   // 对比批次(待检查)
+    baselineBatch: null,  // 基线批次(参照)
+
+    // 运行后的活动对比
+    selectedComparison: null,
+    running: false,
+
     sceneSearch: '',
     page: 1,
     scenes: [],
     sceneTotal: 0,
     counts: { all: 0, fail: 0, warn: 0, pass: 0, added: 0, missing: 0 },
-
     sceneSort: 'name',   // name(场景名) | diff(差异率降序)
 
     detail: null,        // /api/items/{id} 响应
@@ -34,31 +40,60 @@ export const useStore = defineStore('shotdiff', {
     loading: false,
   }),
 
+  getters: {
+    canCompare: (s) =>
+      !!(s.currentBatch && s.baselineBatch && s.currentBatch.id !== s.baselineBatch.id),
+  },
+
   actions: {
     async init() {
       this.meta = await api.meta()
-      await this.loadComparisons()
-      if (this.comparisons.length) await this.selectComparison(this.comparisons[0])
+      await this.loadBatches()
     },
 
-    async loadComparisons() {
-      const { items, total } = await api.comparisons(this.filters)
-      this.comparisons = items
-      this.comparisonTotal = total
+    async loadBatches() {
+      const { items, total } = await api.batches(this.filters)
+      this.batches = items
+      this.batchTotal = total
     },
 
-    async createComparison(batchId, refBatchId) {
-      const dto = await api.createComparison({ batch_id: batchId, ref_batch_id: refBatchId })
-      await this.loadComparisons()
-      await this.selectComparison(dto)
-      return dto
+    // role: 'current'(对比) | 'baseline'(基线)
+    setRole(batch, role) {
+      const other = role === 'current' ? this.baselineBatch : this.currentBatch
+      // 取消同一批次的另一角色,避免自比
+      if (other && other.id === batch.id) {
+        if (role === 'current') this.baselineBatch = null
+        else this.currentBatch = null
+      }
+      if (role === 'current') this.currentBatch = batch
+      else this.baselineBatch = batch
     },
 
-    async selectComparison(comparison) {
+    clearRole(role) {
+      if (role === 'current') this.currentBatch = null
+      else this.baselineBatch = null
+    },
+
+    async runComparison() {
+      if (!this.canCompare) return
+      this.running = true
+      try {
+        const dto = await api.createComparison({
+          batch_id: this.currentBatch.id,
+          ref_batch_id: this.baselineBatch.id,
+        })
+        await this.openComparison(dto)
+        return dto
+      } finally {
+        this.running = false
+      }
+    },
+
+    async openComparison(comparison) {
       this.selectedComparison = comparison
       this.page = 1
-      this.sceneFilter = ''
       this.sceneSearch = ''
+      this.sceneSort = 'name'
       await this.loadScenes()
       if (this.scenes.length) await this.selectScene(this.scenes[0].id)
       else this.detail = null
@@ -75,7 +110,6 @@ export const useStore = defineStore('shotdiff', {
       this.loading = true
       try {
         const data = await api.scenes(this.selectedComparison.id, {
-          status: this.sceneFilter,
           q: this.sceneSearch,
           sort: this.sceneSort,
           page: this.page,

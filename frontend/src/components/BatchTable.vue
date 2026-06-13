@@ -1,91 +1,53 @@
 <script setup>
-import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { api } from '../api'
 import { useStore } from '../store'
 
 const store = useStore()
 
 const columns = [
-  { title: '批次ID', dataIndex: 'batch_id', slotName: 'id' },
+  { title: '批次ID', dataIndex: 'id', slotName: 'id' },
   { title: '项目', dataIndex: 'project' },
   { title: '分支 / 版本', dataIndex: 'branch' },
   { title: '平台', dataIndex: 'platform' },
   { title: '场景数', dataIndex: 'scene_count' },
-  { title: '差异率(均值)', dataIndex: 'diff_avg', slotName: 'diff', sortable: { sortDirections: ['ascend', 'descend'] } },
   { title: '创建时间', dataIndex: 'created_at', sortable: { sortDirections: ['ascend', 'descend'] } },
-  { title: '操作', slotName: 'ops', width: 150 },
+  { title: '操作', slotName: 'ops', width: 200 },
 ]
 
-/* ---- 发起对比弹窗 ---- */
-const modalVisible = ref(false)
-const submitting = ref(false)
-const allBatches = ref([])
-const baselines = ref([])
-const curBatchId = ref('')
-const refBatchId = ref('')
-
-async function openModal() {
-  const [b, bl] = await Promise.all([api.batches(), api.baselines()])
-  allBatches.value = b.items
-  baselines.value = bl.items.filter((x) => x.status === 'active')
-  curBatchId.value = allBatches.value[0]?.id || ''
-  refBatchId.value = ''
-  modalVisible.value = true
-}
-
-const curBatch = computed(() => allBatches.value.find((b) => b.id === curBatchId.value))
-
-// 参照批次:同项目同平台、排除自身;已晋升基线的批次排在前面并标注版本号
-const refOptions = computed(() => {
-  if (!curBatch.value) return []
-  const baselineByBatch = Object.fromEntries(
-    baselines.value.map((b) => [b.source_batch_id, b.version])
-  )
-  return allBatches.value
-    .filter(
-      (b) =>
-        b.id !== curBatchId.value &&
-        b.project === curBatch.value.project &&
-        b.platform === curBatch.value.platform
-    )
-    .map((b) => ({
-      id: b.id,
-      baseline: baselineByBatch[b.id] || null,
-      label: `${baselineByBatch[b.id] ? baselineByBatch[b.id] + ' · ' : ''}#${b.id} (${b.branch})`,
-    }))
-    .sort((a, b) => (a.baseline ? -1 : 0) - (b.baseline ? -1 : 0))
-})
-
-async function submit() {
-  if (!curBatchId.value || !refBatchId.value) {
-    Message.warning('请选择两个批次')
+function setRole(record, role) {
+  // 平台守卫:两侧必须同平台
+  const other = role === 'current' ? store.baselineBatch : store.currentBatch
+  if (other && other.platform !== record.platform) {
+    Message.warning(`对比批次与基线批次的平台需一致(${other.platform})`)
     return
   }
-  submitting.value = true
+  store.setRole(record, role)
+}
+
+async function run() {
+  if (!store.canCompare) return
   try {
-    await store.createComparison(curBatchId.value, refBatchId.value)
-    modalVisible.value = false
+    await store.runComparison()
     Message.success('对比完成')
   } catch (e) {
-    Message.error(e.message)
-  } finally {
-    submitting.value = false
+    Message.error(e.message || '对比失败')
   }
 }
 
-function batchLabel(b) {
-  return `#${b.id} · ${b.branch} · ${b.platform} · ${b.created_at} (${b.scene_count} 场景)`
+function roleOf(record) {
+  if (store.currentBatch?.id === record.id) return 'current'
+  if (store.baselineBatch?.id === record.id) return 'baseline'
+  return null
 }
 
 function exportCsv() {
-  const head = '批次ID,项目,分支/版本,平台,场景数,差异率(均值),创建时间'
-  const rows = store.comparisons.map(c =>
-    [c.batch_id, c.project, c.branch, c.platform, c.scene_count, c.diff_avg + '%', c.created_at].join(','))
+  const head = '批次ID,项目,分支/版本,平台,场景数,创建时间'
+  const rows = store.batches.map(b =>
+    [b.id, b.project, b.branch, b.platform, b.scene_count, b.created_at].join(','))
   const blob = new Blob(['﻿' + head + '\n' + rows.join('\n')], { type: 'text/csv' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
-  a.download = 'shotdiff_comparisons.csv'
+  a.download = 'pixelcomparison_batches.csv'
   a.click()
   URL.revokeObjectURL(a.href)
 }
@@ -94,49 +56,48 @@ function exportCsv() {
 <template>
   <section class="batch-panel card">
     <div class="head">
-      <h3>批次对比列表 ({{ store.comparisonTotal }})</h3>
+      <h3>批次列表 ({{ store.batchTotal }})</h3>
       <div style="flex:1"></div>
-      <a-button size="small" @click="store.loadComparisons(); Message.success('已刷新')">刷新</a-button>
+      <a-button size="small" @click="store.loadBatches(); Message.success('已刷新')">刷新</a-button>
       <a-button size="small" @click="exportCsv">导出列表</a-button>
-      <a-button size="small" type="primary" @click="openModal">发起对比</a-button>
     </div>
+
+    <!-- 选择条:已选的对比批次 / 基线批次 + 发起对比 -->
+    <div class="select-bar">
+      <div class="slot">
+        <span class="slot-tag slot-cur">对比批次</span>
+        <template v-if="store.currentBatch">
+          <span class="mono">#{{ store.currentBatch.id }}</span>
+          <button class="slot-x" @click="store.clearRole('current')">×</button>
+        </template>
+        <span v-else class="slot-empty">未选择</span>
+      </div>
+      <span class="vs">VS</span>
+      <div class="slot">
+        <span class="slot-tag slot-base">基线批次</span>
+        <template v-if="store.baselineBatch">
+          <span class="mono">#{{ store.baselineBatch.id }}</span>
+          <button class="slot-x" @click="store.clearRole('baseline')">×</button>
+        </template>
+        <span v-else class="slot-empty">未选择</span>
+      </div>
+      <a-button type="primary" size="small" :disabled="!store.canCompare"
+        :loading="store.running" @click="run">发起对比</a-button>
+    </div>
+
     <a-table
-      :columns="columns" :data="store.comparisons" :pagination="false"
-      size="small" :scroll="{ y: 200 }" row-key="id"
-      :row-class="(r) => r.id === store.selectedComparison?.id ? 'row-selected' : ''"
-      @row-click="(r) => store.selectComparison(r)">
-      <template #id="{ record }"><span class="mono">#{{ record.batch_id }}</span></template>
-      <template #diff="{ record }">
-        <span class="mono" :class="{ 'diff-fail': record.status === 'fail' }">{{ record.diff_avg.toFixed(2) }}%</span>
-      </template>
+      :columns="columns" :data="store.batches" :pagination="false"
+      size="small" :scroll="{ y: 180 }" row-key="id"
+      :row-class="(r) => roleOf(r) ? 'role-' + roleOf(r) : ''">
+      <template #id="{ record }"><span class="mono">#{{ record.id }}</span></template>
       <template #ops="{ record }">
-        <a-button size="mini" type="text" @click.stop="store.selectComparison(record)">查看结果</a-button>
-        <a-button size="mini" type="text" class="more-btn" @click.stop="Message.info('更多操作:重跑 / 设为基线 / 删除')">⋯</a-button>
+        <a-button size="mini" :type="roleOf(record) === 'current' ? 'primary' : 'text'"
+          @click="setRole(record, 'current')">设为对比</a-button>
+        <a-button size="mini" :type="roleOf(record) === 'baseline' ? 'primary' : 'text'"
+          :status="roleOf(record) === 'baseline' ? 'normal' : undefined"
+          @click="setRole(record, 'baseline')">设为基线</a-button>
       </template>
     </a-table>
-
-    <a-modal v-model:visible="modalVisible" title="发起对比" :width="560">
-      <template #footer>
-        <a-button @click="modalVisible = false">取消</a-button>
-        <a-button type="primary" :loading="submitting" @click="submit">开始对比</a-button>
-      </template>
-      <div class="form-row">
-        <div class="form-label">当前批次(待检查)</div>
-        <a-select v-model="curBatchId" placeholder="选择批次" allow-search @change="refBatchId = ''">
-          <a-option v-for="b in allBatches" :key="b.id" :value="b.id">{{ batchLabel(b) }}</a-option>
-        </a-select>
-      </div>
-      <div class="form-row">
-        <div class="form-label">参照批次(作为基准)</div>
-        <a-select v-model="refBatchId" placeholder="选择参照批次或基线" allow-search>
-          <a-option v-for="o in refOptions" :key="o.id" :value="o.id">
-            <a-tag v-if="o.baseline" color="arcoblue" size="small" style="margin-right:6px">基线 {{ o.baseline }}</a-tag>
-            {{ o.label }}
-          </a-option>
-        </a-select>
-        <div class="form-hint text-secondary">仅列出与当前批次同项目、同平台的批次;已晋升为基线的批次优先展示。</div>
-      </div>
-    </a-modal>
   </section>
 </template>
 
@@ -144,10 +105,23 @@ function exportCsv() {
 .batch-panel { flex: 0 0 auto; }
 .head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
 .head h3 { margin: 0; font-size: 14px; }
-:deep(.arco-table-tr) { cursor: pointer; }
-:deep(.row-selected .arco-table-td) { background: var(--color-fill-2); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
-.more-btn { color: var(--color-text-3); }
-.form-row { margin-bottom: 16px; }
-.form-label { font-size: 12px; color: var(--color-text-2); margin-bottom: 6px; }
-.form-hint { font-size: 12px; margin-top: 6px; }
+
+.select-bar {
+  display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+  margin: 0 12px 8px; background: var(--color-fill-1); border-radius: 8px;
+}
+.slot { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.slot-tag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }
+.slot-cur { background: rgba(22, 100, 255, .15); color: rgb(var(--arcoblue-6)); }
+.slot-base { background: var(--color-fill-3); color: var(--color-text-2); }
+.slot-empty { color: var(--color-text-4); }
+.slot-x {
+  border: none; background: none; cursor: pointer; color: var(--color-text-3);
+  font-size: 14px; line-height: 1; padding: 0 2px;
+}
+.slot-x:hover { color: rgb(var(--red-6)); }
+.vs { font-size: 11px; font-weight: 700; color: var(--color-text-4); }
+
+:deep(.role-current .arco-table-td) { background: rgba(22, 100, 255, .08); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
+:deep(.role-baseline .arco-table-td) { background: var(--color-fill-2); box-shadow: inset 2px 0 0 var(--color-text-4); }
 </style>

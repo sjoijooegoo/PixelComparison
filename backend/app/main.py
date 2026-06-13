@@ -103,13 +103,20 @@ def list_batches(
     db: Session = Depends(get_db),
     project: str | None = None,
     platform: str | None = None,
+    branch: str | None = None,
+    q: str | None = None,
 ):
     stmt = select(Batch).order_by(Batch.created_at.desc())
     if project:
         stmt = stmt.where(Batch.project == project)
     if platform:
         stmt = stmt.where(Batch.platform == platform)
-    return {"items": [batch_dto(b, db) for b in db.scalars(stmt)]}
+    if branch:
+        stmt = stmt.where(Batch.branch == branch)
+    if q:
+        stmt = stmt.where(Batch.id.contains(q) | Batch.branch.contains(q))
+    batches = db.scalars(stmt).all()
+    return {"total": len(batches), "items": [batch_dto(b, db) for b in batches]}
 
 
 @app.post("/api/batches", status_code=201)
