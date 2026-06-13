@@ -86,8 +86,9 @@ function exportCsv() {
     </div>
 
     <a-table
-      :columns="columns" :data="store.batches" :pagination="false"
-      size="small" :scroll="{ y: 180 }" row-key="id"
+      :columns="columns" :data="store.batches"
+      :pagination="{ pageSize: 6, size: 'small', simple: true, hideOnSinglePage: false }"
+      size="small" row-key="id"
       :row-class="(r) => roleOf(r) ? 'role-' + roleOf(r) : ''">
       <template #id="{ record }"><span class="mono">#{{ record.id }}</span></template>
       <template #ops="{ record }">
