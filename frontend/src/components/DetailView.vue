@@ -143,7 +143,7 @@ onUnmounted(() => {
   display: inline-block; width: 90px; height: 8px; border-radius: 4px;
   background: linear-gradient(90deg,#1b1bb3,#00b3ff,#00d26a,#ffe000,#ff6a00,#e00000);
 }
-.slide-wrap { margin-top: 12px; max-width: 960px; }
+.slide-wrap { margin: 12px auto 0; max-width: 960px; }
 .stage { position: relative; border-radius: 6px; overflow: hidden; user-select: none; background: #0d1117; }
 .stage > img { display: block; width: 100%; }
 .top { position: absolute; inset: 0 auto 0 0; overflow: hidden; }
