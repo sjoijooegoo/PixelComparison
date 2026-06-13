@@ -1,5 +1,7 @@
 html, body, #app { height: 100%; margin: 0; }
+/* 页面背景需比卡片更深(暗色)/更浅灰(亮色),卡片才能"浮起来" */
 body { font-size: 13px; color: var(--color-text-1); background: var(--color-fill-2); }
+body[arco-theme="dark"] { background: var(--color-bg-1); }
 
 .app-layout { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 .app-body { flex: 1; display: flex; min-height: 0; padding: 10px; gap: 10px; }
