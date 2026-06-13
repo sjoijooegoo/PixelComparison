@@ -1,27 +1,14 @@
 <script setup>
-import { computed } from 'vue'
-import { useStore, STATUS_META, PAGE_SIZE } from '../store'
+import { useStore, PAGE_SIZE } from '../store'
 
 const store = useStore()
 
-const chips = computed(() => {
-  const base = [
-    { key: '', label: '全部', count: store.counts.all },
-    { key: 'fail', label: '失败', count: store.counts.fail },
-    { key: 'warn', label: '警告', count: store.counts.warn },
-    { key: 'pass', label: '通过', count: store.counts.pass },
-  ]
-  // 新增 / 缺失只有出现时才显示
-  for (const key of ['added', 'missing']) {
-    if (store.counts[key] > 0) base.push({ key, label: STATUS_META[key].label, count: store.counts[key] })
-  }
-  return base
-})
-
+// 差异率按数值分级着色(不再依赖通过/警告/失败状态)
 function diffClass(s) {
-  if (s.status === 'fail') return 'diff-fail'
-  if (s.status === 'warn') return 'diff-warn'
-  if (s.diff_pct === null || s.diff_pct < 0.005) return 'diff-dim'
+  if (s.diff_pct === null) return 'diff-dim'
+  if (s.diff_pct >= 2) return 'diff-fail'
+  if (s.diff_pct >= 0.3) return 'diff-warn'
+  if (s.diff_pct < 0.005) return 'diff-dim'
   return ''
 }
 
@@ -39,14 +26,19 @@ function onSearch(val) {
 <template>
   <section class="scene-panel card">
     <div class="head">
-      <b style="color: rgb(var(--arcoblue-6))">对比结果</b>
-      <div class="chips">
-        <a-tag v-for="c in chips" :key="c.key" checkable size="small"
-          :checked="store.sceneFilter === c.key"
-          :color="c.key ? STATUS_META[c.key].color : 'arcoblue'"
-          @check="store.setSceneFilter(c.key)">
-          {{ c.label }} {{ c.count }}
-        </a-tag>
+      <div class="head-top">
+        <b style="color: rgb(var(--arcoblue-6))">对比结果</b>
+        <span class="text-secondary" style="font-size:12px">{{ store.sceneTotal }} 个场景</span>
+        <a-button size="mini" class="sort-btn" :type="store.sceneSort === 'diff' ? 'primary' : 'secondary'"
+          @click="store.toggleSceneSort()">
+          <template #icon>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor"
+              stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 2v8M3 10 1.5 8.3M3 10l1.5-1.7M7 3h4M7 6h3M7 9h2" />
+            </svg>
+          </template>
+          {{ store.sceneSort === 'diff' ? '按差异率' : '按名称' }}
+        </a-button>
       </div>
       <a-input size="small" placeholder="搜索场景名称" allow-clear
         :model-value="store.sceneSearch" @input="onSearch" @clear="onSearch('')" />
@@ -60,7 +52,6 @@ function onSearch(val) {
           :class="{ selected: s.id === store.detail?.id }"
           @click="store.selectScene(s.id)">
           <img :src="s.thumb_url" loading="lazy" alt="">
-          <i class="sdot" :class="'sdot-' + s.status"></i>
           <span class="name" :title="s.name">{{ s.name }}</span>
           <span class="diff mono" :class="diffClass(s)">
             {{ s.diff_pct !== null ? s.diff_pct.toFixed(2) + '%' : '—' }}
@@ -82,7 +73,8 @@ function onSearch(val) {
 <style scoped>
 .scene-panel { width: 300px; flex: 0 0 300px; display: flex; flex-direction: column; min-height: 0; }
 .head { padding: 10px 12px 6px; display: flex; flex-direction: column; gap: 8px; }
-.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.head-top { display: flex; align-items: center; gap: 8px; }
+.sort-btn { margin-left: auto; }
 .cols { display: flex; padding: 4px 12px; font-size: 12px; border-bottom: 1px solid var(--color-border-2); }
 .list-wrap { flex: 1; min-height: 0; }
 .list { height: 100%; overflow-y: auto; }

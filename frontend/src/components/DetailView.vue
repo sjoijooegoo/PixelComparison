@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { useStore, STATUS_META } from '../store'
+import { useStore } from '../store'
 
 const store = useStore()
 const detail = computed(() => store.detail)
@@ -45,7 +45,8 @@ onUnmounted(() => {
     <template v-if="detail">
       <div class="head">
         <h3>{{ detail.name }}</h3>
-        <a-tag :color="STATUS_META[detail.status].color" size="small">{{ STATUS_META[detail.status].label }}</a-tag>
+        <a-tag v-if="detail.status === 'added'" color="arcoblue" size="small">新增场景</a-tag>
+        <a-tag v-else-if="detail.status === 'missing'" color="gray" size="small">场景缺失</a-tag>
         <a-button-group size="mini">
           <a-button :disabled="!detail.prev_id" @click="store.gotoPrev()">‹ 上一个</a-button>
           <a-button disabled>{{ detail.index }}/{{ detail.sibling_total }}</a-button>

@@ -222,6 +222,7 @@ def list_scenes(
     db: Session = Depends(get_db),
     status: str | None = None,
     q: str | None = None,
+    sort: str = "name",  # name(场景名升序) | diff(差异率降序)
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100),
 ):
@@ -232,6 +233,12 @@ def list_scenes(
         base = base.where(ComparisonItem.status == status)
     if q:
         base = base.where(ComparisonItem.scene_name.contains(q))
+
+    if sort == "diff":
+        # 差异率降序,无差异率(新增/缺失)排最后
+        order = (ComparisonItem.diff_pct.is_(None), ComparisonItem.diff_pct.desc())
+    else:
+        order = (ComparisonItem.scene_name,)
 
     counts = {
         st: db.scalar(
@@ -246,7 +253,7 @@ def list_scenes(
 
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
     items = db.scalars(
-        base.order_by(ComparisonItem.scene_name)
+        base.order_by(*order)
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()

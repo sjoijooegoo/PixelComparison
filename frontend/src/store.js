@@ -26,6 +26,8 @@ export const useStore = defineStore('shotdiff', {
     sceneTotal: 0,
     counts: { all: 0, fail: 0, warn: 0, pass: 0, added: 0, missing: 0 },
 
+    sceneSort: 'name',   // name(场景名) | diff(差异率降序)
+
     detail: null,        // /api/items/{id} 响应
     viewMode: 'tri',     // tri | slide | raw
     zoom: 100,
@@ -62,6 +64,12 @@ export const useStore = defineStore('shotdiff', {
       else this.detail = null
     },
 
+    async toggleSceneSort() {
+      this.sceneSort = this.sceneSort === 'diff' ? 'name' : 'diff'
+      this.page = 1
+      await this.loadScenes()
+    },
+
     async loadScenes() {
       if (!this.selectedComparison) return
       this.loading = true
@@ -69,6 +77,7 @@ export const useStore = defineStore('shotdiff', {
         const data = await api.scenes(this.selectedComparison.id, {
           status: this.sceneFilter,
           q: this.sceneSearch,
+          sort: this.sceneSort,
           page: this.page,
           page_size: PAGE_SIZE,
         })
@@ -82,12 +91,6 @@ export const useStore = defineStore('shotdiff', {
 
     async selectScene(id) {
       this.detail = await api.item(id)
-    },
-
-    async setSceneFilter(f) {
-      this.sceneFilter = f
-      this.page = 1
-      await this.loadScenes()
     },
 
     async gotoPrev() {

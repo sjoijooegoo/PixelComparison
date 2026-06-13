@@ -6,17 +6,11 @@ import { useStore } from '../store'
 
 const store = useStore()
 
-const PLATFORM_BADGE = {
-  Windows: { abbr: 'WIN', cls: 'pf-win' },
-  PS5: { abbr: 'PS5', cls: 'pf-ps' },
-  'Xbox Series X|S': { abbr: 'XBX', cls: 'pf-xb' },
-}
-
 const columns = [
   { title: '批次ID', dataIndex: 'batch_id', slotName: 'id' },
   { title: '项目', dataIndex: 'project' },
   { title: '分支 / 版本', dataIndex: 'branch' },
-  { title: '平台', dataIndex: 'platform', slotName: 'platform' },
+  { title: '平台', dataIndex: 'platform' },
   { title: '场景数', dataIndex: 'scene_count' },
   { title: '差异率(均值)', dataIndex: 'diff_avg', slotName: 'diff', sortable: { sortDirections: ['ascend', 'descend'] } },
   { title: '创建时间', dataIndex: 'created_at', sortable: { sortDirections: ['ascend', 'descend'] } },
@@ -112,11 +106,6 @@ function exportCsv() {
       :row-class="(r) => r.id === store.selectedComparison?.id ? 'row-selected' : ''"
       @row-click="(r) => store.selectComparison(r)">
       <template #id="{ record }"><span class="mono">#{{ record.batch_id }}</span></template>
-      <template #platform="{ record }">
-        <span v-if="PLATFORM_BADGE[record.platform]" class="pf-badge"
-          :class="PLATFORM_BADGE[record.platform].cls">{{ PLATFORM_BADGE[record.platform].abbr }}</span>
-        {{ record.platform }}
-      </template>
       <template #diff="{ record }">
         <span class="mono" :class="{ 'diff-fail': record.status === 'fail' }">{{ record.diff_avg.toFixed(2) }}%</span>
       </template>

@@ -26,23 +26,6 @@ body[arco-theme="dark"] { background: var(--color-bg-1); }
 .diff-warn { color: rgb(var(--orange-6)); }
 .diff-dim { color: var(--color-text-4); }
 
-/* 平台徽标(替代 emoji) */
-.pf-badge {
-  display: inline-block; font-size: 10px; font-weight: 700; line-height: 1;
-  padding: 3px 5px; border-radius: 4px; margin-right: 6px; letter-spacing: .3px;
-}
-.pf-win { background: rgba(22, 100, 255, .15); color: rgb(var(--arcoblue-6)); }
-.pf-ps  { background: rgba(99, 125, 255, .18); color: rgb(var(--arcoblue-5)); }
-.pf-xb  { background: rgba(0, 180, 42, .15);  color: rgb(var(--green-6)); }
-
-/* 状态小圆点 */
-.sdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
-.sdot-fail { background: rgb(var(--red-6)); }
-.sdot-warn { background: rgb(var(--orange-6)); }
-.sdot-pass { background: rgb(var(--green-6)); opacity: .55; }
-.sdot-added { background: rgb(var(--arcoblue-6)); }
-.sdot-missing { background: var(--color-text-4); }
-
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--color-fill-4); border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
