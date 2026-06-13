@@ -42,7 +42,12 @@ def generate_scene(path: str, seed: int, night: bool = False, variant: int = 0) 
         while x < W + 40:
             bw = 30 + rnd.random() * 70
             bh = H * (0.12 + rnd.random() * 0.3) * (1 + layer * 0.25)
-            shift = -H * 0.06 if (variant == 1 and W * 0.3 < x < W * 0.45) else 0
+            if variant == 1 and W * 0.3 < x < W * 0.45:      # 楼体位移(警告级)
+                shift = -H * 0.06
+            elif variant == 3 and W * 0.2 < x < W * 0.58:     # 大幅位移(失败级)
+                shift = -H * 0.12
+            else:
+                shift = 0
             dr.rectangle([x, horizon - bh + shift, x + bw, H], fill=col)
             if rnd.random() > 0.55:
                 dr.rectangle([x + bw * 0.2, horizon - bh + shift - 8, x + bw * 0.45, horizon - bh + shift], fill=col)

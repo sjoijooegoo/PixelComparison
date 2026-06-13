@@ -57,6 +57,9 @@ POST /api/comparisons                    # {batch_id, ref_batch_id} 发起对比
 批次由 CI / 游戏端采集模块上报,平台侧用户通过「发起对比」选择两个批次
 (同项目同平台,已晋升基线的批次优先展示)发起对比。
 
+上报数据包的格式、示例与生成/上报脚本见 [mock_uploads/](mock_uploads/README.md)
+(每批 = `manifest.json` + `images/` 目录,内置两批可互比的示例数据)。
+
 ## 数据模型
 
 - **批次(Batch)** 一次截图采集运行,产出一组 **截图(Screenshot)**
