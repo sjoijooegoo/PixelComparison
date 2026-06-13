@@ -87,7 +87,7 @@ function exportCsv() {
 
     <a-table
       :columns="columns" :data="store.batches"
-      :pagination="{ pageSize: 5, size: 'small', showTotal: true, hideOnSinglePage: false }"
+      :pagination="{ pageSize: 5, size: 'small', simple: true, hideOnSinglePage: false }"
       size="small" row-key="id"
       :row-class="(r) => roleOf(r) ? 'role-' + roleOf(r) : ''">
       <template #id="{ record }"><span class="mono">#{{ record.id }}</span></template>
@@ -125,4 +125,27 @@ function exportCsv() {
 
 :deep(.role-current .arco-table-td) { background: rgba(22, 100, 255, .08); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
 :deep(.role-baseline .arco-table-td) { background: var(--color-fill-2); box-shadow: inset 2px 0 0 var(--color-text-4); }
+
+/* 简洁分页器美化:箭头按钮加圆角描边、页码框对齐 */
+:deep(.arco-pagination-simple) { display: inline-flex; align-items: center; gap: 6px; }
+:deep(.arco-pagination-item-previous),
+:deep(.arco-pagination-item-next) {
+  min-width: 28px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--color-border-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: border-color .15s, color .15s, background-color .15s;
+}
+:deep(.arco-pagination-item-previous:not(.arco-pagination-item-disabled):hover),
+:deep(.arco-pagination-item-next:not(.arco-pagination-item-disabled):hover) {
+  border-color: rgb(var(--arcoblue-6)); color: rgb(var(--arcoblue-6));
+  background: var(--color-fill-2);
+}
+:deep(.arco-pagination-item-disabled) { opacity: .5; }
+:deep(.arco-pagination-jumper-input) {
+  width: 38px; height: 28px; border-radius: 6px;
+  border: 1px solid var(--color-border-2);
+}
+:deep(.arco-pagination-jumper-input input) { text-align: center; }
+:deep(.arco-pagination-jumper-separator) { margin: 0 3px; color: var(--color-text-4); }
+:deep(.arco-pagination-jumper-total-page) { color: var(--color-text-2); }
 </style>
