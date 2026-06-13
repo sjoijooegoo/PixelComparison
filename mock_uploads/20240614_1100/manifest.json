@@ -1,0 +1,39 @@
+{
+  "format_version": 1,
+  "captured_at": "2024-06-14T11:00:00",
+  "engine_version": "UE5.3",
+  "resolution": "1920x1080",
+  "batch": {
+    "id": "20240614_1100",
+    "project": "Project_Nebula",
+    "branch": "develop",
+    "platform": "Windows",
+    "creator": "render-farm-ci"
+  },
+  "scenes": [
+    {
+      "name": "01_星港_中庭_昼",
+      "image": "images/01_星港_中庭_昼.png",
+      "area": "星港",
+      "time_of_day": "昼"
+    },
+    {
+      "name": "02_星港_机库_夜",
+      "image": "images/02_星港_机库_夜.png",
+      "area": "星港",
+      "time_of_day": "夜"
+    },
+    {
+      "name": "03_环带城_天桥_昼",
+      "image": "images/03_环带城_天桥_昼.png",
+      "area": "环带城",
+      "time_of_day": "昼"
+    },
+    {
+      "name": "04_环带城_市集_夜",
+      "image": "images/04_环带城_市集_夜.png",
+      "area": "环带城",
+      "time_of_day": "夜"
+    }
+  ]
+}
