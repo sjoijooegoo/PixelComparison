@@ -36,13 +36,13 @@ async function rerun() {
       :content-style="{ padding: '6px' }">
       <button class="pair-trigger" :class="{ open }">
         <span class="pair">
-          <span class="role role-cur">对比批次</span>
-          <span class="mono">#{{ c.batch_id }}</span>
-          <span class="text-secondary br">P4 {{ c.p4_version }}</span>
-          <span class="vs">VS</span>
           <span class="role role-base">基线</span>
           <span class="mono">#{{ c.ref_batch_id }}</span>
           <span class="text-secondary br">P4 {{ c.ref_p4_version }}</span>
+          <span class="vs">VS</span>
+          <span class="role role-cur">对比批次</span>
+          <span class="mono">#{{ c.batch_id }}</span>
+          <span class="text-secondary br">P4 {{ c.p4_version }}</span>
         </span>
         <svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none"
           stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -59,16 +59,16 @@ async function rerun() {
             <button v-for="h in store.comparisons" :key="h.id" class="hist-item"
               :class="{ active: h.id === c.id }" @click="pick(h)">
               <div class="row1">
-                <span class="mono cur">#{{ h.batch_id }}</span>
-                <span class="vs">vs</span>
                 <span class="mono ref">#{{ h.ref_batch_id }}</span>
+                <span class="vs">vs</span>
+                <span class="mono cur">#{{ h.batch_id }}</span>
                 <span class="diff mono" :style="{ color: diffColor(h.diff_avg) }">
                   {{ (h.diff_avg ?? 0).toFixed(2) }}%</span>
               </div>
               <div class="row2 text-secondary">
-                <span class="mono">P4 {{ h.p4_version }}</span>
-                <span class="arrow">→</span>
                 <span class="mono">P4 {{ h.ref_p4_version }}</span>
+                <span class="arrow">→</span>
+                <span class="mono">P4 {{ h.p4_version }}</span>
               </div>
               <div class="row3 text-secondary">
                 <span>{{ h.scene_id }}</span>
@@ -121,8 +121,8 @@ async function rerun() {
 
 .pair { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
 .role { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
-.role-cur { background: rgba(22, 100, 255, .15); color: rgb(var(--arcoblue-6)); }
-.role-base { background: var(--color-fill-3); color: var(--color-text-2); }
+.role-cur { background: rgba(var(--batch-cur), .16); color: rgb(var(--batch-cur)); }
+.role-base { background: rgba(var(--batch-base), .16); color: rgb(var(--batch-base)); }
 .br { font-size: 12px; }
 .vs { font-size: 11px; font-weight: 700; color: var(--color-text-4); margin: 0 4px; }
 
@@ -145,8 +145,8 @@ async function rerun() {
 .hist-item:hover { background: var(--color-fill-1); }
 .hist-item.active { background: var(--color-fill-2); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
 .row1 { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.row1 .cur { color: rgb(var(--arcoblue-6)); }
-.row1 .ref { color: var(--color-text-2); }
+.row1 .cur { color: rgb(var(--batch-cur)); }
+.row1 .ref { color: rgb(var(--batch-base)); }
 .row1 .vs { color: var(--color-text-4); font-size: 11px; }
 .row1 .diff { margin-left: auto; font-weight: 600; }
 .row2 { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 3px; }

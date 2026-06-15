@@ -64,20 +64,20 @@ onUnmounted(() => {
       <a-image-preview-group v-if="store.viewMode !== 'slide' || !paired" infinite class="tri-wrap">
         <div class="views-top">
           <div class="view-col">
-            <div class="cap"><i class="cap-dot dot-cur"></i>当前版本 (P4 {{ store.selectedComparison?.p4_version }})</div>
-            <div v-if="detail.current_url" class="frame compact">
-              <a-image :src="detail.current_url" alt="当前版本" width="100%" />
-            </div>
-            <div v-else class="frame compact empty">当前批次无此点位</div>
-            <div class="meta text-secondary">批次 #{{ store.selectedComparison?.batch_id }}</div>
-          </div>
-          <div class="view-col">
-            <div class="cap"><i class="cap-dot dot-ref"></i>参照版本 ({{ store.selectedComparison?.ref_label }})</div>
+            <div class="cap"><i class="cap-dot dot-ref"></i>参照版本</div>
             <div v-if="detail.baseline_url" class="frame compact">
               <a-image :src="detail.baseline_url" alt="参照版本" width="100%" />
             </div>
             <div v-else class="frame compact empty">参照批次中无此点位</div>
-            <div class="meta text-secondary">参照批次 #{{ store.selectedComparison?.ref_batch_id }}</div>
+            <div class="meta text-secondary">#{{ store.selectedComparison?.ref_batch_id }} · P4 {{ store.selectedComparison?.ref_p4_version }}</div>
+          </div>
+          <div class="view-col">
+            <div class="cap"><i class="cap-dot dot-cur"></i>当前版本</div>
+            <div v-if="detail.current_url" class="frame compact">
+              <a-image :src="detail.current_url" alt="当前版本" width="100%" />
+            </div>
+            <div v-else class="frame compact empty">当前批次无此点位</div>
+            <div class="meta text-secondary">#{{ store.selectedComparison?.batch_id }} · P4 {{ store.selectedComparison?.p4_version }}</div>
           </div>
         </div>
 
@@ -138,8 +138,8 @@ onUnmounted(() => {
 .heat-row { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: flex-start; }
 .cap { font-size: 12px; color: var(--color-text-2); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .cap-dot { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 8px; }
-.dot-cur { background: rgb(var(--arcoblue-6)); }
-.dot-ref { background: var(--color-text-4); }
+.dot-cur { background: rgb(var(--batch-cur)); }
+.dot-ref { background: rgb(var(--batch-base)); }
 .dot-heat { background: linear-gradient(135deg, #00b3ff, #ffe000, #e00000); }
 .frame {
   background: #0d1117; border-radius: 8px; overflow: hidden;

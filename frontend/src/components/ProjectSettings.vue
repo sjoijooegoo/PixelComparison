@@ -45,60 +45,95 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
 
 <template>
   <div class="settings-page">
-    <div class="card panel">
-      <div class="head">
-        <b>对比算法配置</b>
-        <span class="text-secondary">调整差异判定与热力图渲染参数</span>
+    <div class="inner">
+      <div class="page-head">
+        <h2>对比算法配置</h2>
+        <p>调整差异判定与热力图渲染参数</p>
       </div>
 
-      <a-alert type="info" style="margin: 0 0 16px">
+      <a-alert type="info" closable class="tip">
         配置仅对新发起的对比生效;已有对比结果如需套用新配置,可在「对比结果」页点「重新对比」。
       </a-alert>
 
-      <div class="group-title">差异判定</div>
-      <div class="grid">
-        <a-form-item label="像素差异阈值" help="单像素通道差超过此值才算「变化像素」,直接影响差异率">
-          <a-input-number v-model="form.pixel_diff_threshold" :min="0" :max="255" :step="1" />
-        </a-form-item>
-        <a-form-item label="差异率红色阈值 (%)" help="差异率 ≥ 此值显示为红色(高差异)">
-          <a-input-number v-model="form.fail_threshold" :min="0" :max="100" :step="0.1" :precision="2" />
-        </a-form-item>
-        <a-form-item label="差异率橙色阈值 (%)" help="差异率 ≥ 此值显示为橙色(中等差异)">
-          <a-input-number v-model="form.warn_threshold" :min="0" :max="100" :step="0.1" :precision="2" />
-        </a-form-item>
-      </div>
+      <!-- 差异判定 -->
+      <section class="block">
+        <div class="block-title">差异判定</div>
+        <div class="grid grid-3">
+          <div class="field">
+            <label>像素差异阈值</label>
+            <a-input-number v-model="form.pixel_diff_threshold" :min="0" :max="255" :step="1" size="large" />
+            <span class="hint">单像素通道差超过此值才算「变化像素」,直接影响差异率</span>
+          </div>
+          <div class="field">
+            <label>差异率红色阈值 (%)</label>
+            <a-input-number v-model="form.fail_threshold" :min="0" :max="100" :step="0.1" :precision="2" size="large" />
+            <span class="hint">差异率 ≥ 此值显示为红色(高差异)</span>
+          </div>
+          <div class="field">
+            <label>差异率橙色阈值 (%)</label>
+            <a-input-number v-model="form.warn_threshold" :min="0" :max="100" :step="0.1" :precision="2" size="large" />
+            <span class="hint">差异率 ≥ 此值显示为橙色(中等差异)</span>
+          </div>
+        </div>
+      </section>
 
-      <div class="group-title">热力图渲染</div>
-      <div class="grid">
-        <a-form-item label="模糊半径" help="高斯模糊半径,越大色块越连片(0 为不模糊)">
-          <a-input-number v-model="form.heatmap_blur" :min="0" :max="50" :step="1" />
-        </a-form-item>
-        <a-form-item label="灵敏度" help="归一化下限,越小越灵敏、越易显红(0.01–1)">
-          <a-input-number v-model="form.heatmap_sensitivity" :min="0.01" :max="1" :step="0.05" :precision="2" />
-        </a-form-item>
-      </div>
+      <!-- 热力图渲染 -->
+      <section class="block">
+        <div class="block-title">热力图渲染</div>
+        <div class="grid grid-2">
+          <div class="field">
+            <label>模糊半径</label>
+            <a-input-number v-model="form.heatmap_blur" :min="0" :max="50" :step="1" size="large" />
+            <span class="hint">高斯模糊半径,越大色块越连片(0 为不模糊)</span>
+          </div>
+          <div class="field">
+            <label>灵敏度</label>
+            <a-input-number v-model="form.heatmap_sensitivity" :min="0.01" :max="1" :step="0.05" :precision="2" size="large" />
+            <span class="hint">归一化下限,越小越灵敏、越易显红(0.01–1)</span>
+          </div>
+        </div>
+      </section>
 
       <div class="actions">
-        <a-button @click="resetDefaults">恢复默认</a-button>
-        <a-button type="primary" :loading="saving.v" @click="save">保存</a-button>
+        <a-button size="large" @click="resetDefaults">恢复默认</a-button>
+        <a-button type="primary" size="large" :loading="saving.v" @click="save">保存</a-button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.settings-page { flex: 1; overflow-y: auto; padding: 16px; }
-.panel { max-width: 720px; margin: 0 auto; padding: 18px 20px; }
-.head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
-.head b { font-size: 15px; }
-.head span { font-size: 12px; }
-.group-title {
-  font-size: 13px; font-weight: 600; color: var(--color-text-2);
-  margin: 6px 0 10px; padding-left: 8px; border-left: 3px solid rgb(var(--arcoblue-6));
+.settings-page { flex: 1; overflow-y: auto; padding: 28px 32px; }
+.inner { max-width: 1360px; margin: 0 auto; }
+
+.page-head { margin-bottom: 20px; }
+.page-head h2 { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: .5px; }
+.page-head p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-3); }
+
+.tip { margin-bottom: 18px; border-radius: 8px; }
+
+/* 分区块 */
+.block {
+  background: var(--color-fill-1);
+  border: 1px solid var(--color-border-2);
+  border-radius: 12px;
+  padding: 20px 24px 24px;
+  margin-bottom: 18px;
 }
-.grid {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 24px; margin-bottom: 18px;
+.block-title {
+  font-size: 15px; font-weight: 600; color: var(--color-text-1);
+  padding-left: 10px; margin-bottom: 20px;
+  border-left: 3px solid rgb(var(--arcoblue-6));
 }
-.grid :deep(.arco-input-number) { width: 160px; }
-.actions { display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--color-border-2); padding-top: 16px; }
+
+.grid { display: grid; gap: 22px 28px; }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+.field { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.field label { font-size: 13px; color: var(--color-text-2); }
+.field :deep(.arco-input-number) { width: 100%; }
+.field .hint { font-size: 12px; color: var(--color-text-3); line-height: 1.5; }
+
+.actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
 </style>

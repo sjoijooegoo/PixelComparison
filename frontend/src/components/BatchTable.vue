@@ -44,31 +44,27 @@ const columns = [
   { title: '平台', dataIndex: 'platform', slotName: 'platform' },
   { title: '点位数', dataIndex: 'scene_count' },
   { title: '创建时间', dataIndex: 'created_at', sortable: { sortDirections: ['ascend', 'descend'] } },
-  { title: '操作', slotName: 'ops', width: 200, align: 'right' },
+  { title: '操作', slotName: 'ops', width: 200, align: 'center' },
 ]
 
-// 彩色标签:同值固定同色,让批次表有区分、不单调
-const TAG_COLORS = ['arcoblue', 'cyan', 'green', 'orange', 'purple', 'magenta', 'gold', 'lime']
-function tagColor(v) {
-  let h = 0
-  for (const ch of String(v ?? '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0
-  return TAG_COLORS[h % TAG_COLORS.length]
-}
 const PLATFORM_COLOR = { Windows: 'arcoblue', iOS: 'gray', Android: 'green' }
 const platformColor = (p) => PLATFORM_COLOR[p] || 'gray'
 
+// 批次详情外链(假地址,接入时替换为真实批次/P4 changelist 页)
+const batchLink = (record) => `https://p4web.example.com/batch/${record.id}`
+
 function setRole(record, role) {
-  // 场景守卫:两侧必须同场景ID(同 Level 才能对比)
-  const other = role === 'current' ? store.baselineBatch : store.currentBatch
-  if (other && other.scene_id !== record.scene_id) {
-    Message.warning(`对比批次与基线批次的场景ID需一致(${other.scene_id})`)
-    return
-  }
+  // 选择时不限制,允许自由换批次;场景一致性在「发起对比」时校验
   store.setRole(record, role)
 }
 
 async function run() {
   if (!store.canCompare) return
+  // 场景守卫:两侧必须同场景ID(同 Level 才能对比)
+  if (store.currentBatch.scene_id !== store.baselineBatch.scene_id) {
+    Message.warning('对比批次与基线批次需为同一场景ID(同 Level)')
+    return
+  }
   try {
     await store.runComparison()
     Message.success('对比完成')
@@ -108,15 +104,6 @@ function exportCsv() {
     <!-- 选择条:已选的对比批次 / 基线批次 + 发起对比 -->
     <div class="select-bar">
       <div class="slot">
-        <span class="slot-tag slot-cur">对比批次</span>
-        <template v-if="store.currentBatch">
-          <span class="mono">#{{ store.currentBatch.id }}</span>
-          <button class="slot-x" @click="store.clearRole('current')">×</button>
-        </template>
-        <span v-else class="slot-empty">未选择</span>
-      </div>
-      <span class="vs">VS</span>
-      <div class="slot">
         <span class="slot-tag slot-base">基线批次</span>
         <template v-if="store.baselineBatch">
           <span class="mono">#{{ store.baselineBatch.id }}</span>
@@ -124,7 +111,16 @@ function exportCsv() {
         </template>
         <span v-else class="slot-empty">未选择</span>
       </div>
-      <a-button type="primary" size="small" :disabled="!store.canCompare"
+      <span class="vs">VS</span>
+      <div class="slot">
+        <span class="slot-tag slot-cur">对比批次</span>
+        <template v-if="store.currentBatch">
+          <span class="mono">#{{ store.currentBatch.id }}</span>
+          <button class="slot-x" @click="store.clearRole('current')">×</button>
+        </template>
+        <span v-else class="slot-empty">未选择</span>
+      </div>
+      <a-button type="primary" size="medium" class="run-btn" :disabled="!store.canCompare"
         :loading="store.running" @click="run">发起对比</a-button>
     </div>
 
@@ -132,22 +128,26 @@ function exportCsv() {
       <a-table
         :columns="columns" :data="pagedBatches"
         :pagination="false"
-        size="medium" row-key="id"
-        :row-class="(r) => roleOf(r) ? 'role-' + roleOf(r) : ''">
-        <template #id="{ record }"><span class="mono">#{{ record.id }}</span></template>
-        <template #scene="{ record }">
-          <a-tag :color="tagColor(record.scene_id)" size="small" bordered>{{ record.scene_id }}</a-tag>
+        size="medium" row-key="id">
+        <template #id="{ record }">
+          <a class="batch-link mono" :href="batchLink(record)" target="_blank" rel="noopener noreferrer">#{{ record.id }}</a>
         </template>
+        <template #scene="{ record }">{{ record.scene_id }}</template>
         <template #p4="{ record }"><span class="mono">{{ record.p4_version }}</span></template>
         <template #platform="{ record }">
           <a-tag :color="platformColor(record.platform)" size="small">{{ record.platform }}</a-tag>
         </template>
         <template #ops="{ record }">
-          <a-button size="mini" :type="roleOf(record) === 'current' ? 'primary' : 'text'"
-            @click="setRole(record, 'current')">设为对比</a-button>
           <a-button size="mini" :type="roleOf(record) === 'baseline' ? 'primary' : 'text'"
-            :status="roleOf(record) === 'baseline' ? 'normal' : undefined"
+            :style="roleOf(record) === 'baseline'
+              ? { background: 'rgb(var(--batch-base))', borderColor: 'rgb(var(--batch-base))', color: '#fff' }
+              : { color: 'rgb(var(--batch-base))' }"
             @click="setRole(record, 'baseline')">设为基线</a-button>
+          <a-button size="mini" :type="roleOf(record) === 'current' ? 'primary' : 'text'"
+            :style="roleOf(record) === 'current'
+              ? { background: 'rgb(var(--batch-cur))', borderColor: 'rgb(var(--batch-cur))', color: '#fff' }
+              : { color: 'rgb(var(--batch-cur))' }"
+            @click="setRole(record, 'current')">设为对比</a-button>
         </template>
       </a-table>
     </div>
@@ -166,13 +166,16 @@ function exportCsv() {
 .head h3 { margin: 0; font-size: 14px; }
 
 .select-bar {
-  display: flex; align-items: center; gap: 12px; padding: 8px 16px;
-  margin: 0 12px 8px; background: var(--color-fill-1); border-radius: 8px;
+  display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  margin: 0 12px 10px; background: var(--color-fill-1); border-radius: 8px;
 }
+.run-btn { margin-left: auto; }
+.batch-link { color: rgb(var(--arcoblue-6)); text-decoration: none; }
+.batch-link:hover { text-decoration: underline; }
 .slot { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .slot-tag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }
-.slot-cur { background: rgba(22, 100, 255, .15); color: rgb(var(--arcoblue-6)); }
-.slot-base { background: var(--color-fill-3); color: var(--color-text-2); }
+.slot-cur { background: rgba(var(--batch-cur), .16); color: rgb(var(--batch-cur)); }
+.slot-base { background: rgba(var(--batch-base), .16); color: rgb(var(--batch-base)); }
 .slot-empty { color: var(--color-text-4); }
 .slot-x {
   border: none; background: none; cursor: pointer; color: var(--color-text-3);
@@ -183,8 +186,12 @@ function exportCsv() {
 
 /* 行更舒展:增加单元格上下内边距(不影响列水平对齐) */
 :deep(.arco-table-td) { padding-top: 8px; padding-bottom: 8px; }
-:deep(.role-current .arco-table-td) { background: rgba(22, 100, 255, .08); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
-:deep(.role-baseline .arco-table-td) { background: var(--color-fill-2); box-shadow: inset 2px 0 0 var(--color-text-4); }
+/* 表头分层:背景 + 字重,与数据区分 */
+:deep(.arco-table-th) { background: var(--color-fill-2); font-weight: 600; }
+/* 隔行斑马纹(淡),长表不串行 */
+:deep(.arco-table-tbody tr:nth-child(even) .arco-table-td) { background: var(--color-fill-1); }
+/* 行 hover 反馈 */
+:deep(.arco-table-tbody tr:hover .arco-table-td) { background: var(--color-fill-3); }
 
 .table-wrap { flex: 1; min-height: 0; overflow: auto; }
 .foot { display: flex; justify-content: flex-end; padding: 10px 16px; }
