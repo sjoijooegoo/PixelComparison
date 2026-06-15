@@ -1,24 +1,67 @@
 <script setup>
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore } from '../store'
+import Pager from './Pager.vue'
 
 const store = useStore()
 
+const page = ref(1)
+const pageSize = ref(8)   // 按表格区可用高度动态覆盖
+const pagedBatches = computed(() => {
+  const start = (page.value - 1) * pageSize.value
+  return store.batches.slice(start, start + pageSize.value)
+})
+
+// 按表格区可用高度动态计算每页行数,填满整列
+const tableWrap = ref(null)
+let ro
+function recalc() {
+  const wrap = tableWrap.value
+  if (!wrap) return
+  const thH = wrap.querySelector('.arco-table-th')?.getBoundingClientRect().height || 36
+  const rowH = wrap.querySelector('tbody .arco-table-tr')?.getBoundingClientRect().height || 40
+  const fit = Math.max(3, Math.floor((wrap.clientHeight - thH) / rowH))
+  if (fit !== pageSize.value) {
+    pageSize.value = fit
+    if (page.value > Math.ceil(store.batches.length / fit)) page.value = 1
+  }
+}
+onMounted(() => {
+  ro = new ResizeObserver(recalc)
+  if (tableWrap.value) ro.observe(tableWrap.value)
+  recalc()
+})
+onUnmounted(() => ro?.disconnect())
+
+// 列表刷新/筛选后回到第一页并重算
+watch(() => store.batches, () => { page.value = 1; nextTick(recalc) })
+
 const columns = [
   { title: '批次ID', dataIndex: 'id', slotName: 'id' },
-  { title: '项目', dataIndex: 'project' },
-  { title: '分支 / 版本', dataIndex: 'branch' },
-  { title: '平台', dataIndex: 'platform' },
-  { title: '场景数', dataIndex: 'scene_count' },
+  { title: '场景ID', dataIndex: 'scene_id', slotName: 'scene' },
+  { title: 'P4版本', dataIndex: 'p4_version', slotName: 'p4', sortable: { sortDirections: ['ascend', 'descend'] } },
+  { title: '平台', dataIndex: 'platform', slotName: 'platform' },
+  { title: '点位数', dataIndex: 'scene_count' },
   { title: '创建时间', dataIndex: 'created_at', sortable: { sortDirections: ['ascend', 'descend'] } },
-  { title: '操作', slotName: 'ops', width: 200 },
+  { title: '操作', slotName: 'ops', width: 200, align: 'right' },
 ]
 
+// 彩色标签:同值固定同色,让批次表有区分、不单调
+const TAG_COLORS = ['arcoblue', 'cyan', 'green', 'orange', 'purple', 'magenta', 'gold', 'lime']
+function tagColor(v) {
+  let h = 0
+  for (const ch of String(v ?? '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  return TAG_COLORS[h % TAG_COLORS.length]
+}
+const PLATFORM_COLOR = { Windows: 'arcoblue', iOS: 'gray', Android: 'green' }
+const platformColor = (p) => PLATFORM_COLOR[p] || 'gray'
+
 function setRole(record, role) {
-  // 平台守卫:两侧必须同平台
+  // 场景守卫:两侧必须同场景ID(同 Level 才能对比)
   const other = role === 'current' ? store.baselineBatch : store.currentBatch
-  if (other && other.platform !== record.platform) {
-    Message.warning(`对比批次与基线批次的平台需一致(${other.platform})`)
+  if (other && other.scene_id !== record.scene_id) {
+    Message.warning(`对比批次与基线批次的场景ID需一致(${other.scene_id})`)
     return
   }
   store.setRole(record, role)
@@ -41,9 +84,9 @@ function roleOf(record) {
 }
 
 function exportCsv() {
-  const head = '批次ID,项目,分支/版本,平台,场景数,创建时间'
+  const head = '批次ID,场景ID,P4版本,平台,点位数,创建时间'
   const rows = store.batches.map(b =>
-    [b.id, b.project, b.branch, b.platform, b.scene_count, b.created_at].join(','))
+    [b.id, b.scene_id, b.p4_version, b.platform, b.scene_count, b.created_at].join(','))
   const blob = new Blob(['﻿' + head + '\n' + rows.join('\n')], { type: 'text/csv' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
@@ -85,25 +128,40 @@ function exportCsv() {
         :loading="store.running" @click="run">发起对比</a-button>
     </div>
 
-    <a-table
-      :columns="columns" :data="store.batches"
-      :pagination="{ pageSize: 5, size: 'small', simple: true, hideOnSinglePage: false }"
-      size="small" row-key="id"
-      :row-class="(r) => roleOf(r) ? 'role-' + roleOf(r) : ''">
-      <template #id="{ record }"><span class="mono">#{{ record.id }}</span></template>
-      <template #ops="{ record }">
-        <a-button size="mini" :type="roleOf(record) === 'current' ? 'primary' : 'text'"
-          @click="setRole(record, 'current')">设为对比</a-button>
-        <a-button size="mini" :type="roleOf(record) === 'baseline' ? 'primary' : 'text'"
-          :status="roleOf(record) === 'baseline' ? 'normal' : undefined"
-          @click="setRole(record, 'baseline')">设为基线</a-button>
-      </template>
-    </a-table>
+    <div class="table-wrap" ref="tableWrap">
+      <a-table
+        :columns="columns" :data="pagedBatches"
+        :pagination="false"
+        size="medium" row-key="id"
+        :row-class="(r) => roleOf(r) ? 'role-' + roleOf(r) : ''">
+        <template #id="{ record }"><span class="mono">#{{ record.id }}</span></template>
+        <template #scene="{ record }">
+          <a-tag :color="tagColor(record.scene_id)" size="small" bordered>{{ record.scene_id }}</a-tag>
+        </template>
+        <template #p4="{ record }"><span class="mono">{{ record.p4_version }}</span></template>
+        <template #platform="{ record }">
+          <a-tag :color="platformColor(record.platform)" size="small">{{ record.platform }}</a-tag>
+        </template>
+        <template #ops="{ record }">
+          <a-button size="mini" :type="roleOf(record) === 'current' ? 'primary' : 'text'"
+            @click="setRole(record, 'current')">设为对比</a-button>
+          <a-button size="mini" :type="roleOf(record) === 'baseline' ? 'primary' : 'text'"
+            :status="roleOf(record) === 'baseline' ? 'normal' : undefined"
+            @click="setRole(record, 'baseline')">设为基线</a-button>
+        </template>
+      </a-table>
+    </div>
+
+    <div class="foot">
+      <Pager
+        :total="store.batchTotal" :page-size="pageSize" :current="page"
+        @change="(p) => page = p" />
+    </div>
   </section>
 </template>
 
 <style scoped>
-.batch-panel { flex: 0 0 auto; }
+.batch-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
 .head h3 { margin: 0; font-size: 14px; }
 
@@ -123,31 +181,11 @@ function exportCsv() {
 .slot-x:hover { color: rgb(var(--red-6)); }
 .vs { font-size: 11px; font-weight: 700; color: var(--color-text-4); }
 
+/* 行更舒展:增加单元格上下内边距(不影响列水平对齐) */
+:deep(.arco-table-td) { padding-top: 8px; padding-bottom: 8px; }
 :deep(.role-current .arco-table-td) { background: rgba(22, 100, 255, .08); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
 :deep(.role-baseline .arco-table-td) { background: var(--color-fill-2); box-shadow: inset 2px 0 0 var(--color-text-4); }
 
-/* 简洁分页器美化:小巧紧凑的圆角描边箭头 + 页码框 */
-:deep(.arco-pagination-simple) { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; }
-:deep(.arco-pagination-item-previous),
-:deep(.arco-pagination-item-next) {
-  min-width: 22px; width: 22px; height: 22px; border-radius: 5px;
-  border: 1px solid var(--color-border-2);
-  display: inline-flex; align-items: center; justify-content: center;
-  transition: border-color .15s, color .15s, background-color .15s;
-}
-:deep(.arco-pagination-item-previous .arco-icon),
-:deep(.arco-pagination-item-next .arco-icon) { font-size: 11px; }
-:deep(.arco-pagination-item-previous:not(.arco-pagination-item-disabled):hover),
-:deep(.arco-pagination-item-next:not(.arco-pagination-item-disabled):hover) {
-  border-color: rgb(var(--arcoblue-6)); color: rgb(var(--arcoblue-6));
-  background: var(--color-fill-2);
-}
-:deep(.arco-pagination-item-disabled) { opacity: .5; }
-:deep(.arco-pagination-jumper-input) {
-  width: 30px; height: 22px; border-radius: 5px;
-  border: 1px solid var(--color-border-2);
-}
-:deep(.arco-pagination-jumper-input input) { text-align: center; font-size: 12px; }
-:deep(.arco-pagination-jumper-separator) { margin: 0 2px; color: var(--color-text-4); }
-:deep(.arco-pagination-jumper-total-page) { color: var(--color-text-2); }
+.table-wrap { flex: 1; min-height: 0; overflow: auto; }
+.foot { display: flex; justify-content: flex-end; padding: 10px 16px; }
 </style>

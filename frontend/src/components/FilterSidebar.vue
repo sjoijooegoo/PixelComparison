@@ -10,7 +10,7 @@ async function apply() {
 }
 
 async function reset() {
-  store.filters = { project: '', platform: '', branch: '', baseline: '', status: '' }
+  store.filters = { scene_id: '', platform: '', p4_min: null, p4_max: null, status: '' }
   await apply()
 }
 </script>
@@ -24,9 +24,9 @@ async function reset() {
       </div>
 
       <div class="group">
-        <div class="label">项目</div>
-        <a-select v-model="store.filters.project" placeholder="全部项目" allow-clear size="small">
-          <a-option v-for="p in store.meta.projects" :key="p" :value="p">{{ p }}</a-option>
+        <div class="label">场景ID</div>
+        <a-select v-model="store.filters.scene_id" placeholder="全部场景" allow-clear size="small">
+          <a-option v-for="s in store.meta.scene_ids" :key="s" :value="s">{{ s }}</a-option>
         </a-select>
       </div>
       <div class="group">
@@ -36,16 +36,14 @@ async function reset() {
         </a-select>
       </div>
       <div class="group">
-        <div class="label">分支 / 版本</div>
-        <a-select v-model="store.filters.branch" placeholder="全部版本" allow-clear size="small">
-          <a-option v-for="b in store.meta.branches" :key="b" :value="b">{{ b }}</a-option>
-        </a-select>
-      </div>
-      <div class="group">
-        <div class="label">基线版本</div>
-        <a-select v-model="store.filters.baseline" placeholder="全部基线" allow-clear size="small">
-          <a-option v-for="b in store.meta.baselines" :key="b" :value="b">{{ b }}</a-option>
-        </a-select>
+        <div class="label">P4 版本范围</div>
+        <div class="p4-range">
+          <a-input-number v-model="store.filters.p4_min" placeholder="最小" size="small"
+            :min="0" hide-button />
+          <span class="sep">-</span>
+          <a-input-number v-model="store.filters.p4_max" placeholder="最大" size="small"
+            :min="0" hide-button />
+        </div>
       </div>
       <div class="group">
         <div class="label">创建时间</div>
@@ -66,5 +64,8 @@ async function reset() {
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .group { margin-bottom: 14px; }
 .label { color: var(--color-text-3); font-size: 12px; margin-bottom: 5px; }
+.p4-range { display: flex; align-items: center; gap: 6px; }
+.p4-range .sep { color: var(--color-text-4); }
+.p4-range :deep(.arco-input-number) { flex: 1; min-width: 0; }
 .foot { padding: 12px 14px; border-top: 1px solid var(--color-border-2); }
 </style>

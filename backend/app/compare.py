@@ -57,7 +57,14 @@ def _histogram(arr: np.ndarray, bins: int = 32) -> list[list[int]]:
     ]
 
 
-def compare_images(current_path: str, baseline_path: str, heatmap_path: str) -> dict:
+def compare_images(
+    current_path: str,
+    baseline_path: str,
+    heatmap_path: str,
+    pixel_threshold: int = PIXEL_DIFF_THRESHOLD,
+    heatmap_blur: float = 6,
+    heatmap_sensitivity: float = 0.25,
+) -> dict:
     """对比两张图,生成热力图文件,返回指标字典。"""
     cur_img = Image.open(current_path).convert("RGB")
     base_img = Image.open(baseline_path).convert("RGB")
@@ -69,7 +76,7 @@ def compare_images(current_path: str, baseline_path: str, heatmap_path: str) -> 
 
     abs_diff = np.abs(cur - base)                  # HxWx3
     per_pixel_max = abs_diff.max(axis=2)           # HxW
-    diff_mask = per_pixel_max > PIXEL_DIFF_THRESHOLD
+    diff_mask = per_pixel_max > pixel_threshold
 
     total_pixels = int(diff_mask.size)
     diff_pixels = int(diff_mask.sum())
@@ -90,24 +97,28 @@ def compare_images(current_path: str, baseline_path: str, heatmap_path: str) -> 
         "ssim": round(_global_ssim(gray_cur, gray_base), 4),
         "psnr": round(min(psnr, 99.0), 2),
         "channel_diff": {
-            ch: round(float((abs_diff[..., i] > PIXEL_DIFF_THRESHOLD).mean() * 100), 3)
+            ch: round(float((abs_diff[..., i] > pixel_threshold).mean() * 100), 3)
             for i, ch in enumerate(("R", "G", "B"))
         },
         "hist_current": _histogram(np.asarray(cur_img)),
         "hist_baseline": _histogram(np.asarray(base_img)),
     }
 
-    _write_heatmap(base_img, per_pixel_max, heatmap_path)
+    _write_heatmap(base_img, per_pixel_max, heatmap_path, heatmap_blur, heatmap_sensitivity)
     return metrics
 
 
-def _write_heatmap(base_img: Image.Image, per_pixel_max: np.ndarray, out_path: str) -> None:
+def _write_heatmap(
+    base_img: Image.Image, per_pixel_max: np.ndarray, out_path: str,
+    blur: float = 6, sensitivity: float = 0.25,
+) -> None:
     """差异强度 -> jet 色热力图,叠加在压暗的基线图上。"""
     mag = Image.fromarray(per_pixel_max.astype(np.uint8), mode="L")
-    mag = mag.filter(ImageFilter.GaussianBlur(radius=6))
+    if blur > 0:
+        mag = mag.filter(ImageFilter.GaussianBlur(radius=blur))
     norm = np.asarray(mag, dtype=np.float32) / 255.0
     if norm.max() > 0:
-        norm = np.clip(norm / max(norm.max(), 0.25), 0, 1)
+        norm = np.clip(norm / max(norm.max(), sensitivity), 0, 1)
 
     heat = _jet_colormap(norm).astype(np.float32)
     backdrop = np.asarray(base_img, dtype=np.float32) * 0.25

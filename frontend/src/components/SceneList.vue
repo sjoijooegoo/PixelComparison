@@ -1,13 +1,38 @@
 <script setup>
-import { useStore, PAGE_SIZE } from '../store'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { useStore } from '../store'
+import Pager from './Pager.vue'
 
 const store = useStore()
 
-// 差异率按数值分级着色(不再依赖通过/警告/失败状态)
+// 按列表区可用高度动态计算每页条数,让列表正好填满整列
+const listEl = ref(null)
+const ITEM_H = 49   // 单项高度,与 .item 的 css 保持一致
+let ro
+
+function recalcPageSize() {
+  const h = listEl.value?.clientHeight
+  if (!h) return
+  const fit = Math.max(5, Math.floor(h / ITEM_H))
+  if (fit !== store.pageSize) {
+    store.pageSize = fit
+    store.page = 1
+    if (store.selectedComparison) store.loadScenes()
+  }
+}
+
+onMounted(() => {
+  ro = new ResizeObserver(recalcPageSize)
+  if (listEl.value) ro.observe(listEl.value)
+  recalcPageSize()
+})
+onUnmounted(() => ro?.disconnect())
+
+// 差异率按数值分级着色,阈值取自项目设置
 function diffClass(s) {
   if (s.diff_pct === null) return 'diff-dim'
-  if (s.diff_pct >= 2) return 'diff-fail'
-  if (s.diff_pct >= 0.3) return 'diff-warn'
+  if (s.diff_pct >= store.settings.fail_threshold) return 'diff-fail'
+  if (s.diff_pct >= store.settings.warn_threshold) return 'diff-warn'
   if (s.diff_pct < 0.005) return 'diff-dim'
   return ''
 }
@@ -28,7 +53,7 @@ function onSearch(val) {
     <div class="head">
       <div class="head-top">
         <b style="color: rgb(var(--arcoblue-6))">对比结果</b>
-        <span class="text-secondary" style="font-size:12px">{{ store.sceneTotal }} 个场景</span>
+        <span class="text-secondary" style="font-size:12px">{{ store.sceneTotal }} 个点位</span>
         <a-button size="mini" class="sort-btn" :type="store.sceneSort === 'diff' ? 'primary' : 'secondary'"
           @click="store.toggleSceneSort()">
           <template #icon>
@@ -40,14 +65,14 @@ function onSearch(val) {
           {{ store.sceneSort === 'diff' ? '按差异率' : '按名称' }}
         </a-button>
       </div>
-      <a-input size="small" placeholder="搜索场景名称" allow-clear
+      <a-input size="small" placeholder="搜索点位名称" allow-clear
         :model-value="store.sceneSearch" @input="onSearch" @clear="onSearch('')" />
     </div>
 
-    <div class="cols text-secondary"><span style="flex:1">场景名称</span><span style="width:56px; text-align:right">差异率</span></div>
+    <div class="cols text-secondary"><span style="flex:1">点位名称</span><span style="width:56px; text-align:right">差异率</span></div>
 
     <a-spin :loading="store.loading" class="list-wrap">
-      <div class="list">
+      <div class="list" ref="listEl">
         <div v-for="s in store.scenes" :key="s.id" class="item"
           :class="{ selected: s.id === store.detail?.id }"
           @click="store.selectScene(s.id)">
@@ -62,9 +87,8 @@ function onSearch(val) {
     </a-spin>
 
     <div class="foot">
-      <a-pagination size="mini" simple
-        :total="store.sceneTotal" :page-size="PAGE_SIZE"
-        :current="store.page"
+      <Pager unit="点位"
+        :total="store.sceneTotal" :page-size="store.pageSize" :current="store.page"
         @change="(p) => { store.page = p; store.loadScenes() }" />
     </div>
   </section>

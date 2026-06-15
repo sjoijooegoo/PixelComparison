@@ -68,7 +68,7 @@ def post_screenshot(url: str, scene_name: str, image_path: Path):
 def upload_package(pkg_dir: Path) -> None:
     manifest = json.loads((pkg_dir / "manifest.json").read_text(encoding="utf-8"))
     batch = manifest["batch"]
-    print(f"\n上报批次 {batch['id']} ({batch['branch']} / {batch['platform']})")
+    print(f"\n上报批次 {batch['id']} (P4 {batch['p4_version']} / {batch['platform']})")
 
     status, body = post_json(f"{BASE}/api/batches", batch)
     if status not in (200, 201):

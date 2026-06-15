@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from .db import IMAGES_DIR, Base, engine, get_db
 from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
 from .service import run_comparison
+from .settings import get_settings, save_settings
 
 Base.metadata.create_all(engine)
 
@@ -30,8 +31,8 @@ ITEM_STATUSES = ("fail", "warn", "pass", "added", "missing")
 def batch_dto(b: Batch, db: Session) -> dict:
     return {
         "id": b.id,
-        "project": b.project,
-        "branch": b.branch,
+        "scene_id": b.scene_id,
+        "p4_version": b.p4_version,
         "platform": b.platform,
         "creator": b.creator,
         "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
@@ -55,15 +56,15 @@ def comparison_dto(c: Comparison, db: Session) -> dict:
     return {
         "id": c.id,
         "batch_id": c.batch_id,
-        "project": c.batch.project,
-        "branch": c.batch.branch,
+        "scene_id": c.batch.scene_id,
+        "p4_version": c.batch.p4_version,
         "platform": c.batch.platform,
         "creator": c.batch.creator,
         "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
         # 参照批次:有基线版本则显示版本号,否则显示批次号
         "ref_batch_id": c.ref_batch_id,
         "ref_label": c.baseline.version if c.baseline else f"#{c.ref_batch_id}",
-        "ref_branch": c.ref_batch.branch,
+        "ref_p4_version": c.ref_batch.p4_version,
         "status": c.status,
         "diff_avg": round(c.diff_avg, 2),
         "scene_count": scene_count,
@@ -92,8 +93,8 @@ def item_dto(it: ComparisonItem, with_metrics: bool = False) -> dict:
 
 class BatchIn(BaseModel):
     id: str | None = None
-    project: str
-    branch: str
+    scene_id: str
+    p4_version: int
     platform: str
     creator: str = "CI机器人"
 
@@ -101,20 +102,23 @@ class BatchIn(BaseModel):
 @app.get("/api/batches")
 def list_batches(
     db: Session = Depends(get_db),
-    project: str | None = None,
+    scene_id: str | None = None,
     platform: str | None = None,
-    branch: str | None = None,
+    p4_min: int | None = None,
+    p4_max: int | None = None,
     q: str | None = None,
 ):
     stmt = select(Batch).order_by(Batch.created_at.desc())
-    if project:
-        stmt = stmt.where(Batch.project == project)
+    if scene_id:
+        stmt = stmt.where(Batch.scene_id == scene_id)
     if platform:
         stmt = stmt.where(Batch.platform == platform)
-    if branch:
-        stmt = stmt.where(Batch.branch == branch)
+    if p4_min is not None:
+        stmt = stmt.where(Batch.p4_version >= p4_min)
+    if p4_max is not None:
+        stmt = stmt.where(Batch.p4_version <= p4_max)
     if q:
-        stmt = stmt.where(Batch.id.contains(q) | Batch.branch.contains(q))
+        stmt = stmt.where(Batch.id.contains(q))
     batches = db.scalars(stmt).all()
     return {"total": len(batches), "items": [batch_dto(b, db) for b in batches]}
 
@@ -126,7 +130,7 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db)):
     if db.get(Batch, batch_id):
         raise HTTPException(409, f"batch {batch_id} already exists")
     batch = Batch(
-        id=batch_id, project=body.project, branch=body.branch,
+        id=batch_id, scene_id=body.scene_id, p4_version=body.p4_version,
         platform=body.platform, creator=body.creator,
     )
     db.add(batch)
@@ -165,19 +169,38 @@ def upload_screenshot(
 class ComparisonIn(BaseModel):
     batch_id: str       # 当前批次
     ref_batch_id: str   # 参照批次
+    force: bool = False  # 已对比过时是否强制重新计算
 
 
 @app.post("/api/comparisons", status_code=201)
 def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
-    """用户选择两个批次发起对比(演示为同步执行;生产应进任务队列)。"""
+    """用户选择两个批次发起对比(演示为同步执行;生产应进任务队列)。
+
+    同一对批次(batch × ref)对比结果会持久化:再次发起时直接复用已有结果,
+    不重复计算;需要重算时传 force=true(会先删除旧结果)。
+    """
     batch = db.get(Batch, body.batch_id)
     ref = db.get(Batch, body.ref_batch_id)
     if not batch or not ref:
         raise HTTPException(404, "batch not found")
     if batch.id == ref.id:
         raise HTTPException(400, "不能与自身对比")
-    if batch.platform != ref.platform:
-        raise HTTPException(400, "两个批次的平台不同,对比无意义")
+    if batch.scene_id != ref.scene_id:
+        raise HTTPException(400, "两个批次的场景ID不同,无法对比")
+
+    existing = db.scalars(
+        select(Comparison)
+        .where(Comparison.batch_id == batch.id, Comparison.ref_batch_id == ref.id)
+        .order_by(Comparison.created_at.desc())
+    ).all()
+    if existing and not body.force:
+        # 命中缓存:批次截图不可变,结果可直接复用
+        return comparison_dto(existing[0], db)
+    if existing:
+        # 强制重算:清掉旧结果(items 级联删除),避免重复行
+        for c in existing:
+            db.delete(c)
+        db.flush()
 
     # 参照批次若是某个 active 基线的来源批次,则带上版本号
     baseline = db.scalar(
@@ -185,7 +208,7 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             Baseline.source_batch_id == ref.id, Baseline.status == "active"
         )
     )
-    comparison = run_comparison(db, batch, ref, baseline)
+    comparison = run_comparison(db, batch, ref, baseline, get_settings(db))
     db.commit()
     return comparison_dto(comparison, db)
 
@@ -193,9 +216,8 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
 @app.get("/api/comparisons")
 def list_comparisons(
     db: Session = Depends(get_db),
-    project: str | None = None,
+    scene_id: str | None = None,
     platform: str | None = None,
-    branch: str | None = None,
     baseline: str | None = None,
     status: str | None = None,
     q: str | None = None,
@@ -205,12 +227,10 @@ def list_comparisons(
         .join(Batch, Comparison.batch_id == Batch.id)
         .order_by(Comparison.created_at.desc())
     )
-    if project:
-        stmt = stmt.where(Batch.project == project)
+    if scene_id:
+        stmt = stmt.where(Batch.scene_id == scene_id)
     if platform:
         stmt = stmt.where(Batch.platform == platform)
-    if branch:
-        stmt = stmt.where(Batch.branch == branch)
     if baseline:
         stmt = stmt.join(Baseline, Comparison.baseline_id == Baseline.id).where(
             Baseline.version == baseline
@@ -218,7 +238,7 @@ def list_comparisons(
     if status:
         stmt = stmt.where(Comparison.status == status)
     if q:
-        stmt = stmt.where(Batch.id.contains(q) | Batch.branch.contains(q))
+        stmt = stmt.where(Batch.id.contains(q))
     comparisons = db.scalars(stmt).all()
     return {"total": len(comparisons), "items": [comparison_dto(c, db) for c in comparisons]}
 
@@ -302,7 +322,7 @@ def list_baselines(db: Session = Depends(get_db)):
             {
                 "id": b.id,
                 "version": b.version,
-                "project": b.project,
+                "scene_id": b.scene_id,
                 "platform": b.platform,
                 "source_batch_id": b.source_batch_id,
                 "status": b.status,
@@ -318,12 +338,29 @@ def list_baselines(db: Session = Depends(get_db)):
     }
 
 
+class SettingsIn(BaseModel):
+    pixel_diff_threshold: int | None = None
+    fail_threshold: float | None = None
+    warn_threshold: float | None = None
+    heatmap_blur: int | None = None
+    heatmap_sensitivity: float | None = None
+
+
+@app.get("/api/settings")
+def read_settings(db: Session = Depends(get_db)):
+    return get_settings(db)
+
+
+@app.put("/api/settings")
+def update_settings(body: SettingsIn, db: Session = Depends(get_db)):
+    return save_settings(db, body.model_dump(exclude_none=True))
+
+
 @app.get("/api/meta")
 def get_meta(db: Session = Depends(get_db)):
     """筛选器选项。"""
     return {
-        "projects": db.scalars(select(Batch.project).distinct()).all(),
+        "scene_ids": db.scalars(select(Batch.scene_id).distinct()).all(),
         "platforms": db.scalars(select(Batch.platform).distinct()).all(),
-        "branches": db.scalars(select(Batch.branch).distinct()).all(),
         "baselines": db.scalars(select(Baseline.version).distinct()).all(),
     }

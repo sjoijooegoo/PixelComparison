@@ -7,7 +7,6 @@ defineEmits(['update:active'])
 const tabs = [
   { key: 'batch', label: '批次管理' },
   { key: '对比结果', label: '对比结果' },
-  { key: '基线管理', label: '基线管理' },
   { key: '项目设置', label: '项目设置' },
 ]
 </script>

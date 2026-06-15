@@ -11,8 +11,8 @@ class Batch(Base):
     __tablename__ = "batches"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)  # 例 20240524_1530
-    project: Mapped[str] = mapped_column(String)
-    branch: Mapped[str] = mapped_column(String)
+    scene_id: Mapped[str] = mapped_column(String)  # UE Level / 场景标识,同场景才能对比
+    p4_version: Mapped[int] = mapped_column(Integer)  # P4 changelist,越大越新
     platform: Mapped[str] = mapped_column(String)
     creator: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -44,7 +44,7 @@ class Baseline(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     version: Mapped[str] = mapped_column(String, index=True)  # 例 v1.1.5
-    project: Mapped[str] = mapped_column(String)
+    scene_id: Mapped[str] = mapped_column(String)
     platform: Mapped[str] = mapped_column(String)
     source_batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"))
     status: Mapped[str] = mapped_column(String, default="active")  # active/retired
@@ -77,6 +77,14 @@ class Comparison(Base):
     items: Mapped[list["ComparisonItem"]] = relationship(
         back_populates="comparison", cascade="all, delete-orphan"
     )
+
+
+class Setting(Base):
+    """对比算法配置(单行,id=1,JSON 存全部参数)。"""
+    __tablename__ = "settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSON)
 
 
 class ComparisonItem(Base):

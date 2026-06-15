@@ -7,22 +7,20 @@ from sqlalchemy.orm import Session
 from .compare import compare_images
 from .db import IMAGES_DIR
 from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
-
-# 失败/警告判定阈值(差异率 %)
-FAIL_THRESHOLD = 2.0
-WARN_THRESHOLD = 0.3
+from .settings import DEFAULT_SETTINGS
 
 
-def classify(diff_pct: float) -> str:
-    if diff_pct >= FAIL_THRESHOLD:
+def classify(diff_pct: float, fail_threshold: float, warn_threshold: float) -> str:
+    if diff_pct >= fail_threshold:
         return "fail"
-    if diff_pct >= WARN_THRESHOLD:
+    if diff_pct >= warn_threshold:
         return "warn"
     return "pass"
 
 
 def run_comparison(
-    db: Session, batch: Batch, ref_batch: Batch, baseline: Baseline | None = None
+    db: Session, batch: Batch, ref_batch: Batch,
+    baseline: Baseline | None = None, settings: dict | None = None,
 ) -> Comparison:
     """配对两个批次的截图并逐场景对比。
 
@@ -30,6 +28,7 @@ def run_comparison(
     - 仅当前批次有 -> added(新增场景,待人工确认)
     - 仅参照批次有 -> missing(场景缺失,视为失败级问题)
     """
+    cfg = settings or DEFAULT_SETTINGS
     current_shots = {
         s.scene_name: s
         for s in db.scalars(select(Screenshot).where(Screenshot.batch_id == batch.id))
@@ -62,8 +61,11 @@ def run_comparison(
                 str(IMAGES_DIR / cur.path),
                 str(IMAGES_DIR / base.path),
                 str(IMAGES_DIR / heatmap_path),
+                pixel_threshold=int(cfg["pixel_diff_threshold"]),
+                heatmap_blur=cfg["heatmap_blur"],
+                heatmap_sensitivity=cfg["heatmap_sensitivity"],
             )
-            status = classify(metrics["diff_pct"])
+            status = classify(metrics["diff_pct"], cfg["fail_threshold"], cfg["warn_threshold"])
             diffs.append(metrics["diff_pct"])
             item = ComparisonItem(
                 comparison_id=comparison.id, scene_name=name,
@@ -97,7 +99,7 @@ def promote_baseline(db: Session, batch: Batch, version: str) -> Baseline:
     """把批次晋升为基线;同平台同版本的旧基线退役。"""
     old = db.scalars(
         select(Baseline).where(
-            Baseline.project == batch.project,
+            Baseline.scene_id == batch.scene_id,
             Baseline.platform == batch.platform,
             Baseline.version == version,
             Baseline.status == "active",
@@ -106,7 +108,7 @@ def promote_baseline(db: Session, batch: Batch, version: str) -> Baseline:
     for b in old:
         b.status = "retired"
     baseline = Baseline(
-        version=version, project=batch.project,
+        version=version, scene_id=batch.scene_id,
         platform=batch.platform, source_batch_id=batch.id,
     )
     db.add(baseline)

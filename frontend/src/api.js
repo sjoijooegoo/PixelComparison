@@ -7,9 +7,9 @@ async function get(url, params = {}) {
   return res.json()
 }
 
-async function post(url, body) {
+async function send(method, url, body) {
   const res = await fetch(url, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
@@ -20,6 +20,9 @@ async function post(url, body) {
   return res.json()
 }
 
+const post = (url, body) => send('POST', url, body)
+const put = (url, body) => send('PUT', url, body)
+
 export const api = {
   meta: () => get('/api/meta'),
   batches: (params) => get('/api/batches', params),
@@ -28,4 +31,6 @@ export const api = {
   scenes: (comparisonId, params) => get(`/api/comparisons/${comparisonId}/scenes`, params),
   item: (id) => get(`/api/items/${id}`),
   baselines: () => get('/api/baselines'),
+  settings: () => get('/api/settings'),
+  saveSettings: (body) => put('/api/settings', body),
 }

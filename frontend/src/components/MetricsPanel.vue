@@ -110,7 +110,7 @@ onMounted(drawHist)
 </template>
 
 <style scoped>
-.metrics { width: 230px; flex: 0 0 230px; overflow-y: auto; min-height: 0; }
+.metrics { width: 400px; flex: 0 0 400px; overflow-y: auto; min-height: 0; }
 .hero { padding: 16px 16px 12px; border-bottom: 1px solid var(--color-border-1); }
 .hero-label { font-size: 12px; margin-bottom: 2px; }
 .hero-value { font-size: 26px; font-weight: 700; line-height: 1.2; letter-spacing: -.5px; }

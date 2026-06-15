@@ -1,0 +1,156 @@
+<script setup>
+import { computed, ref } from 'vue'
+import { Message } from '@arco-design/web-vue'
+import { useStore } from '../store'
+
+const store = useStore()
+const c = computed(() => store.selectedComparison)
+const open = ref(false)
+
+function diffColor(v) {
+  v = v ?? 0
+  if (v >= store.settings.fail_threshold) return 'rgb(var(--red-6))'
+  if (v >= store.settings.warn_threshold) return 'rgb(var(--orange-6))'
+  return 'rgb(var(--green-6))'
+}
+
+function pick(item) {
+  open.value = false
+  if (item.id !== c.value?.id) store.openComparison(item)
+}
+
+async function rerun() {
+  try {
+    await store.rerunComparison()
+    Message.success('已重新对比')
+  } catch (e) {
+    Message.error(e.message || '重新对比失败')
+  }
+}
+</script>
+
+<template>
+  <div v-if="c" class="summary card">
+    <!-- 对比对 = 历史切换器:点击展开过去的对比 -->
+    <a-popover v-model:popup-visible="open" trigger="click" position="bl"
+      :content-style="{ padding: '6px' }">
+      <button class="pair-trigger" :class="{ open }">
+        <span class="pair">
+          <span class="role role-cur">对比批次</span>
+          <span class="mono">#{{ c.batch_id }}</span>
+          <span class="text-secondary br">P4 {{ c.p4_version }}</span>
+          <span class="vs">VS</span>
+          <span class="role role-base">基线</span>
+          <span class="mono">#{{ c.ref_batch_id }}</span>
+          <span class="text-secondary br">P4 {{ c.ref_p4_version }}</span>
+        </span>
+        <svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none"
+          stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 4.5 6 7.5l3-3" />
+        </svg>
+      </button>
+
+      <template #content>
+        <div class="hist-pop">
+          <div class="hist-head text-secondary">
+            对比历史 <b>{{ store.comparisons.length }}</b>
+          </div>
+          <div class="hist-list">
+            <button v-for="h in store.comparisons" :key="h.id" class="hist-item"
+              :class="{ active: h.id === c.id }" @click="pick(h)">
+              <div class="row1">
+                <span class="mono cur">#{{ h.batch_id }}</span>
+                <span class="vs">vs</span>
+                <span class="mono ref">#{{ h.ref_batch_id }}</span>
+                <span class="diff mono" :style="{ color: diffColor(h.diff_avg) }">
+                  {{ (h.diff_avg ?? 0).toFixed(2) }}%</span>
+              </div>
+              <div class="row2 text-secondary">
+                <span class="mono">P4 {{ h.p4_version }}</span>
+                <span class="arrow">→</span>
+                <span class="mono">P4 {{ h.ref_p4_version }}</span>
+              </div>
+              <div class="row3 text-secondary">
+                <span>{{ h.scene_id }}</span>
+                <span class="dot">·</span>
+                <span>{{ h.scene_count }} 点位</span>
+                <span class="dot">·</span>
+                <span>{{ h.created_at }}</span>
+              </div>
+            </button>
+            <a-empty v-if="!store.comparisons.length" description="暂无对比记录" style="margin:24px 0" />
+          </div>
+        </div>
+      </template>
+    </a-popover>
+
+    <div class="spacer"></div>
+
+    <div class="facts">
+      <span class="fact"><i class="k">场景ID</i><b>{{ c.scene_id }}</b></span>
+      <span class="fact"><i class="k">点位数</i><b>{{ c.scene_count }}</b></span>
+      <span class="fact diff"><i class="k">整体差异率</i>
+        <b class="mono" :style="{ color: diffColor(c.diff_avg) }">{{ (c.diff_avg ?? 0).toFixed(2) }}%</b>
+      </span>
+      <a-button size="small" :loading="store.running" @click="rerun">重新对比</a-button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.summary {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px 8px 8px;
+}
+
+/* 触发器:把对比对做成可点击的历史切换入口 */
+.pair-trigger {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; background: none; font-family: inherit;
+  color: var(--color-text-1);
+  transition: background-color .15s, border-color .15s;
+}
+.pair-trigger:hover { background: var(--color-fill-1); }
+.pair-trigger.open { background: var(--color-fill-2); border-color: var(--color-border-2); }
+.pair-trigger .caret { color: var(--color-text-3); transition: transform .15s; flex: 0 0 12px; }
+.pair-trigger.open .caret { transform: rotate(180deg); }
+
+.pair { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+.role { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.role-cur { background: rgba(22, 100, 255, .15); color: rgb(var(--arcoblue-6)); }
+.role-base { background: var(--color-fill-3); color: var(--color-text-2); }
+.br { font-size: 12px; }
+.vs { font-size: 11px; font-weight: 700; color: var(--color-text-4); margin: 0 4px; }
+
+.spacer { flex: 1; }
+.facts { display: flex; align-items: center; gap: 18px; white-space: nowrap; }
+.fact { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.fact .k { font-style: normal; font-size: 12px; color: var(--color-text-3); }
+.fact b { font-weight: 600; }
+.fact.diff b { font-size: 15px; }
+
+/* 历史弹层 */
+.hist-pop { width: 300px; }
+.hist-head { padding: 4px 8px 6px; font-size: 12px; }
+.hist-list { max-height: 320px; overflow-y: auto; }
+.hist-item {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  border: 1px solid transparent; border-radius: 8px; background: none;
+  padding: 8px 10px; margin-bottom: 2px; font-family: inherit;
+}
+.hist-item:hover { background: var(--color-fill-1); }
+.hist-item.active { background: var(--color-fill-2); box-shadow: inset 2px 0 0 rgb(var(--arcoblue-6)); }
+.row1 { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.row1 .cur { color: rgb(var(--arcoblue-6)); }
+.row1 .ref { color: var(--color-text-2); }
+.row1 .vs { color: var(--color-text-4); font-size: 11px; }
+.row1 .diff { margin-left: auto; font-weight: 600; }
+.row2 { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 3px; }
+.row2 .arrow { color: var(--color-text-4); }
+.row3 { display: flex; align-items: center; gap: 5px; font-size: 11px; margin-top: 3px; flex-wrap: wrap; }
+.row3 .dot { color: var(--color-text-4); }
+</style>

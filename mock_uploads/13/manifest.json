@@ -4,9 +4,9 @@
   "engine_version": "UE5.3",
   "resolution": "1920x1080",
   "batch": {
-    "id": "20240614_1100",
-    "project": "Project_Nebula",
-    "branch": "develop",
+    "id": "13",
+    "scene_id": "Lv_Nebula",
+    "p4_version": 252100,
     "platform": "Android",
     "creator": "render-farm-ci"
   },

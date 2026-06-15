@@ -1,13 +1,13 @@
 {
   "format_version": 1,
-  "captured_at": "2024-06-01T10:30:00",
+  "captured_at": "2024-06-08T16:00:00",
   "engine_version": "UE5.3",
   "resolution": "1920x1080",
   "batch": {
-    "id": "20240601_1030",
-    "project": "Project_Starfall",
-    "branch": "release/1.3.0",
-    "platform": "iOS",
+    "id": "8",
+    "scene_id": "Lv_Starfall",
+    "p4_version": 251640,
+    "platform": "Windows",
     "creator": "render-farm-ci"
   },
   "scenes": [

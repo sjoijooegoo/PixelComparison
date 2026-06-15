@@ -45,60 +45,51 @@ onUnmounted(() => {
     <template v-if="detail">
       <div class="head">
         <h3>{{ detail.name }}</h3>
-        <a-tag v-if="detail.status === 'added'" color="arcoblue" size="small">新增场景</a-tag>
-        <a-tag v-else-if="detail.status === 'missing'" color="gray" size="small">场景缺失</a-tag>
-        <a-button-group size="mini">
-          <a-button :disabled="!detail.prev_id" @click="store.gotoPrev()">‹ 上一个</a-button>
-          <a-button disabled>{{ detail.index }}/{{ detail.sibling_total }}</a-button>
-          <a-button :disabled="!detail.next_id" @click="store.gotoNext()">下一个 ›</a-button>
-        </a-button-group>
+        <a-tag v-if="detail.status === 'added'" color="arcoblue" size="small">新增点位</a-tag>
+        <a-tag v-else-if="detail.status === 'missing'" color="gray" size="small">点位缺失</a-tag>
         <a-radio-group v-model="store.viewMode" type="button" size="small" style="margin-left:auto">
-          <a-radio value="tri">三视图</a-radio>
+          <a-radio value="tri">差异热力图</a-radio>
           <a-radio value="slide" :disabled="!paired">滑动对比</a-radio>
-          <a-radio value="raw">原图对比</a-radio>
         </a-radio-group>
-        <a-select v-model="store.zoom" size="small" style="width:86px">
-          <a-option :value="50">50%</a-option>
-          <a-option :value="100">100%</a-option>
-          <a-option :value="150">150%</a-option>
-          <a-option :value="200">200%</a-option>
-        </a-select>
       </div>
 
       <a-alert v-if="detail.status === 'added'" type="info" style="margin-top:10px">
-        新增场景:参照批次 ({{ store.selectedComparison?.ref_label }}) 中没有此场景,确认无误后可将其晋升进基线。
+        新增点位:参照批次 ({{ store.selectedComparison?.ref_label }}) 中没有此点位,确认无误后可将其晋升进基线。
       </a-alert>
       <a-alert v-if="detail.status === 'missing'" type="error" style="margin-top:10px">
-        场景缺失:参照批次中存在此场景,但当前批次未产出截图,请检查采集任务。
+        点位缺失:参照批次中存在此点位,但当前批次未产出截图,请检查采集任务。
       </a-alert>
 
-      <!-- 三视图 / 原图对比 -->
-      <div v-if="store.viewMode !== 'slide' || !paired" class="views">
-        <div class="view-col">
-          <div class="cap"><i class="cap-dot dot-cur"></i>当前版本 ({{ store.selectedComparison?.branch }})</div>
-          <div v-if="detail.current_url" class="frame">
-            <img :src="detail.current_url" :style="{ width: store.zoom + '%' }" alt="当前版本">
+      <!-- 差异热力图模式:上排 当前/参照(小) + 下排 热力图(大),三图均可点击看大图 -->
+      <a-image-preview-group v-if="store.viewMode !== 'slide' || !paired" infinite class="tri-wrap">
+        <div class="views-top">
+          <div class="view-col">
+            <div class="cap"><i class="cap-dot dot-cur"></i>当前版本 (P4 {{ store.selectedComparison?.p4_version }})</div>
+            <div v-if="detail.current_url" class="frame compact">
+              <a-image :src="detail.current_url" alt="当前版本" width="100%" />
+            </div>
+            <div v-else class="frame compact empty">当前批次无此点位</div>
+            <div class="meta text-secondary">批次 #{{ store.selectedComparison?.batch_id }}</div>
           </div>
-          <div v-else class="frame empty">当前批次无此场景</div>
-          <div class="meta text-secondary">批次 #{{ store.selectedComparison?.batch_id }}</div>
-        </div>
-        <div class="view-col">
-          <div class="cap"><i class="cap-dot dot-ref"></i>参照版本 ({{ store.selectedComparison?.ref_label }})</div>
-          <div v-if="detail.baseline_url" class="frame">
-            <img :src="detail.baseline_url" :style="{ width: store.zoom + '%' }" alt="参照版本">
+          <div class="view-col">
+            <div class="cap"><i class="cap-dot dot-ref"></i>参照版本 ({{ store.selectedComparison?.ref_label }})</div>
+            <div v-if="detail.baseline_url" class="frame compact">
+              <a-image :src="detail.baseline_url" alt="参照版本" width="100%" />
+            </div>
+            <div v-else class="frame compact empty">参照批次中无此点位</div>
+            <div class="meta text-secondary">参照批次 #{{ store.selectedComparison?.ref_batch_id }}</div>
           </div>
-          <div v-else class="frame empty">参照批次中无此场景</div>
-          <div class="meta text-secondary">参照批次 #{{ store.selectedComparison?.ref_batch_id }}</div>
         </div>
-        <div v-if="store.viewMode === 'tri'" class="view-col">
+
+        <div v-if="store.viewMode === 'tri'" class="heat-row">
           <div class="cap"><i class="cap-dot dot-heat"></i>差异热力图</div>
-          <div v-if="detail.heatmap_url" class="frame">
-            <img :src="detail.heatmap_url" :style="{ width: store.zoom + '%' }" alt="差异热力图">
+          <div v-if="detail.heatmap_url" class="frame heat">
+            <a-image :src="detail.heatmap_url" alt="差异热力图" width="100%" />
           </div>
-          <div v-else class="frame empty">无对比结果</div>
+          <div v-else class="frame heat empty">无对比结果</div>
           <div class="meta text-secondary">低 <span class="heat-bar"></span> 高</div>
         </div>
-      </div>
+      </a-image-preview-group>
 
       <!-- 滑动对比 -->
       <div v-else class="slide-wrap">
@@ -113,38 +104,71 @@ onUnmounted(() => {
         </div>
         <div class="meta text-secondary">拖动分割线对比两个版本 · 960x540 · PNG</div>
       </div>
+
+      <!-- 点位切换:浮动在右下角 -->
+      <div class="scene-nav">
+        <a-button-group size="small">
+          <a-button :disabled="!detail.prev_id" @click="store.gotoPrev()">‹ 上一个</a-button>
+          <a-button disabled>{{ detail.index }}/{{ detail.sibling_total }}</a-button>
+          <a-button :disabled="!detail.next_id" @click="store.gotoNext()">下一个 ›</a-button>
+        </a-button-group>
+      </div>
     </template>
-    <a-empty v-else style="margin-top: 80px" description="请选择场景" />
+    <a-empty v-else style="margin-top: 80px" description="请选择点位" />
   </section>
 </template>
 
 <style scoped>
-.detail { flex: 1; min-width: 0; padding: 12px 16px; overflow-y: auto; }
-.head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* 详情区纵向填充,内容尽量一屏显示,不滚动 */
+.detail { flex: 1; min-width: 0; padding: 12px 16px; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+/* 点位切换:浮动右下角 */
+.scene-nav {
+  position: absolute; right: 18px; bottom: 14px; z-index: 5;
+  border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
+  background: var(--color-bg-2);
+}
+.head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 0 0 auto; }
 .head h3 { margin: 0; font-size: 14px; }
-.views { display: flex; gap: 12px; margin-top: 12px; align-items: flex-start; }
-.view-col { flex: 1; min-width: 0; }
-.cap { font-size: 12px; color: var(--color-text-2); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+/* 热力图模式容器:纵向填满剩余高度 */
+.tri-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+/* 上排:当前 / 参照,两图按高度等比 16:9(无黑边),并排靠左 */
+.views-top { display: flex; gap: 8px; flex: 0 0 auto; justify-content: flex-start; align-items: flex-start; }
+.view-col { flex: 0 0 auto; min-width: 0; }
+/* 下排:差异热力图,占满剩余高度,按高度等比(无黑边),左对齐 */
+.heat-row { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: flex-start; }
+.cap { font-size: 12px; color: var(--color-text-2); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .cap-dot { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 8px; }
 .dot-cur { background: rgb(var(--arcoblue-6)); }
 .dot-ref { background: var(--color-text-4); }
 .dot-heat { background: linear-gradient(135deg, #00b3ff, #ffe000, #e00000); }
 .frame {
-  background: #0d1117; border-radius: 8px; overflow: auto;
+  background: #0d1117; border-radius: 8px; overflow: hidden;
   border: 1px solid var(--color-border-2);
 }
-.frame img { display: block; min-width: 100%; }
+.frame :deep(.arco-image) { display: block; width: 100%; height: 100%; cursor: zoom-in; }
+.frame :deep(.arco-image-img) { display: block; width: 100%; height: 100%; object-fit: contain; }
+/* 上排小图:按高度等比 16:9(框=图片大小,零黑边) */
+.frame.compact { height: 24vh; aspect-ratio: 16 / 9; width: auto; max-width: 100%; }
+/* 下排热力图:占满剩余高度,按高度等比(零黑边) */
+.frame.heat { flex: 1; min-height: 0; aspect-ratio: 16 / 9; width: auto; max-width: 100%; }
 .frame.empty {
-  aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   color: var(--color-text-3); background: var(--color-fill-2); font-size: 12px;
 }
+.frame.compact.empty { aspect-ratio: 16/9; }
 .meta { display: flex; align-items: center; gap: 6px; padding: 5px 2px; font-size: 12px; }
 .heat-bar {
   display: inline-block; width: 90px; height: 8px; border-radius: 4px;
   background: linear-gradient(90deg,#1b1bb3,#00b3ff,#00d26a,#ffe000,#ff6a00,#e00000);
 }
-.slide-wrap { margin: 12px auto 0; max-width: 960px; }
-.stage { position: relative; border-radius: 6px; overflow: hidden; user-select: none; background: #0d1117; }
+.slide-wrap { margin: 12px auto 0; width: 100%; }
+.slide-wrap .meta { justify-content: center; }
+/* 自适应:占满可用宽度,同时受窗口高度约束,保持 16:9 */
+.stage {
+  position: relative; border-radius: 6px; overflow: hidden; user-select: none; background: #0d1117;
+  width: min(100%, (100vh - 230px) * 16 / 9);
+  margin: 0 auto;
+}
 .stage > img { display: block; width: 100%; }
 .top { position: absolute; inset: 0 auto 0 0; overflow: hidden; }
 .top img { display: block; height: 100%; max-width: none; }

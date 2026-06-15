@@ -32,10 +32,10 @@ SCENES = [
 NEW_SCENE = ("21_空间站_走廊_昼", 121, False)
 
 
-def create_batch(db, batch_id, branch, platform, creator, created, scene_specs):
+def create_batch(db, batch_id, p4_version, platform, creator, created, scene_specs):
     """scene_specs: list[(name, seed, night, variant)]"""
     batch = Batch(
-        id=batch_id, project="Project_Starfall", branch=branch,
+        id=batch_id, scene_id="Lv_Starfall", p4_version=p4_version,
         platform=platform, creator=creator,
         created_at=datetime.strptime(created, "%Y-%m-%d %H:%M"),
     )
@@ -70,9 +70,9 @@ def seed() -> None:
 
     # ---- 1. 基线采集批次 -> 晋升为基线 ----
     print("生成基线批次…")
-    bl_win = create_batch(db, "20240510_0900", "release/1.1.5", "Windows", "CI机器人", "2024-05-10 09:00", baseline_specs)
-    bl_ps5 = create_batch(db, "20240510_0930", "release/1.1.5", "iOS", "CI机器人", "2024-05-10 09:30", baseline_specs)
-    bl_old = create_batch(db, "20240426_1800", "release/1.1.4", "Windows", "CI机器人", "2024-04-26 18:00", baseline_specs)
+    bl_win = create_batch(db, "1", 249050, "Windows", "CI机器人", "2024-05-10 09:00", baseline_specs)
+    bl_ps5 = create_batch(db, "2", 249055, "iOS", "CI机器人", "2024-05-10 09:30", baseline_specs)
+    bl_old = create_batch(db, "3", 248100, "Windows", "CI机器人", "2024-04-26 18:00", baseline_specs)
     v115_win = promote_baseline(db, bl_win, "v1.1.5")
     v115_ps5 = promote_baseline(db, bl_ps5, "v1.1.5")
     v114_win = promote_baseline(db, bl_old, "v1.1.4")
@@ -82,11 +82,11 @@ def seed() -> None:
     # B1:回归较多,且第 5 个场景缺失、多出一个新场景
     b1_scenes = with_variants([s for i, s in enumerate(SCENES) if i != 4], rnd) \
         + [(*NEW_SCENE, 0)]
-    b1 = create_batch(db, "20240524_1530", "release/1.2.0", "Windows", "张三", "2024-05-24 15:30", b1_scenes)
+    b1 = create_batch(db, "4", 250950, "Windows", "张三", "2024-05-24 15:30", b1_scenes)
 
-    b2 = create_batch(db, "20240524_1022", "release/1.2.0", "iOS", "李四", "2024-05-24 10:22",
+    b2 = create_batch(db, "5", 250910, "iOS", "李四", "2024-05-24 10:22",
                       with_variants(SCENES, rnd, p_fail=0.0, p_warn=0.25))
-    b3 = create_batch(db, "20240523_2147", "release/1.2.0", "Windows", "王五", "2024-05-23 21:47",
+    b3 = create_batch(db, "6", 250870, "Windows", "王五", "2024-05-23 21:47",
                       with_variants(SCENES, rnd, p_fail=0.05, p_warn=0.1))
 
     # ---- 3. 跑对比 ----
