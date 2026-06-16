@@ -73,7 +73,7 @@ async function rerun() {
               <div class="row3 text-secondary">
                 <span>{{ h.scene_id }}</span>
                 <span class="dot">·</span>
-                <span>{{ h.scene_count }} 点位</span>
+                <span>{{ h.scene_count }} 检查点</span>
                 <span class="dot">·</span>
                 <span>{{ h.created_at }}</span>
               </div>
@@ -88,11 +88,13 @@ async function rerun() {
 
     <div class="facts">
       <span class="fact"><i class="k">场景ID</i><b>{{ c.scene_id }}</b></span>
-      <span class="fact"><i class="k">点位数</i><b>{{ c.scene_count }}</b></span>
+      <span class="fact"><i class="k">检查点数</i><b>{{ c.scene_count }}</b></span>
       <span class="fact diff"><i class="k">整体差异率</i>
         <b class="mono" :style="{ color: diffColor(c.diff_avg) }">{{ (c.diff_avg ?? 0).toFixed(2) }}%</b>
       </span>
-      <a-button size="small" :loading="store.running" @click="rerun">重新对比</a-button>
+      <a-button size="small" :loading="store.running" @click="rerun">
+        {{ store.running && store.progress.total ? `重算中 ${store.progress.done}/${store.progress.total}` : '重新对比' }}
+      </a-button>
     </div>
   </div>
 </template>

@@ -6,6 +6,23 @@ const store = useStore()
 const detail = computed(() => store.detail)
 const paired = computed(() => !!(detail.value?.current_url && detail.value?.baseline_url))
 
+// 相机位姿(新版上报带):location(x,y,z) + rotation(pitch,yaw,roll)
+const n1 = (v) => {
+  if (typeof v !== 'number') return v
+  const s = v.toFixed(1)
+  return s === '-0.0' ? '0.0' : s   // 规避负零显示
+}
+const camera = computed(() => {
+  const c = detail.value?.camera
+  if (!c?.location || !c?.rotation) return null
+  const { x, y, z } = c.location
+  const { pitch, yaw, roll } = c.rotation
+  return {
+    loc: `${n1(x)}, ${n1(y)}, ${n1(z)}`,
+    rot: `${n1(pitch)}, ${n1(yaw)}, ${n1(roll)}`,
+  }
+})
+
 const sliderRatio = ref(0.5)
 const stage = ref(null)
 let dragging = false
@@ -44,9 +61,14 @@ onUnmounted(() => {
   <section class="detail">
     <template v-if="detail">
       <div class="head">
-        <h3>{{ detail.name }}</h3>
-        <a-tag v-if="detail.status === 'added'" color="arcoblue" size="small">新增点位</a-tag>
-        <a-tag v-else-if="detail.status === 'missing'" color="gray" size="small">点位缺失</a-tag>
+        <div class="title-wrap">
+          <h3>{{ detail.name }}</h3>
+          <span v-if="camera" class="cam-inline text-secondary">
+            位置 ({{ camera.loc }}) <span class="cam-dot">·</span> 旋转 ({{ camera.rot }})
+          </span>
+        </div>
+        <a-tag v-if="detail.status === 'added'" color="arcoblue" size="small">新增检查点</a-tag>
+        <a-tag v-else-if="detail.status === 'missing'" color="gray" size="small">检查点缺失</a-tag>
         <a-radio-group v-model="store.viewMode" type="button" size="small" style="margin-left:auto">
           <a-radio value="tri">差异热力图</a-radio>
           <a-radio value="slide" :disabled="!paired">滑动对比</a-radio>
@@ -54,30 +76,28 @@ onUnmounted(() => {
       </div>
 
       <a-alert v-if="detail.status === 'added'" type="info" style="margin-top:10px">
-        新增点位:参照批次 ({{ store.selectedComparison?.ref_label }}) 中没有此点位,确认无误后可将其晋升进基线。
+        新增检查点:基线批次 ({{ store.selectedComparison?.ref_label }}) 中没有此检查点,确认无误后可将其晋升进基线。
       </a-alert>
       <a-alert v-if="detail.status === 'missing'" type="error" style="margin-top:10px">
-        点位缺失:参照批次中存在此点位,但当前批次未产出截图,请检查采集任务。
+        检查点缺失:基线批次中存在此检查点,但对比批次未产出截图,请检查采集任务。
       </a-alert>
 
       <!-- 差异热力图模式:上排 当前/参照(小) + 下排 热力图(大),三图均可点击看大图 -->
       <a-image-preview-group v-if="store.viewMode !== 'slide' || !paired" infinite class="tri-wrap">
         <div class="views-top">
           <div class="view-col">
-            <div class="cap"><i class="cap-dot dot-ref"></i>参照版本</div>
+            <div class="cap"><i class="cap-dot dot-ref"></i>基线版本</div>
             <div v-if="detail.baseline_url" class="frame compact">
-              <a-image :src="detail.baseline_url" alt="参照版本" width="100%" />
+              <a-image :src="detail.baseline_url" alt="基线版本" width="100%" />
             </div>
-            <div v-else class="frame compact empty">参照批次中无此点位</div>
-            <div class="meta text-secondary">#{{ store.selectedComparison?.ref_batch_id }} · P4 {{ store.selectedComparison?.ref_p4_version }}</div>
+            <div v-else class="frame compact empty">基线批次中无此检查点</div>
           </div>
           <div class="view-col">
-            <div class="cap"><i class="cap-dot dot-cur"></i>当前版本</div>
+            <div class="cap"><i class="cap-dot dot-cur"></i>对比版本</div>
             <div v-if="detail.current_url" class="frame compact">
-              <a-image :src="detail.current_url" alt="当前版本" width="100%" />
+              <a-image :src="detail.current_url" alt="对比版本" width="100%" />
             </div>
-            <div v-else class="frame compact empty">当前批次无此点位</div>
-            <div class="meta text-secondary">#{{ store.selectedComparison?.batch_id }} · P4 {{ store.selectedComparison?.p4_version }}</div>
+            <div v-else class="frame compact empty">对比批次无此检查点</div>
           </div>
         </div>
 
@@ -94,18 +114,18 @@ onUnmounted(() => {
       <!-- 滑动对比 -->
       <div v-else class="slide-wrap">
         <div class="stage" ref="stage" @click="stageClick">
-          <img :src="detail.baseline_url" draggable="false" alt="参照版本">
+          <img :src="detail.current_url" draggable="false" alt="对比版本">
           <div class="top" :style="{ width: sliderRatio * 100 + '%' }">
-            <img :src="detail.current_url" draggable="false" alt="当前版本">
+            <img :src="detail.baseline_url" draggable="false" alt="基线版本">
           </div>
           <div class="handle" :style="{ left: `calc(${sliderRatio * 100}% - 1px)` }" @pointerdown.stop="startDrag"></div>
-          <span class="tag" style="left:10px">当前版本</span>
-          <span class="tag" style="right:10px">参照版本</span>
+          <span class="tag" style="left:10px">基线版本</span>
+          <span class="tag" style="right:10px">对比版本</span>
         </div>
-        <div class="meta text-secondary">拖动分割线对比两个版本 · 960x540 · PNG</div>
+        <div class="meta text-secondary">拖动分割线对比两个版本<template v-if="store.selectedComparison?.resolution"> · {{ store.selectedComparison.resolution }}</template> · PNG</div>
       </div>
 
-      <!-- 点位切换:浮动在右下角 -->
+      <!-- 检查点切换:浮动在右下角 -->
       <div class="scene-nav">
         <a-button-group size="small">
           <a-button :disabled="!detail.prev_id" @click="store.gotoPrev()">‹ 上一个</a-button>
@@ -114,28 +134,33 @@ onUnmounted(() => {
         </a-button-group>
       </div>
     </template>
-    <a-empty v-else style="margin-top: 80px" description="请选择点位" />
+    <a-empty v-else style="margin-top: 80px" description="请选择检查点" />
   </section>
 </template>
 
 <style scoped>
 /* 详情区纵向填充,内容尽量一屏显示,不滚动 */
 .detail { flex: 1; min-width: 0; padding: 12px 16px; overflow: hidden; display: flex; flex-direction: column; position: relative; }
-/* 点位切换:浮动右下角 */
+/* 检查点切换:浮动右下角 */
 .scene-nav {
   position: absolute; right: 18px; bottom: 14px; z-index: 5;
   border-radius: 8px; box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
   background: var(--color-bg-2);
 }
-.head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 0 0 auto; }
-.head h3 { margin: 0; font-size: 14px; }
+.head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 0 0 auto; margin-bottom: 15px; }
+.head h3 { margin: 0; font-size: 17px; font-weight: 600; }
+/* 相机位姿:与检查点名同一行的小字 */
+/* 名称 + 位置:位置像下标一样贴在名称右下角 */
+.title-wrap { display: flex; align-items: flex-end; gap: 6px; min-width: 0; }
+.cam-inline { font-size: 11px; white-space: nowrap; padding-bottom: 2px; }
+.cam-inline .cam-dot { color: var(--color-text-4); }
 /* 热力图模式容器:纵向填满剩余高度 */
-.tri-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
-/* 上排:当前 / 参照,两图按高度等比 16:9(无黑边),并排靠左 */
+.tri-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 上排:基线 / 对比,两图按高度等比 16:9(无黑边),并排靠左 */
 .views-top { display: flex; gap: 8px; flex: 0 0 auto; justify-content: flex-start; align-items: flex-start; }
 .view-col { flex: 0 0 auto; min-width: 0; }
 /* 下排:差异热力图,占满剩余高度,按高度等比(无黑边),左对齐 */
-.heat-row { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: flex-start; }
+.heat-row { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: flex-start; margin-top: 20px; }
 .cap { font-size: 12px; color: var(--color-text-2); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .cap-dot { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 8px; }
 .dot-cur { background: rgb(var(--batch-cur)); }

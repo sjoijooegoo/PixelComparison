@@ -16,6 +16,12 @@ class Batch(Base):
     platform: Mapped[str] = mapped_column(String)
     creator: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    # 新版上报 manifest 附带的元信息
+    batch_url: Mapped[str | None] = mapped_column(String, nullable=True)  # 真实流水线链接
+    resolution: Mapped[str | None] = mapped_column(String, nullable=True)  # 例 1920x1080
+    capture_type: Mapped[str | None] = mapped_column(String, nullable=True)  # 例 levelsequence
+    levelsequence_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    levelsequence_path: Mapped[str | None] = mapped_column(String, nullable=True)
 
     screenshots: Mapped[list["Screenshot"]] = relationship(
         back_populates="batch", cascade="all, delete-orphan"
@@ -30,6 +36,9 @@ class Screenshot(Base):
     batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"), index=True)
     scene_name: Mapped[str] = mapped_column(String, index=True)
     path: Mapped[str] = mapped_column(String)  # 相对 IMAGES_DIR
+    # 新版上报:帧序与相机位姿(location/rotation)
+    frame_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    camera: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     batch: Mapped[Batch] = relationship(back_populates="screenshots")
 

@@ -1,8 +1,19 @@
 <script setup>
+import { computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore } from '../store'
 
 const store = useStore()
+
+// 创建时间范围:绑定到 filters.created_from/created_to(YYYY-MM-DD)
+const dateRange = computed(() => {
+  const { created_from, created_to } = store.filters
+  return created_from && created_to ? [created_from, created_to] : undefined
+})
+function onDateChange(v) {
+  store.filters.created_from = v?.[0] || ''
+  store.filters.created_to = v?.[1] || ''
+}
 
 async function apply() {
   await store.loadBatches()
@@ -10,7 +21,7 @@ async function apply() {
 }
 
 async function reset() {
-  store.filters = { scene_id: '', platform: '', p4_min: null, p4_max: null, status: '' }
+  store.filters = { scene_id: '', platform: '', p4_min: null, p4_max: null, created_from: '', created_to: '', status: '' }
   await apply()
 }
 </script>
@@ -47,7 +58,8 @@ async function reset() {
       </div>
       <div class="group">
         <div class="label">创建时间</div>
-        <a-range-picker size="small" style="width: 100%" />
+        <a-range-picker size="small" style="width: 100%"
+          :model-value="dateRange" @change="onDateChange" />
       </div>
 
       <a-button type="primary" long @click="apply">应用筛选</a-button>
@@ -59,7 +71,7 @@ async function reset() {
 </template>
 
 <style scoped>
-.sidebar { width: 220px; flex: 0 0 220px; display: flex; flex-direction: column; min-height: 0; }
+.sidebar { width: 244px; flex: 0 0 244px; display: flex; flex-direction: column; min-height: 0; }
 .scroll { flex: 1; overflow-y: auto; padding: 14px; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .group { margin-bottom: 14px; }

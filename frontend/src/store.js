@@ -14,7 +14,7 @@ export const STATUS_META = {
 export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { scene_ids: [], platforms: [], baselines: [] },
-    filters: { scene_id: '', platform: '', p4_min: null, p4_max: null, status: '' },
+    filters: { scene_id: '', platform: '', p4_min: null, p4_max: null, created_from: '', created_to: '', status: '' },
 
     // 顶部 tab:batch(批次管理) | 对比结果 | 基线管理 | 项目设置
     activeTab: 'batch',
@@ -31,6 +31,7 @@ export const useStore = defineStore('shotdiff', {
     // 运行后的活动对比
     selectedComparison: null,
     running: false,
+    progress: { done: 0, total: 0 },   // 后台对比进度
 
     sceneSearch: '',
     page: 1,
@@ -61,9 +62,14 @@ export const useStore = defineStore('shotdiff', {
 
   actions: {
     async init() {
-      this.meta = await api.meta()
+      await this.loadMeta()
       await this.loadSettings()
       await this.loadBatches()
+    },
+
+    // 筛选器选项(场景/平台/基线):随批次实时去重,刷新时一并更新
+    async loadMeta() {
+      this.meta = await api.meta()
     },
 
     async loadSettings() {
@@ -102,11 +108,25 @@ export const useStore = defineStore('shotdiff', {
       this.comparisons = items
     },
 
+    // 发起对比 -> 命中缓存直接返回;否则轮询后台任务进度直到完成
+    async _awaitComparison(body) {
+      this.progress = { done: 0, total: 0 }
+      const res = await api.createComparison(body)
+      if (res.status === 'done' && res.comparison) return res.comparison   // 缓存命中
+      while (true) {
+        await new Promise((r) => setTimeout(r, 400))
+        const t = await api.comparisonTask(res.task_id)
+        this.progress = { done: t.done, total: t.total }
+        if (t.status === 'done') return t.comparison
+        if (t.status === 'error') throw new Error(t.error || '对比失败')
+      }
+    },
+
     async runComparison() {
       if (!this.canCompare) return
       this.running = true
       try {
-        const dto = await api.createComparison({
+        const dto = await this._awaitComparison({
           batch_id: this.currentBatch.id,
           ref_batch_id: this.baselineBatch.id,
         })
@@ -116,6 +136,7 @@ export const useStore = defineStore('shotdiff', {
         return dto
       } finally {
         this.running = false
+        this.progress = { done: 0, total: 0 }
       }
     },
 
@@ -125,7 +146,7 @@ export const useStore = defineStore('shotdiff', {
       if (!c) return
       this.running = true
       try {
-        const dto = await api.createComparison({
+        const dto = await this._awaitComparison({
           batch_id: c.batch_id,
           ref_batch_id: c.ref_batch_id,
           force: true,
@@ -135,6 +156,7 @@ export const useStore = defineStore('shotdiff', {
         return dto
       } finally {
         this.running = false
+        this.progress = { done: 0, total: 0 }
       }
     },
 

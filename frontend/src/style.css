@@ -1,8 +1,14 @@
 html, body, #app { height: 100%; margin: 0; }
 /* 对比批次 / 基线批次的固定语义色(避开主题蓝与状态红橙绿) */
+/* 亮色主题:偏深,白底上沉稳不刺眼 */
 :root {
-  --batch-cur: 138, 130, 196;   /* 对比批次:柔和靛紫 */
-  --batch-base: 95, 158, 150;   /* 基线批次:柔和青灰 */
+  --batch-cur: 88, 84, 150;     /* 对比批次:靛紫 */
+  --batch-base: 48, 110, 122;   /* 基线批次:蓝青 */
+}
+/* 深色主题:提亮,黑底上清晰不发闷 */
+body[arco-theme="dark"] {
+  --batch-cur: 140, 132, 198;
+  --batch-base: 96, 162, 154;
 }
 /* 页面背景需比卡片更深(暗色)/更浅灰(亮色),卡片才能"浮起来" */
 body { font-size: 13px; color: var(--color-text-1); background: var(--color-fill-2); }

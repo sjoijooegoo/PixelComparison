@@ -28,6 +28,7 @@ export const api = {
   batches: (params) => get('/api/batches', params),
   comparisons: (filters) => get('/api/comparisons', filters),
   createComparison: (body) => post('/api/comparisons', body),
+  comparisonTask: (taskId) => get(`/api/comparisons/tasks/${taskId}`),
   scenes: (comparisonId, params) => get(`/api/comparisons/${comparisonId}/scenes`, params),
   item: (id) => get(`/api/items/${id}`),
   baselines: () => get('/api/baselines'),

@@ -42,7 +42,7 @@ const columns = [
   { title: '场景ID', dataIndex: 'scene_id', slotName: 'scene' },
   { title: 'P4版本', dataIndex: 'p4_version', slotName: 'p4', sortable: { sortDirections: ['ascend', 'descend'] } },
   { title: '平台', dataIndex: 'platform', slotName: 'platform' },
-  { title: '点位数', dataIndex: 'scene_count' },
+  { title: '检查点数', dataIndex: 'scene_count' },
   { title: '创建时间', dataIndex: 'created_at', sortable: { sortDirections: ['ascend', 'descend'] } },
   { title: '操作', slotName: 'ops', width: 200, align: 'center' },
 ]
@@ -50,8 +50,8 @@ const columns = [
 const PLATFORM_COLOR = { Windows: 'arcoblue', iOS: 'gray', Android: 'green' }
 const platformColor = (p) => PLATFORM_COLOR[p] || 'gray'
 
-// 批次详情外链(假地址,接入时替换为真实批次/P4 changelist 页)
-const batchLink = (record) => `https://p4web.example.com/batch/${record.id}`
+// 批次详情外链:优先用上报带来的真实流水线链接,旧数据回退到占位地址
+const batchLink = (record) => record.batch_url || `https://p4web.example.com/batch/${record.id}`
 
 function setRole(record, role) {
   // 选择时不限制,允许自由换批次;场景一致性在「发起对比」时校验
@@ -80,7 +80,7 @@ function roleOf(record) {
 }
 
 function exportCsv() {
-  const head = '批次ID,场景ID,P4版本,平台,点位数,创建时间'
+  const head = '批次ID,场景ID,P4版本,平台,检查点数,创建时间'
   const rows = store.batches.map(b =>
     [b.id, b.scene_id, b.p4_version, b.platform, b.scene_count, b.created_at].join(','))
   const blob = new Blob(['﻿' + head + '\n' + rows.join('\n')], { type: 'text/csv' })
@@ -97,7 +97,7 @@ function exportCsv() {
     <div class="head">
       <h3>批次列表 ({{ store.batchTotal }})</h3>
       <div style="flex:1"></div>
-      <a-button size="small" @click="store.loadBatches(); Message.success('已刷新')">刷新</a-button>
+      <a-button size="small" @click="store.loadMeta(); store.loadBatches(); Message.success('已刷新')">刷新</a-button>
       <a-button size="small" @click="exportCsv">导出列表</a-button>
     </div>
 
@@ -121,7 +121,9 @@ function exportCsv() {
         <span v-else class="slot-empty">未选择</span>
       </div>
       <a-button type="primary" size="medium" class="run-btn" :disabled="!store.canCompare"
-        :loading="store.running" @click="run">发起对比</a-button>
+        :loading="store.running" @click="run">
+        {{ store.running && store.progress.total ? `对比中 ${store.progress.done}/${store.progress.total}` : '发起对比' }}
+      </a-button>
     </div>
 
     <div class="table-wrap" ref="tableWrap">

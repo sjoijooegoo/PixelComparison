@@ -1,39 +1,90 @@
 {
   "format_version": 1,
-  "captured_at": "2024-06-10T11:00:00",
-  "engine_version": "UE5.3",
-  "resolution": "1920x1080",
-  "batch": {
-    "id": "12",
-    "scene_id": "Lv_Nebula",
-    "p4_version": 251800,
-    "platform": "Android",
-    "creator": "render-farm-ci"
+  "capture_type": "levelsequence",
+  "pipeline_data": {
+    "batch_id": "12",
+    "batch_url": "https://devops.woa.com/console/pipeline/arashi/p-mock/detail/b-12/executeDetail",
+    "captured_at": "2024-06-10T11:00:00"
   },
-  "scenes": [
+  "ue_data": {
+    "levelsequence_path": "/Game/Cinematics/Seq_Lv_Nebula.Seq_Lv_Nebula",
+    "levelsequence_name": "Seq_Lv_Nebula",
+    "world_name": "Lv_Nebula",
+    "platform": "AndroidEditor",
+    "p4_version": "251800",
+    "resolution": {
+      "width": 1920,
+      "height": 1080
+    }
+  },
+  "screenshots": [
     {
+      "index": 0,
       "name": "01_星港_中庭_昼",
-      "image": "images/01_星港_中庭_昼.png",
-      "area": "星港",
-      "time_of_day": "昼"
+      "image": "Screenshot/01_星港_中庭_昼.png",
+      "camera": {
+        "location": {
+          "x": -44787.0,
+          "y": -27193.0,
+          "z": -4400.0
+        },
+        "rotation": {
+          "pitch": 11.4,
+          "yaw": -56.3,
+          "roll": 0.0
+        }
+      }
     },
     {
+      "index": 1,
       "name": "02_星港_机库_夜",
-      "image": "images/02_星港_机库_夜.png",
-      "area": "星港",
-      "time_of_day": "夜"
+      "image": "Screenshot/02_星港_机库_夜.png",
+      "camera": {
+        "location": {
+          "x": -44636.5,
+          "y": -27277.25,
+          "z": -4327.5
+        },
+        "rotation": {
+          "pitch": 13.4,
+          "yaw": -46.3,
+          "roll": 0.0
+        }
+      }
     },
     {
+      "index": 2,
       "name": "03_环带城_天桥_昼",
-      "image": "images/03_环带城_天桥_昼.png",
-      "area": "环带城",
-      "time_of_day": "昼"
+      "image": "Screenshot/03_环带城_天桥_昼.png",
+      "camera": {
+        "location": {
+          "x": -44486.0,
+          "y": -27361.5,
+          "z": -4255.0
+        },
+        "rotation": {
+          "pitch": 15.4,
+          "yaw": -36.3,
+          "roll": 0.0
+        }
+      }
     },
     {
+      "index": 3,
       "name": "04_环带城_市集_夜",
-      "image": "images/04_环带城_市集_夜.png",
-      "area": "环带城",
-      "time_of_day": "夜"
+      "image": "Screenshot/04_环带城_市集_夜.png",
+      "camera": {
+        "location": {
+          "x": -44335.5,
+          "y": -27445.75,
+          "z": -4182.5
+        },
+        "rotation": {
+          "pitch": 17.4,
+          "yaw": -26.3,
+          "roll": 0.0
+        }
+      }
     }
   ]
 }

@@ -1,14 +1,14 @@
-"""读取上报数据包并通过 API 上报到平台。
+"""读取上报数据包并通过 API 上报到平台(新版 manifest 格式)。
 
 对每个批次包:
-    1. POST /api/batches                     用 manifest.batch 建批次
-    2. POST /api/batches/{id}/screenshots    逐张上传 manifest.scenes 中的截图
+    1. POST /api/batches                     用 pipeline_data + ue_data 建批次
+    2. POST /api/batches/{id}/screenshots    逐张上传 screenshots(带相机位姿/帧序)
 
 仅依赖标准库(自行拼装 multipart),无需安装 requests。
 
 用法:
     python mock_uploads/upload.py                 # 上报本目录下所有批次包
-    python mock_uploads/upload.py 20240601_1000   # 仅上报指定批次
+    python mock_uploads/upload.py 7               # 仅上报指定批次
     BASE=http://host:8000 python mock_uploads/upload.py
 """
 from __future__ import annotations
@@ -38,14 +38,22 @@ def post_json(url: str, payload: dict):
         return e.code, e.read().decode("utf-8", "ignore")
 
 
-def post_screenshot(url: str, scene_name: str, image_path: Path):
-    boundary = uuid.uuid4().hex
-    parts = []
-    parts.append(
+def _field(name: str, value: str, boundary: str) -> bytes:
+    return (
         f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="scene_name"\r\n\r\n'
-        f"{scene_name}\r\n".encode("utf-8")
-    )
+        f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+        f"{value}\r\n"
+    ).encode("utf-8")
+
+
+def post_screenshot(url: str, scene_name: str, image_path: Path,
+                    camera: dict | None = None, frame_index=None):
+    boundary = uuid.uuid4().hex
+    parts = [_field("scene_name", scene_name, boundary)]
+    if camera is not None:
+        parts.append(_field("camera", json.dumps(camera, ensure_ascii=False), boundary))
+    if frame_index is not None:
+        parts.append(_field("frame_index", str(frame_index), boundary))
     parts.append(
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{image_path.name}"\r\n'
@@ -65,9 +73,35 @@ def post_screenshot(url: str, scene_name: str, image_path: Path):
         return e.code
 
 
+def build_batch_body(manifest: dict) -> dict:
+    """从新版 manifest 的 pipeline_data + ue_data 拼出 POST /api/batches 请求体。"""
+    pipeline = manifest["pipeline_data"]
+    ue = manifest["ue_data"]
+    res = ue.get("resolution") or {}
+    resolution = (
+        f"{res['width']}x{res['height']}" if res.get("width") and res.get("height") else None
+    )
+    # 兼容字段命名:新版用 id/url,旧版用 batch_id/batch_url
+    batch_id = pipeline.get("id") or pipeline.get("batch_id")
+    batch_url = pipeline.get("url") or pipeline.get("batch_url")
+    return {
+        "id": str(batch_id),
+        "scene_id": ue["world_name"],
+        "p4_version": int(ue["p4_version"]),
+        "platform": ue["platform"],            # 后端归一化(WindowsEditor→Windows)
+        "creator": "render-farm-ci",
+        "batch_url": batch_url,
+        "resolution": resolution,
+        "capture_type": manifest.get("capture_type"),
+        "levelsequence_name": ue.get("levelsequence_name"),
+        "levelsequence_path": ue.get("levelsequence_path"),
+        "captured_at": pipeline.get("captured_at"),  # 新版可能不带,缺省用入库时间
+    }
+
+
 def upload_package(pkg_dir: Path) -> None:
     manifest = json.loads((pkg_dir / "manifest.json").read_text(encoding="utf-8"))
-    batch = manifest["batch"]
+    batch = build_batch_body(manifest)
     print(f"\n上报批次 {batch['id']} (P4 {batch['p4_version']} / {batch['platform']})")
 
     status, body = post_json(f"{BASE}/api/batches", batch)
@@ -77,17 +111,19 @@ def upload_package(pkg_dir: Path) -> None:
             return
         print("  批次已存在,继续上传截图…")
 
+    shots = manifest["screenshots"]
     ok = 0
-    for scene in manifest["scenes"]:
-        img = pkg_dir / scene["image"]
+    for s in shots:
+        img = pkg_dir / s["image"]
         code = post_screenshot(
-            f"{BASE}/api/batches/{batch['id']}/screenshots", scene["name"], img
+            f"{BASE}/api/batches/{batch['id']}/screenshots",
+            s["name"], img, camera=s.get("camera"), frame_index=s.get("index"),
         )
         if code in (200, 201):
             ok += 1
         else:
-            print(f"  ! {scene['name']}: HTTP {code}")
-    print(f"  完成: {ok}/{len(manifest['scenes'])} 张截图")
+            print(f"  ! {s['name']}: HTTP {code}")
+    print(f"  完成: {ok}/{len(shots)} 张截图")
 
 
 def main() -> None:

@@ -53,7 +53,7 @@ function onSearch(val) {
     <div class="head">
       <div class="head-top">
         <b style="color: rgb(var(--arcoblue-6))">对比结果</b>
-        <span class="text-secondary" style="font-size:12px">{{ store.sceneTotal }} 个点位</span>
+        <span class="text-secondary" style="font-size:12px">{{ store.sceneTotal }} 个检查点</span>
         <a-button size="mini" class="sort-btn" :type="store.sceneSort === 'diff' ? 'primary' : 'secondary'"
           @click="store.toggleSceneSort()">
           <template #icon>
@@ -65,11 +65,11 @@ function onSearch(val) {
           {{ store.sceneSort === 'diff' ? '按差异率' : '按名称' }}
         </a-button>
       </div>
-      <a-input size="small" placeholder="搜索点位名称" allow-clear
+      <a-input size="small" placeholder="搜索检查点名称" allow-clear
         :model-value="store.sceneSearch" @input="onSearch" @clear="onSearch('')" />
     </div>
 
-    <div class="cols text-secondary"><span style="flex:1">点位名称</span><span style="width:56px; text-align:right">差异率</span></div>
+    <div class="cols text-secondary"><span style="flex:1">检查点名称</span><span style="width:56px; text-align:right">差异率</span></div>
 
     <a-spin :loading="store.loading" class="list-wrap">
       <div class="list" ref="listEl">
@@ -87,7 +87,7 @@ function onSearch(val) {
     </a-spin>
 
     <div class="foot">
-      <Pager unit="点位"
+      <Pager unit="检查点"
         :total="store.sceneTotal" :page-size="store.pageSize" :current="store.page"
         @change="(p) => { store.page = p; store.loadScenes() }" />
     </div>

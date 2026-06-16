@@ -42,7 +42,7 @@ function drawHist() {
   const maxVal = Math.max(...chans.flatMap(c => m.hist_current[c]), 1)
 
   for (const c of chans) {
-    // 当前版本:填充
+    // 对比版本:填充
     const bins = m.hist_current[c]
     ctx.fillStyle = fills[c]
     ctx.beginPath()
@@ -101,7 +101,7 @@ onMounted(drawHist)
             <a-option>RGB</a-option><a-option>R</a-option><a-option>G</a-option><a-option>B</a-option>
           </a-select>
           <canvas ref="histCanvas" width="190" height="120" class="hist"></canvas>
-          <div class="text-secondary" style="font-size: 11px">实线填充 = 当前版本,虚线 = 基线</div>
+          <div class="text-secondary" style="font-size: 11px">实线填充 = 对比版本,虚线 = 基线</div>
         </a-collapse-item>
       </a-collapse>
     </template>

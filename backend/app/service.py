@@ -1,7 +1,9 @@
 """对比服务:批次 × 基线,按场景名配对逐对跑 diff。"""
 from __future__ import annotations
 
-from sqlalchemy import select
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .compare import compare_images
@@ -19,14 +21,15 @@ def classify(diff_pct: float, fail_threshold: float, warn_threshold: float) -> s
 
 
 def run_comparison(
-    db: Session, batch: Batch, ref_batch: Batch,
+    db: Session, comparison: Comparison, batch: Batch, ref_batch: Batch,
     baseline: Baseline | None = None, settings: dict | None = None,
+    on_progress=None,
 ) -> Comparison:
-    """配对两个批次的截图并逐场景对比。
+    """把对比结果填进已存在的 comparison 行(force 重算时复用同一行/同一 id)。
 
     - 两边都有 -> 跑 diff,按阈值判 pass/warn/fail
-    - 仅当前批次有 -> added(新增场景,待人工确认)
-    - 仅参照批次有 -> missing(场景缺失,视为失败级问题)
+    - 仅当前批次有 -> added(新增检查点,待人工确认)
+    - 仅参照批次有 -> missing(检查点缺失,视为失败级问题)
     """
     cfg = settings or DEFAULT_SETTINGS
     current_shots = {
@@ -38,40 +41,58 @@ def run_comparison(
         for s in db.scalars(select(Screenshot).where(Screenshot.batch_id == ref_batch.id))
     }
 
-    comparison = Comparison(
-        batch_id=batch.id,
-        ref_batch_id=ref_batch.id,
-        baseline_id=baseline.id if baseline else None,
-    )
-    db.add(comparison)
-    db.flush()  # 取 comparison.id,热力图按它归档
+    # 复用同一行:刷新基线关联并清掉旧明细(重算时 comparison.id 保持不变)
+    comparison.baseline_id = baseline.id if baseline else None
+    db.execute(delete(ComparisonItem).where(ComparisonItem.comparison_id == comparison.id))
+    db.flush()
 
     heat_dir = IMAGES_DIR / "heatmaps" / str(comparison.id)
     heat_dir.mkdir(parents=True, exist_ok=True)
 
+    names = sorted(set(current_shots) | set(baseline_shots))
+    paired = [n for n in names if n in current_shots and n in baseline_shots]
+
+    # 两边都有的检查点:并行跑像素对比(compare_images 纯计算 + 写热力图文件,不碰 DB)
+    def _compare(name: str):
+        cur, base = current_shots[name], baseline_shots[name]
+        return name, compare_images(
+            str(IMAGES_DIR / cur.path),
+            str(IMAGES_DIR / base.path),
+            str(IMAGES_DIR / f"heatmaps/{comparison.id}/{name}.png"),
+            pixel_threshold=int(cfg["pixel_diff_threshold"]),
+            heatmap_blur=cfg["heatmap_blur"],
+            heatmap_sensitivity=cfg["heatmap_sensitivity"],
+        )
+
+    metrics_by_name: dict = {}
+    total = len(paired)
+    if on_progress:
+        on_progress(0, total)
+    if paired:
+        done = 0
+        with ThreadPoolExecutor(max_workers=min(8, total)) as ex:
+            for fut in as_completed(ex.submit(_compare, n) for n in paired):
+                name, metrics = fut.result()
+                metrics_by_name[name] = metrics
+                done += 1
+                if on_progress:
+                    on_progress(done, total)
+
     diffs: list[float] = []
     has_fail = has_warn = False
 
-    for name in sorted(set(current_shots) | set(baseline_shots)):
+    for name in names:
         cur, base = current_shots.get(name), baseline_shots.get(name)
 
         if cur and base:
-            heatmap_path = f"heatmaps/{comparison.id}/{name}.png"
-            metrics = compare_images(
-                str(IMAGES_DIR / cur.path),
-                str(IMAGES_DIR / base.path),
-                str(IMAGES_DIR / heatmap_path),
-                pixel_threshold=int(cfg["pixel_diff_threshold"]),
-                heatmap_blur=cfg["heatmap_blur"],
-                heatmap_sensitivity=cfg["heatmap_sensitivity"],
-            )
+            metrics = metrics_by_name[name]
             status = classify(metrics["diff_pct"], cfg["fail_threshold"], cfg["warn_threshold"])
             diffs.append(metrics["diff_pct"])
             item = ComparisonItem(
                 comparison_id=comparison.id, scene_name=name,
                 current_shot_id=cur.id, baseline_shot_id=base.id,
                 status=status, diff_pct=metrics["diff_pct"],
-                metrics=metrics, heatmap_path=heatmap_path,
+                metrics=metrics, heatmap_path=f"heatmaps/{comparison.id}/{name}.png",
             )
         elif cur:
             status = "added"
