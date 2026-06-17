@@ -1,9 +1,13 @@
+import os
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+DATA_DIR = Path(
+    os.environ.get("PIXELCOMP_DATA_DIR")
+    or (Path(__file__).resolve().parent.parent / "data")
+)
 IMAGES_DIR = DATA_DIR / "images"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
