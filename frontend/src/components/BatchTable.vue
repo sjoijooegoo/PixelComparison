@@ -3,8 +3,17 @@ import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore } from '../store'
 import Pager from './Pager.vue'
+import BatchPreview from './BatchPreview.vue'
 
 const store = useStore()
+
+// 批次图片预览弹窗
+const previewVisible = ref(false)
+const previewBatch = ref(null)
+function openPreview(record) {
+  previewBatch.value = record
+  previewVisible.value = true
+}
 
 const page = ref(1)
 const pageSize = ref(8)   // 按表格区可用高度动态覆盖
@@ -44,7 +53,7 @@ const columns = [
   { title: '平台', dataIndex: 'platform', slotName: 'platform' },
   { title: '检查点数', dataIndex: 'scene_count' },
   { title: '创建时间', dataIndex: 'created_at', sortable: { sortDirections: ['ascend', 'descend'] } },
-  { title: '操作', slotName: 'ops', width: 200, align: 'center' },
+  { title: '操作', slotName: 'ops', width: 270, align: 'center' },
 ]
 
 const PLATFORM_COLOR = { Windows: 'arcoblue', iOS: 'gray', Android: 'green' }
@@ -140,6 +149,7 @@ function exportCsv() {
           <a-tag :color="platformColor(record.platform)" size="small">{{ record.platform }}</a-tag>
         </template>
         <template #ops="{ record }">
+          <a-button size="mini" type="text" @click="openPreview(record)">预览</a-button>
           <a-button size="mini" :type="roleOf(record) === 'baseline' ? 'primary' : 'text'"
             :style="roleOf(record) === 'baseline'
               ? { background: 'rgb(var(--batch-base))', borderColor: 'rgb(var(--batch-base))', color: '#fff' }
@@ -159,6 +169,8 @@ function exportCsv() {
         :total="store.batchTotal" :page-size="pageSize" :current="page"
         @change="(p) => page = p" />
     </div>
+
+    <BatchPreview v-model:visible="previewVisible" :batch="previewBatch" />
   </section>
 </template>
 

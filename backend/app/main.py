@@ -248,6 +248,25 @@ def upload_screenshot(
     return {"id": shot.id, "scene_name": scene_name, "url": shot.url}
 
 
+@app.get("/api/batches/{batch_id}/screenshots")
+def list_screenshots(batch_id: str, db: Session = Depends(get_db)):
+    """列出某批次的全部截图(用于批次预览画廊),按帧序/名称排序。"""
+    if not db.get(Batch, batch_id):
+        raise HTTPException(404, "batch not found")
+    shots = db.scalars(
+        select(Screenshot)
+        .where(Screenshot.batch_id == batch_id)
+        .order_by(Screenshot.frame_index, Screenshot.scene_name)
+    ).all()
+    return {
+        "total": len(shots),
+        "items": [
+            {"scene_name": s.scene_name, "url": s.url, "frame_index": s.frame_index}
+            for s in shots
+        ],
+    }
+
+
 # ---------------------------------------------------------------- 对比
 
 class ComparisonIn(BaseModel):
@@ -511,3 +530,14 @@ def get_meta(db: Session = Depends(get_db)):
         "platforms": db.scalars(select(Batch.platform).distinct()).all(),
         "baselines": db.scalars(select(Baseline.version).distinct()).all(),
     }
+
+
+# ---------------------------------------------------------------- 生产:托管前端构建产物
+# 单端口同源部署:FastAPI 直接伺服 vite build 出的静态页面(/),
+# /api、/images 在上面已注册,优先匹配;此挂载放最后兜底其余路径。
+# 仅当存在 frontend/dist 时挂载;开发模式(vite dev)下不存在,跳过即可。
+from pathlib import Path  # noqa: E402
+
+_FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")

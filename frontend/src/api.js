@@ -26,6 +26,7 @@ const put = (url, body) => send('PUT', url, body)
 export const api = {
   meta: () => get('/api/meta'),
   batches: (params) => get('/api/batches', params),
+  batchScreenshots: (id) => get(`/api/batches/${id}/screenshots`),
   comparisons: (filters) => get('/api/comparisons', filters),
   createComparison: (body) => post('/api/comparisons', body),
   comparisonTask: (taskId) => get(`/api/comparisons/tasks/${taskId}`),
