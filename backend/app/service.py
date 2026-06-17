@@ -1,6 +1,7 @@
 """对比服务:批次 × 基线,按场景名配对逐对跑 diff。"""
 from __future__ import annotations
 
+import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy import delete, select
@@ -47,6 +48,8 @@ def run_comparison(
     db.flush()
 
     heat_dir = IMAGES_DIR / "heatmaps" / str(comparison.id)
+    if heat_dir.exists():
+        shutil.rmtree(heat_dir)
     heat_dir.mkdir(parents=True, exist_ok=True)
 
     names = sorted(set(current_shots) | set(baseline_shots))
