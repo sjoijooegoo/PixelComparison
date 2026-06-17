@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -281,6 +282,24 @@ _TASKS: dict = {}
 _COMPARE_LOCK = threading.Lock()
 _RUNNING: dict[int, str] = {}   # comparison_id -> 正在计算它的 task_id
 
+# 完成/失败的任务保留时长;超时后清理,避免 _TASKS 无限增长。
+_TASK_TTL_SECONDS = 3600
+
+
+def _prune_tasks(now: float | None = None) -> None:
+    """删除已结束(done/error)且超过 TTL 的任务条目;running 的一律保留。
+
+    调用方应已持有 _COMPARE_LOCK(在临界区内调用)。
+    """
+    now = now if now is not None else time.monotonic()
+    stale = [
+        tid for tid, t in _TASKS.items()
+        if t["status"] in ("done", "error")
+        and now - t.get("finished_at", now) > _TASK_TTL_SECONDS
+    ]
+    for tid in stale:
+        _TASKS.pop(tid, None)
+
 
 def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, settings):
     """后台线程:用独立 session 把结果填进已存在的 comparison 行,过程中更新进度。"""
@@ -297,10 +316,10 @@ def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, set
 
         run_comparison(db, comparison, batch, ref, baseline, settings, on_progress=on_progress)
         db.commit()
-        _TASKS[task_id].update(status="done", comparison_id=comparison_id)
+        _TASKS[task_id].update(status="done", comparison_id=comparison_id, finished_at=time.monotonic())
     except Exception as e:  # noqa: BLE001
         db.rollback()
-        _TASKS[task_id].update(status="error", error=str(e))
+        _TASKS[task_id].update(status="error", error=str(e), finished_at=time.monotonic())
     finally:
         with _COMPARE_LOCK:
             _RUNNING.pop(comparison_id, None)
@@ -354,6 +373,7 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             return {"task_id": _RUNNING[cid], "status": t.get("status", "running"),
                     "done": t.get("done", 0), "total": t.get("total", 0)}
 
+        _prune_tasks()
         task_id = uuid.uuid4().hex
         _TASKS[task_id] = {"status": "running", "done": 0, "total": 0, "comparison_id": cid, "error": None}
         _RUNNING[cid] = task_id
