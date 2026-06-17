@@ -161,6 +161,8 @@ def list_batches(
     created_from: str | None = None,
     created_to: str | None = None,
     q: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int | None = Query(None, ge=1, le=200),
 ):
     stmt = select(Batch).order_by(Batch.created_at.desc())
     if scene_id:
@@ -183,8 +185,16 @@ def list_batches(
             pass
     if q:
         stmt = stmt.where(Batch.id.contains(q))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    if page_size is not None:
+        stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     batches = db.scalars(stmt).all()
-    return {"total": len(batches), "items": [batch_dto(b, db) for b in batches]}
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [batch_dto(b, db) for b in batches],
+    }
 
 
 @app.post("/api/batches", status_code=201)

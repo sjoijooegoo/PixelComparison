@@ -1,7 +1,8 @@
 <script setup>
-import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore } from '../store'
+import { api } from '../api'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
 
@@ -15,13 +16,6 @@ function openPreview(record) {
   previewVisible.value = true
 }
 
-const page = ref(1)
-const pageSize = ref(8)   // 按表格区可用高度动态覆盖
-const pagedBatches = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return store.batches.slice(start, start + pageSize.value)
-})
-
 // 按表格区可用高度动态计算每页行数,填满整列
 const tableWrap = ref(null)
 let ro
@@ -31,9 +25,10 @@ function recalc() {
   const thH = wrap.querySelector('.arco-table-th')?.getBoundingClientRect().height || 36
   const rowH = wrap.querySelector('tbody .arco-table-tr')?.getBoundingClientRect().height || 40
   const fit = Math.max(3, Math.floor((wrap.clientHeight - thH) / rowH))
-  if (fit !== pageSize.value) {
-    pageSize.value = fit
-    if (page.value > Math.ceil(store.batches.length / fit)) page.value = 1
+  if (fit !== store.batchPageSize) {
+    store.batchPageSize = fit
+    store.batchPage = 1
+    store.loadBatches()
   }
 }
 onMounted(() => {
@@ -42,9 +37,6 @@ onMounted(() => {
   recalc()
 })
 onUnmounted(() => ro?.disconnect())
-
-// 列表刷新/筛选后回到第一页并重算
-watch(() => store.batches, () => { page.value = 1; nextTick(recalc) })
 
 const columns = [
   { title: '批次ID', dataIndex: 'id', slotName: 'id' },
@@ -88,9 +80,10 @@ function roleOf(record) {
   return null
 }
 
-function exportCsv() {
+async function exportCsv() {
   const head = '批次ID,场景ID,P4版本,平台,检查点数,创建时间'
-  const rows = store.batches.map(b =>
+  const { items } = await api.batches(store.filters)  // 不带分页 -> 全量
+  const rows = items.map(b =>
     [b.id, b.scene_id, b.p4_version, b.platform, b.scene_count, b.created_at].join(','))
   const blob = new Blob(['﻿' + head + '\n' + rows.join('\n')], { type: 'text/csv' })
   const a = document.createElement('a')
@@ -137,7 +130,7 @@ function exportCsv() {
 
     <div class="table-wrap" ref="tableWrap">
       <a-table
-        :columns="columns" :data="pagedBatches"
+        :columns="columns" :data="store.batches"
         :pagination="false"
         size="medium" row-key="id">
         <template #id="{ record }">
@@ -166,8 +159,8 @@ function exportCsv() {
 
     <div class="foot">
       <Pager
-        :total="store.batchTotal" :page-size="pageSize" :current="page"
-        @change="(p) => page = p" />
+        :total="store.batchTotal" :page-size="store.batchPageSize" :current="store.batchPage"
+        @change="(p) => { store.batchPage = p; store.loadBatches() }" />
     </div>
 
     <BatchPreview v-model:visible="previewVisible" :batch="previewBatch" />

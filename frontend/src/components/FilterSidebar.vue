@@ -16,6 +16,7 @@ function onDateChange(v) {
 }
 
 async function apply() {
+  store.batchPage = 1
   await store.loadBatches()
   Message.success('筛选已应用')
 }

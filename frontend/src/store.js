@@ -22,6 +22,8 @@ export const useStore = defineStore('shotdiff', {
     // 顶部:原始批次列表
     batches: [],
     batchTotal: 0,
+    batchPage: 1,
+    batchPageSize: PAGE_SIZE,
     // 对比的两侧选择(角色)
     currentBatch: null,   // 对比批次(待检查)
     baselineBatch: null,  // 基线批次(参照)
@@ -81,7 +83,11 @@ export const useStore = defineStore('shotdiff', {
     },
 
     async loadBatches() {
-      const { items, total } = await api.batches(this.filters)
+      const { items, total } = await api.batches({
+        ...this.filters,
+        page: this.batchPage,
+        page_size: this.batchPageSize,
+      })
       this.batches = items
       this.batchTotal = total
     },
