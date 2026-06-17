@@ -16,11 +16,11 @@ honor its STOP conditions, and update your row when done.
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| 001 | Establish a backend test baseline (pytest + TestClient) | P1 | M | — | TODO |
-| 002 | Stop `_TASKS` from growing unbounded (prune finished tasks) | P1 | S | 001 | TODO |
+| 001 | Establish a backend test baseline (pytest + TestClient) | P1 | M | — | DONE (branch advisor/001-backend-test-baseline) |
+| 002 | Stop `_TASKS` from growing unbounded (prune finished tasks) | P1 | S | 001 | DONE (branch advisor/002-prune-task-registry, stacked on 001) |
 | 003 | Validate uploads (size cap + PNG signature) | P2 | S-M | 001 | TODO |
-| 004 | Clean up orphaned image/heatmap files | P2 | M | 001 | TODO |
-| 005 | Server-side pagination for `/api/batches` | P2 | M | 001 | TODO |
+| 004 | Clean up orphaned image/heatmap files | P2 | M | 001 | DONE (branch advisor/004-cleanup-orphan-files, stacked on 002) |
+| 005 | Server-side pagination for `/api/batches` | P2 | M | 001 | DONE (branch advisor/005-paginate-batches-endpoint, based on main) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 

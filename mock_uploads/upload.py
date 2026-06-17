@@ -95,6 +95,7 @@ def build_batch_body(manifest: dict) -> dict:
         "capture_type": manifest.get("capture_type"),
         "levelsequence_name": ue.get("levelsequence_name"),
         "levelsequence_path": ue.get("levelsequence_path"),
+        "shading_quality": ue.get("shading_quality"),
         "captured_at": pipeline.get("captured_at"),  # 新版可能不带,缺省用入库时间
     }
 

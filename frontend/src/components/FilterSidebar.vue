@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useStore } from '../store'
+import { useStore, SHADING_QUALITY_OPTIONS } from '../store'
 
 const store = useStore()
 
@@ -22,7 +22,7 @@ async function apply() {
 }
 
 async function reset() {
-  store.filters = { scene_id: '', platform: '', p4_min: null, p4_max: null, created_from: '', created_to: '', status: '' }
+  store.filters = { scene_id: '', platform: '', shading_quality: null, p4_min: null, p4_max: null, created_from: '', created_to: '', status: '' }
   await apply()
 }
 </script>
@@ -42,12 +42,6 @@ async function reset() {
         </a-select>
       </div>
       <div class="group">
-        <div class="label">平台</div>
-        <a-select v-model="store.filters.platform" placeholder="全部平台" allow-clear size="small">
-          <a-option v-for="p in store.meta.platforms" :key="p" :value="p">{{ p }}</a-option>
-        </a-select>
-      </div>
-      <div class="group">
         <div class="label">P4 版本范围</div>
         <div class="p4-range">
           <a-input-number v-model="store.filters.p4_min" placeholder="最小" size="small"
@@ -56,6 +50,18 @@ async function reset() {
           <a-input-number v-model="store.filters.p4_max" placeholder="最大" size="small"
             :min="0" hide-button />
         </div>
+      </div>
+      <div class="group">
+        <div class="label">平台</div>
+        <a-select v-model="store.filters.platform" placeholder="全部平台" allow-clear size="small">
+          <a-option v-for="p in store.meta.platforms" :key="p" :value="p">{{ p }}</a-option>
+        </a-select>
+      </div>
+      <div class="group">
+        <div class="label">画质</div>
+        <a-select v-model="store.filters.shading_quality" placeholder="全部画质" allow-clear size="small">
+          <a-option v-for="q in SHADING_QUALITY_OPTIONS" :key="q.value" :value="q.value">{{ q.label }}</a-option>
+        </a-select>
       </div>
       <div class="group">
         <div class="label">创建时间</div>
@@ -72,7 +78,7 @@ async function reset() {
 </template>
 
 <style scoped>
-.sidebar { width: 244px; flex: 0 0 244px; display: flex; flex-direction: column; min-height: 0; }
+.sidebar { width: 280px; flex: 0 0 280px; display: flex; flex-direction: column; min-height: 0; }
 .scroll { flex: 1; overflow-y: auto; padding: 14px; }
 .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .group { margin-bottom: 14px; }

@@ -13,6 +13,8 @@
 流程:
     1) POST /api/batches                    用 pipeline_data + ue_data 建批次
     2) POST /api/batches/{id}/screenshots   逐张上传 screenshots(带相机位姿/帧序)
+    3) POST /api/batches/{id}/auto-compare  上传完成后自动与"同场景+同平台+同画质"的
+                                            最新历史批次对比(可用 --no-auto-compare 关闭)
 图片路径相对 manifest.json 所在目录解析。
 """
 from __future__ import annotations
@@ -100,8 +102,14 @@ def build_batch_body(manifest: dict) -> dict:
         "capture_type": manifest.get("capture_type"),
         "levelsequence_name": ue.get("levelsequence_name"),
         "levelsequence_path": ue.get("levelsequence_path"),
+        "shading_quality": ue.get("shading_quality"),
         "captured_at": pipeline.get("captured_at"),
     }
+
+
+def post_auto_compare(base: str, batch_id: str):
+    """触发后端自动对比(同场景+同平台+同画质的最新历史批次)。"""
+    return post_json(base, f"/api/batches/{batch_id}/auto-compare", {})
 
 
 def resolve_manifest(arg: str) -> Path:
@@ -113,7 +121,7 @@ def resolve_manifest(arg: str) -> Path:
     return p
 
 
-def report(manifest_path: Path, base: str) -> int:
+def report(manifest_path: Path, base: str, auto_compare: bool = True) -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     pkg_dir = manifest_path.parent
     body = build_batch_body(manifest)
@@ -155,6 +163,17 @@ def report(manifest_path: Path, base: str) -> int:
             fail += 1
 
     print(f"完成: {ok}/{len(shots)} 张截图" + (f"(失败 {fail})" if fail else ""))
+
+    if auto_compare and fail == 0:
+        code, resp = post_auto_compare(base, batch_id)
+        if code in (200, 201, 202) and isinstance(resp, dict):
+            if resp.get("matched"):
+                print(f"已发起自动对比:参照批次 #{resp.get('ref_batch_id')}")
+            else:
+                print("未找到同场景/平台/画质的历史批次,跳过自动对比")
+        else:
+            print(f"  自动对比触发失败(忽略): HTTP {code} {resp}")
+
     return 0 if fail == 0 else 1
 
 
@@ -163,8 +182,11 @@ def main() -> None:
     ap.add_argument("manifest", help="manifest.json 文件路径,或其所在目录")
     ap.add_argument("--base", default=os.environ.get("BASE", "http://127.0.0.1:8000"),
                     help="后端地址(默认 http://127.0.0.1:8000,或读环境变量 BASE)")
+    ap.add_argument("--no-auto-compare", action="store_true",
+                    help="上传完成后不自动与历史批次对比")
     args = ap.parse_args()
-    sys.exit(report(resolve_manifest(args.manifest), args.base.rstrip("/")))
+    sys.exit(report(resolve_manifest(args.manifest), args.base.rstrip("/"),
+                    auto_compare=not args.no_auto_compare))
 
 
 if __name__ == "__main__":

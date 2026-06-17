@@ -6,9 +6,9 @@
 > update this plan's status row in `plans/README.md`.
 >
 > **Drift check (run first)**:
-> `git diff --stat 7621d9e..HEAD -- backend/app/main.py`
-> Confirm the working tree matches the "Current state" excerpts (there were
-> uncommitted changes at planning time). On a mismatch, STOP.
+> `git diff --stat 5773222..HEAD -- backend/app/main.py`
+> Confirm the working tree matches the "Current state" excerpts. On a
+> mismatch, STOP.
 
 ## Status
 
@@ -17,7 +17,7 @@
 - **Risk**: LOW
 - **Depends on**: 001 (uses its pytest harness for the regression test)
 - **Category**: bug
-- **Planned at**: commit `7621d9e` (+ uncommitted working-tree changes), 2026-06-17
+- **Planned at**: commit `5773222` (execute stacked on plan 001 branch `advisor/001-backend-test-baseline`), 2026-06-17
 
 ## Why this matters
 
@@ -202,9 +202,18 @@ import app.db  # noqa: F401  (ensures app package import path is set up)
 
 def _fresh_main(tmp_path, monkeypatch):
     monkeypatch.setenv("PIXELCOMP_DATA_DIR", str(tmp_path))
+    # Reload the whole app package against the temp data dir. app.models binds
+    # Base from app.db at import, so app.db AND every module that imported Base
+    # must be reloaded before app.main, or create_all sees no tables.
     import app.db
+    import app.models
+    import app.service
+    import app.settings
     import app.main
     importlib.reload(app.db)
+    importlib.reload(app.models)
+    importlib.reload(app.service)
+    importlib.reload(app.settings)
     importlib.reload(app.main)
     return app.main
 

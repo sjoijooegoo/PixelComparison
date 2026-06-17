@@ -3,6 +3,16 @@ import { api } from './api'
 
 export const PAGE_SIZE = 10   // 默认每页条数;实际由场景列表按可用高度动态覆盖
 
+// 画质档位选项(与后端 _SHADING_QUALITY_LABELS 一致),高→低
+export const SHADING_QUALITY_OPTIONS = [
+  { value: 5, label: '电影' },
+  { value: 4, label: '极致' },
+  { value: 3, label: '精美' },
+  { value: 2, label: '均衡' },
+  { value: 1, label: '流畅' },
+  { value: 0, label: '节能' },
+]
+
 export const STATUS_META = {
   fail: { label: '失败', color: 'red' },
   warn: { label: '警告', color: 'orange' },
@@ -14,7 +24,7 @@ export const STATUS_META = {
 export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { scene_ids: [], platforms: [], baselines: [] },
-    filters: { scene_id: '', platform: '', p4_min: null, p4_max: null, created_from: '', created_to: '', status: '' },
+    filters: { scene_id: '', platform: '', shading_quality: null, p4_min: null, p4_max: null, created_from: '', created_to: '', status: '' },
 
     // 顶部 tab:batch(批次管理) | 对比结果 | 基线管理 | 项目设置
     activeTab: 'batch',

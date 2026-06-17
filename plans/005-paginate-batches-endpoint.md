@@ -6,7 +6,7 @@
 > `plans/README.md`.
 >
 > **Drift check (run first)**:
-> `git diff --stat 7621d9e..HEAD -- backend/app/main.py frontend/src/store.js frontend/src/api.js frontend/src/components/BatchTable.vue frontend/src/components/FilterSidebar.vue`
+> `git diff --stat fc36009..HEAD -- backend/app/main.py frontend/src/store.js frontend/src/api.js frontend/src/components/BatchTable.vue frontend/src/components/FilterSidebar.vue`
 > Confirm the working tree matches the "Current state" excerpts. On a mismatch,
 > STOP.
 
@@ -17,7 +17,7 @@
 - **Risk**: MED (changes an API response shape + frontend)
 - **Depends on**: 001 (uses its pytest harness)
 - **Category**: perf
-- **Planned at**: commit `7621d9e` (+ uncommitted working-tree changes), 2026-06-17
+- **Planned at**: commit `fc36009` (execute based on `main`, which already contains plans 001/002/004), 2026-06-17
 
 ## Why this matters
 

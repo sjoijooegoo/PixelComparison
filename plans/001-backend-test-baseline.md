@@ -7,10 +7,9 @@
 > in `plans/README.md`.
 >
 > **Drift check (run first)**:
-> `git diff --stat 7621d9e..HEAD -- backend/app/db.py backend/app/main.py`
-> Also confirm the working tree matches the "Current state" excerpts below
-> (there were uncommitted changes at planning time). On a mismatch, treat it as
-> a STOP condition.
+> `git diff --stat 5773222..HEAD -- backend/app/db.py backend/app/main.py`
+> Also confirm the working tree matches the "Current state" excerpts below.
+> On a mismatch, treat it as a STOP condition.
 
 ## Status
 
@@ -19,7 +18,7 @@
 - **Risk**: LOW
 - **Depends on**: none
 - **Category**: tests
-- **Planned at**: commit `7621d9e` (+ uncommitted working-tree changes), 2026-06-17
+- **Planned at**: commit `5773222`, 2026-06-17
 
 ## Why this matters
 

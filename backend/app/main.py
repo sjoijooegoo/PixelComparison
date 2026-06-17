@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .db import IMAGES_DIR, Base, SessionLocal, engine, get_db, migrate_columns
@@ -44,6 +44,16 @@ _PLATFORM_ALIASES = {
 }
 
 
+# 画质档位(UE shading_quality)→ 展示名;历史数据无此字段时按「极致」展示。
+_SHADING_QUALITY_LABELS = {5: "电影", 4: "极致", 3: "精美", 2: "均衡", 1: "流畅", 0: "节能"}
+_DEFAULT_SHADING_QUALITY = 4
+
+
+def shading_quality_label(value: int | None) -> str:
+    v = value if value is not None else _DEFAULT_SHADING_QUALITY
+    return _SHADING_QUALITY_LABELS.get(v, str(v))
+
+
 def normalize_platform(raw: str) -> str:
     """WindowsEditor→Windows 等;未知值去掉 Editor 后缀,否则原样返回。"""
     if not raw:
@@ -75,6 +85,8 @@ def batch_dto(b: Batch, db: Session) -> dict:
         "creator": b.creator,
         "batch_url": b.batch_url,
         "resolution": b.resolution,
+        "shading_quality": b.shading_quality if b.shading_quality is not None else _DEFAULT_SHADING_QUALITY,
+        "shading_quality_label": shading_quality_label(b.shading_quality),
         "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
         "scene_count": db.scalar(
             select(func.count(Screenshot.id)).where(Screenshot.batch_id == b.id)
@@ -102,11 +114,14 @@ def comparison_dto(c: Comparison, db: Session) -> dict:
         "platform": c.batch.platform,
         "creator": c.batch.creator,
         "resolution": c.batch.resolution,
+        "shading_quality": c.batch.shading_quality if c.batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY,
+        "shading_quality_label": shading_quality_label(c.batch.shading_quality),
         "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
         # 参照批次:有基线版本则显示版本号,否则显示批次号
         "ref_batch_id": c.ref_batch_id,
         "ref_label": c.baseline.version if c.baseline else f"#{c.ref_batch_id}",
         "ref_p4_version": c.ref_batch.p4_version,
+        "ref_shading_quality_label": shading_quality_label(c.ref_batch.shading_quality),
         "status": c.status,
         "diff_avg": round(c.diff_avg, 2),
         "scene_count": scene_count,
@@ -148,6 +163,7 @@ class BatchIn(BaseModel):
     capture_type: str | None = None
     levelsequence_name: str | None = None
     levelsequence_path: str | None = None
+    shading_quality: int | None = None
     captured_at: str | None = None
 
 
@@ -156,6 +172,7 @@ def list_batches(
     db: Session = Depends(get_db),
     scene_id: str | None = None,
     platform: str | None = None,
+    shading_quality: int | None = None,
     p4_min: int | None = None,
     p4_max: int | None = None,
     created_from: str | None = None,
@@ -169,6 +186,13 @@ def list_batches(
         stmt = stmt.where(Batch.scene_id == scene_id)
     if platform:
         stmt = stmt.where(Batch.platform == platform)
+    if shading_quality is not None:
+        # 旧数据画质为 NULL,展示时按默认「极致」(4);筛选「极致」时一并匹配 NULL
+        if shading_quality == _DEFAULT_SHADING_QUALITY:
+            stmt = stmt.where(or_(Batch.shading_quality == shading_quality,
+                                  Batch.shading_quality.is_(None)))
+        else:
+            stmt = stmt.where(Batch.shading_quality == shading_quality)
     if p4_min is not None:
         stmt = stmt.where(Batch.p4_version >= p4_min)
     if p4_max is not None:
@@ -210,6 +234,7 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db)):
         capture_type=body.capture_type,
         levelsequence_name=body.levelsequence_name,
         levelsequence_path=body.levelsequence_path,
+        shading_quality=body.shading_quality,
     )
     if body.captured_at:
         try:
@@ -393,6 +418,38 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             daemon=True,
         ).start()
     return {"task_id": task_id, "status": "running", "done": 0, "total": 0}
+
+
+@app.post("/api/batches/{batch_id}/auto-compare", status_code=202)
+def auto_compare_batch(batch_id: str, db: Session = Depends(get_db)):
+    """自动对比:挑一个"同场景 + 同平台 + 同画质"、创建时间早于本批次的最新批次作为参照并发起对比。
+
+    供上报脚本在补齐截图后调用。找不到匹配批次时返回 {"matched": false},不报错。
+    (对比本就要求 scene_id 相同,故场景必须一致;画质为空的旧数据按默认「极致」等价匹配。)
+    """
+    batch = db.get(Batch, batch_id)
+    if not batch:
+        raise HTTPException(404, "batch not found")
+    bq = batch.shading_quality if batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY
+    stmt = (
+        select(Batch)
+        .where(
+            Batch.id != batch.id,
+            Batch.scene_id == batch.scene_id,
+            Batch.platform == batch.platform,
+            Batch.created_at < batch.created_at,
+        )
+        .order_by(Batch.created_at.desc())
+    )
+    if bq == _DEFAULT_SHADING_QUALITY:
+        stmt = stmt.where(or_(Batch.shading_quality == bq, Batch.shading_quality.is_(None)))
+    else:
+        stmt = stmt.where(Batch.shading_quality == bq)
+    ref = db.scalars(stmt).first()
+    if ref is None:
+        return {"matched": False}
+    result = create_comparison(ComparisonIn(batch_id=batch.id, ref_batch_id=ref.id), db)
+    return {"matched": True, "ref_batch_id": ref.id, **result}
 
 
 @app.get("/api/comparisons/tasks/{task_id}")

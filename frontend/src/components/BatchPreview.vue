@@ -43,6 +43,7 @@ function close() {
         批次 <span class="mono">#{{ batch.id }}</span>
         <span class="dot">·</span>{{ batch.scene_id }}
         <span class="dot">·</span>{{ batch.platform }}
+        <span class="dot">·</span>{{ batch.shading_quality_label }}
         <span class="dot">·</span>{{ shots.length }} 张
       </span>
     </template>

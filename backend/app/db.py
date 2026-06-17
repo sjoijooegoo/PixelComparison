@@ -51,6 +51,7 @@ _NEW_COLUMNS = {
         "capture_type": "VARCHAR",
         "levelsequence_name": "VARCHAR",
         "levelsequence_path": "VARCHAR",
+        "shading_quality": "INTEGER",
     },
     "screenshots": {
         "frame_index": "INTEGER",

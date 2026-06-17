@@ -39,10 +39,12 @@ async function rerun() {
           <span class="role role-base">基线</span>
           <span class="mono">#{{ c.ref_batch_id }}</span>
           <span class="text-secondary br">P4 {{ c.ref_p4_version }}</span>
+          <span class="text-secondary br">{{ c.ref_shading_quality_label }}</span>
           <span class="vs">VS</span>
           <span class="role role-cur">对比批次</span>
           <span class="mono">#{{ c.batch_id }}</span>
           <span class="text-secondary br">P4 {{ c.p4_version }}</span>
+          <span class="text-secondary br">{{ c.shading_quality_label }}</span>
         </span>
         <svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none"
           stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -67,8 +69,10 @@ async function rerun() {
               </div>
               <div class="row2 text-secondary">
                 <span class="mono">P4 {{ h.ref_p4_version }}</span>
+                <span>{{ h.ref_shading_quality_label }}</span>
                 <span class="arrow">→</span>
                 <span class="mono">P4 {{ h.p4_version }}</span>
+                <span>{{ h.shading_quality_label }}</span>
               </div>
               <div class="row3 text-secondary">
                 <span>{{ h.scene_id }}</span>

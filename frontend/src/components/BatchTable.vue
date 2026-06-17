@@ -39,17 +39,22 @@ onMounted(() => {
 onUnmounted(() => ro?.disconnect())
 
 const columns = [
-  { title: '批次ID', dataIndex: 'id', slotName: 'id' },
-  { title: '场景ID', dataIndex: 'scene_id', slotName: 'scene' },
-  { title: 'P4版本', dataIndex: 'p4_version', slotName: 'p4', sortable: { sortDirections: ['ascend', 'descend'] } },
-  { title: '平台', dataIndex: 'platform', slotName: 'platform' },
-  { title: '检查点数', dataIndex: 'scene_count' },
-  { title: '创建时间', dataIndex: 'created_at', sortable: { sortDirections: ['ascend', 'descend'] } },
+  { title: '批次ID', dataIndex: 'id', slotName: 'id', width: 120 },
+  { title: '场景ID', dataIndex: 'scene_id', slotName: 'scene', width: 220, ellipsis: true, tooltip: true },
+  { title: 'P4版本', dataIndex: 'p4_version', slotName: 'p4', width: 120, sortable: { sortDirections: ['ascend', 'descend'] } },
+  { title: '平台', dataIndex: 'platform', slotName: 'platform', width: 100 },
+  { title: '画质', dataIndex: 'shading_quality_label', slotName: 'quality', width: 90 },
+  { title: '检查点数', dataIndex: 'scene_count', width: 100 },
+  { title: '创建时间', dataIndex: 'created_at', width: 160, sortable: { sortDirections: ['ascend', 'descend'] } },
   { title: '操作', slotName: 'ops', width: 270, align: 'center' },
 ]
 
 const PLATFORM_COLOR = { Windows: 'arcoblue', iOS: 'gray', Android: 'green' }
 const platformColor = (p) => PLATFORM_COLOR[p] || 'gray'
+
+// 画质档位:高→低对应一条由暖到冷的色带
+const QUALITY_COLOR = { 电影: 'purple', 极致: 'magenta', 精美: 'arcoblue', 均衡: 'cyan', 流畅: 'green', 节能: 'gray' }
+const qualityColor = (q) => QUALITY_COLOR[q] || 'gray'
 
 // 批次详情外链:优先用上报带来的真实流水线链接,旧数据回退到占位地址
 const batchLink = (record) => record.batch_url || `https://p4web.example.com/batch/${record.id}`
@@ -81,10 +86,10 @@ function roleOf(record) {
 }
 
 async function exportCsv() {
-  const head = '批次ID,场景ID,P4版本,平台,检查点数,创建时间'
+  const head = '批次ID,场景ID,P4版本,平台,画质,检查点数,创建时间'
   const { items } = await api.batches(store.filters)  // 不带分页 -> 全量
   const rows = items.map(b =>
-    [b.id, b.scene_id, b.p4_version, b.platform, b.scene_count, b.created_at].join(','))
+    [b.id, b.scene_id, b.p4_version, b.platform, b.shading_quality_label, b.scene_count, b.created_at].join(','))
   const blob = new Blob(['﻿' + head + '\n' + rows.join('\n')], { type: 'text/csv' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
@@ -140,6 +145,9 @@ async function exportCsv() {
         <template #p4="{ record }"><span class="mono">{{ record.p4_version }}</span></template>
         <template #platform="{ record }">
           <a-tag :color="platformColor(record.platform)" size="small">{{ record.platform }}</a-tag>
+        </template>
+        <template #quality="{ record }">
+          <a-tag :color="qualityColor(record.shading_quality_label)" size="small">{{ record.shading_quality_label }}</a-tag>
         </template>
         <template #ops="{ record }">
           <a-button size="mini" type="text" @click="openPreview(record)">预览</a-button>

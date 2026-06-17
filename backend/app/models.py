@@ -22,6 +22,7 @@ class Batch(Base):
     capture_type: Mapped[str | None] = mapped_column(String, nullable=True)  # 例 levelsequence
     levelsequence_name: Mapped[str | None] = mapped_column(String, nullable=True)
     levelsequence_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    shading_quality: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 画质档位 0-5,旧数据为空
 
     screenshots: Mapped[list["Screenshot"]] = relationship(
         back_populates="batch", cascade="all, delete-orphan"
