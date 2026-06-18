@@ -407,47 +407,71 @@ def scene_grid(
     }
 
 
-@app.delete("/api/batches/{batch_id}")
-def delete_batch(batch_id: str, db: Session = Depends(get_db)):
-    """级联删除批次:连带删除它参与的对比(作为 batch 或 ref)及对比项、由它晋升的基线,
-    以及磁盘上的批次图片目录与相关热力图目录。
+def _cascade_delete_batches(db: Session, batches: list[Batch]) -> int:
+    """级联删除一组批次:连带它们参与的对比(作 batch/ref)及对比项、由其晋升的基线、截图。
 
-    若该批次参与的某个对比正在后台计算中,返回 409,避免删到正在算的对比。
+    返回删除的对比数;调用方随后用 prune_orphans 清磁盘文件。
+    任一受影响对比正在后台计算中则抛 409(整批不删)。
     """
-    batch = db.get(Batch, batch_id)
-    if not batch:
-        raise HTTPException(404, "batch not found")
-
+    bids = [b.id for b in batches]
     comp_ids = list(db.scalars(
         select(Comparison.id).where(
-            or_(Comparison.batch_id == batch_id, Comparison.ref_batch_id == batch_id)
+            or_(Comparison.batch_id.in_(bids), Comparison.ref_batch_id.in_(bids))
         )
     ))
-
     # 临界区:与"建对比/起任务"互斥;正在计算的对比不允许删
     with _COMPARE_LOCK:
         if any(cid in _RUNNING for cid in comp_ids):
             raise HTTPException(409, "批次正在对比计算中,请稍后再删")
-        # 删对比(级联对比项)
-        for cid in comp_ids:
+        for cid in comp_ids:                       # 删对比(级联对比项)
             comp = db.get(Comparison, cid)
             if comp is not None:
                 db.delete(comp)
-        # 删由它晋升的基线
-        db.execute(delete(Baseline).where(Baseline.source_batch_id == batch_id))
-        # 删批次(级联截图)
-        db.delete(batch)
+        if bids:                                   # 删由其晋升的基线
+            db.execute(delete(Baseline).where(Baseline.source_batch_id.in_(bids)))
+        for b in batches:                          # 删批次(级联截图)
+            db.delete(b)
         db.commit()
-        # 清掉这些对比对应的内存任务条目,避免轮询到已删对比
         for tid in [t for t, info in _TASKS.items() if info.get("comparison_id") in comp_ids]:
             _TASKS.pop(tid, None)
+    return len(comp_ids)
 
-    # 文件兜底清理:批次目录 / 已不存在对比的热力图目录(commit 后即成孤儿)
+
+@app.delete("/api/batches/{batch_id}")
+def delete_batch(batch_id: str, db: Session = Depends(get_db)):
+    """级联删除单个批次(对比/对比项/基线/图片);正在计算的对比拦 409。"""
+    batch = db.get(Batch, batch_id)
+    if not batch:
+        raise HTTPException(404, "batch not found")
+    comps = _cascade_delete_batches(db, [batch])
     pruned = prune_orphans(db)
     return {
         "deleted": True,
         "batch_id": batch_id,
-        "comparisons_removed": len(comp_ids),
+        "comparisons_removed": comps,
+        "files_removed": pruned["dirs"] + pruned["files"],
+    }
+
+
+@app.delete("/api/batches")
+def delete_batches_before(created_before: str = Query(...), db: Session = Depends(get_db)):
+    """批量删除创建时间早于 created_before(ISO 日期/时间,如 2024-06-01)的全部批次(级联)。
+
+    删除条件为 created_at < created_before:传 2024-06-01 即删 5-31 及更早,不含当天。
+    谨慎:不可恢复。
+    """
+    try:
+        cutoff = datetime.fromisoformat(created_before)
+    except ValueError:
+        raise HTTPException(400, "created_before 需为 ISO 日期,如 2024-06-01")
+    batches = list(db.scalars(select(Batch).where(Batch.created_at < cutoff)))
+    if not batches:
+        return {"deleted_batches": 0, "comparisons_removed": 0, "files_removed": 0}
+    comps = _cascade_delete_batches(db, batches)
+    pruned = prune_orphans(db)
+    return {
+        "deleted_batches": len(batches),
+        "comparisons_removed": comps,
         "files_removed": pruned["dirs"] + pruned["files"],
     }
 

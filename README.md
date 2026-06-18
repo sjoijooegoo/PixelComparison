@@ -71,6 +71,7 @@ POST   /api/batches                      # 建批次;scene_id/platform 必填,id
 POST   /api/batches/{id}/screenshots     # multipart: scene_name + file(+camera/frame_index)
 GET    /api/batches/{id}/screenshots     # 该批次截图列表(预览/列表图用)
 DELETE /api/batches/{id}                 # 级联删除批次(连带其对比/对比项/基线/图片)
+DELETE /api/batches?created_before=<日期> # 批量删除该日期之前的批次(级联)
 POST   /api/batches/{id}/auto-compare    # 与"同场景+同平台+同画质"的最新历史批次自动对比
 POST   /api/comparisons                  # 发起对比 {batch_id, ref_batch_id, force?}(异步:返回 task_id)
 GET    /api/comparisons/tasks/{task_id}  # 轮询对比进度/结果

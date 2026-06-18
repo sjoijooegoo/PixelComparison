@@ -74,6 +74,26 @@ def test_delete_batch_used_as_ref_removes_comparison(client, png_bytes):
     assert client.get("/api/comparisons").json()["total"] == 0
 
 
+def test_delete_batches_before(client):
+    def mk(bid, captured):
+        assert client.post("/api/batches", json={
+            "id": bid, "scene_id": "S", "p4_version": 1, "platform": "Windows",
+            "captured_at": captured}).status_code == 201
+    mk("oldA", "2024-01-01T10:00:00")
+    mk("oldB", "2024-02-01T10:00:00")
+    mk("newC", "2024-06-01T10:00:00")
+
+    # 删 2024-03-01 之前 -> oldA, oldB
+    r = client.delete("/api/batches", params={"created_before": "2024-03-01"})
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted_batches"] == 2
+    assert [b["id"] for b in client.get("/api/batches").json()["items"]] == ["newC"]
+
+    # 缺参数 -> 422;非法日期 -> 400
+    assert client.delete("/api/batches").status_code == 422
+    assert client.delete("/api/batches", params={"created_before": "nope"}).status_code == 400
+
+
 def test_delete_blocked_when_comparison_running(client, png_bytes, monkeypatch):
     import app.main as m
 
