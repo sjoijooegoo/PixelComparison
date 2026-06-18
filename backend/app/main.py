@@ -800,11 +800,22 @@ def get_meta(db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------- 生产:托管前端构建产物
-# 单端口同源部署:FastAPI 直接伺服 vite build 出的静态页面(/),
-# /api、/images 在上面已注册,优先匹配;此挂载放最后兜底其余路径。
-# 仅当存在 frontend/dist 时挂载;开发模式(vite dev)下不存在,跳过即可。
+# 单端口同源部署:FastAPI 直接伺服 vite build 出的静态页面。
+# /api、/images 与 FastAPI 的 /docs、/openapi.json 都在此兜底路由之前注册,优先匹配;
+# 其余路径:命中静态文件则返回,否则回退 index.html(支持前端 history 路由深链)。
+# 仅当存在 frontend/dist 时启用;开发模式(vite dev)下不存在,跳过即可。
 from pathlib import Path  # noqa: E402
+
+from fastapi.responses import FileResponse  # noqa: E402
 
 _FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 if _FRONTEND_DIST.is_dir():
-    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
+    _DIST = _FRONTEND_DIST.resolve()
+
+    @app.get("/{full_path:path}")
+    def spa_fallback(full_path: str):
+        target = (_DIST / full_path).resolve()
+        # 命中真实静态文件才返回(并防目录遍历);否则一律回 index.html
+        if full_path and target.is_file() and _DIST in target.parents:
+            return FileResponse(target)
+        return FileResponse(_DIST / "index.html")

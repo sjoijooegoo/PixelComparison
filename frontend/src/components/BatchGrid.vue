@@ -22,16 +22,26 @@ function toggle(id) { collapsed.has(id) ? collapsed.delete(id) : collapsed.add(i
 //(缩略图用原生 img 渲染,避免上千个重组件;放大体验不变)
 const previewVisible = ref(false)
 const previewList = ref([])
+const previewMeta = ref([])      // 与 previewList 对齐:每张图所属批次信息
 const previewCurrent = ref(0)
 function openPreview(row, colIndex) {
   const list = []
+  const meta = []
   let cur = 0
   row.cells.forEach((url, i) => {
     if (!url) return
     if (i === colIndex) cur = list.length
     list.push(url)
+    const b = cols.value[i]
+    meta.push({
+      scene_name: row.scene_name,
+      created_at: b.created_at,
+      id: b.id,
+      quality: b.shading_quality_label,
+    })
   })
   previewList.value = list
+  previewMeta.value = meta
   previewCurrent.value = cur
   previewVisible.value = true
 }
@@ -101,7 +111,7 @@ const gridStyle = computed(() => ({
 
         <!-- 数据行:首列检查点名 + 各批次缩略图(原生 img,轻量) -->
         <template v-for="r in rows" :key="r.scene_name">
-          <div class="cell rowhead" :title="r.scene_name">{{ r.scene_name }}</div>
+          <div class="cell rowhead" :title="r.scene_name" :style="{ height: imgH + 'px' }">{{ r.scene_name }}</div>
           <div v-for="(url, i) in r.cells" :key="cols[i].id" class="cell imgcell"
             :class="{ collapsed: isCollapsed(cols[i].id) }">
             <template v-if="!isCollapsed(cols[i].id)">
@@ -117,6 +127,15 @@ const gridStyle = computed(() => ({
       <a-image-preview-group :src-list="previewList" v-model:current="previewCurrent"
         v-model:visible="previewVisible" infinite />
     </div>
+
+    <!-- 放大时顶部显示当前图所属批次信息(叠在灯箱之上) -->
+    <teleport to="body">
+      <div v-if="previewVisible && previewMeta[previewCurrent]" class="preview-banner">
+        <span class="pb-date">{{ previewMeta[previewCurrent].created_at }}</span>
+        <span class="pb-dot">·</span>
+        <span class="mono">批次 #{{ previewMeta[previewCurrent].id }}</span>
+      </div>
+    </teleport>
   </div>
 </template>
 
@@ -193,4 +212,16 @@ const gridStyle = computed(() => ({
 .cell.collapsed { padding: 0; overflow: hidden; background: var(--color-fill-2); }
 .thumb { display: block; width: 100%; object-fit: cover; cursor: zoom-in; }
 .missing { display: flex; align-items: center; justify-content: center; color: var(--color-text-4); }
+
+/* 放大灯箱顶部的批次信息条(teleport 到 body,仍受 scoped 作用) */
+.preview-banner {
+  position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+  z-index: 100000; pointer-events: none;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 16px; border-radius: 8px;
+  background: rgba(0, 0, 0, .62); color: #fff; font-size: 13px;
+}
+.preview-banner .pb-scene { font-weight: 600; }
+.preview-banner .pb-date { color: rgb(var(--arcoblue-5)); font-weight: 700; }
+.preview-banner .pb-dot { opacity: .5; }
 </style>

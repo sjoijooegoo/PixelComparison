@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from './api'
+import { router } from './router'
 
 export const PAGE_SIZE = 10   // 默认每页条数;实际由场景列表按可用高度动态覆盖
 
@@ -39,9 +40,6 @@ export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { scene_ids: [], platforms: [], baselines: [] },
     filters: { scene_id: '', shading_quality: null, ...defaultDateRange(), status: '' },
-
-    // 顶部 tab:batch(批次管理) | 对比结果 | 基线管理 | 项目设置
-    activeTab: 'batch',
 
     // 顶部:原始批次列表
     batches: [],
@@ -179,7 +177,7 @@ export const useStore = defineStore('shotdiff', {
         })
         await this.openComparison(dto)
         await this.loadComparisons()   // 刷新历史(可能新增了一条)
-        this.activeTab = '对比结果'    // 发起对比后自动跳到结果页
+        router.push('/comparison')     // 发起对比后自动跳到结果页
         return dto
       } finally {
         this.running = false

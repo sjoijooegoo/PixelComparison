@@ -1,21 +1,28 @@
 <script setup>
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { theme, toggleTheme } from '../theme'
 import { useStore } from '../store'
 
-defineProps({ active: String })
-defineEmits(['update:active'])
-
 const store = useStore()
+const route = useRoute()
+const router = useRouter()
 
 const tabs = [
-  { key: 'batch', label: '批次管理' },
-  { key: '对比结果', label: '对比结果' },
-  { key: '项目设置', label: '项目设置' },
+  { path: '/batches', label: '批次管理' },
+  { path: '/comparison', label: '对比结果' },
+  { path: '/settings', label: '项目设置' },
 ]
 
+// 当前路径(根路径视作批次管理)
+const current = computed(() => (route.path === '/' ? '/batches' : route.path))
+// 前缀匹配:/batches/<场景> 时「批次管理」仍高亮
+const isActive = (path) => current.value === path || current.value.startsWith(path + '/')
+const showBatchActions = computed(() => isActive('/batches') || isActive('/comparison'))
+
 async function refresh() {
-  if (store.activeTab === '对比结果') {
+  if (current.value === '/comparison') {
     await store.loadComparisons()
   } else {
     await store.refreshBatches()
@@ -37,12 +44,12 @@ async function refresh() {
       PixelComparison
     </div>
     <nav class="tabs">
-      <button v-for="t in tabs" :key="t.key" class="tab"
-        :class="{ active: active === t.key }"
-        @click="$emit('update:active', t.key)">{{ t.label }}</button>
+      <button v-for="t in tabs" :key="t.path" class="tab"
+        :class="{ active: isActive(t.path) }"
+        @click="router.push(t.path)">{{ t.label }}</button>
     </nav>
     <div class="actions">
-      <template v-if="active === 'batch' || active === '对比结果'">
+      <template v-if="showBatchActions">
         <a-tooltip content="刷新">
           <button class="icon-btn" @click="refresh">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
