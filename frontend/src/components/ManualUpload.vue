@@ -98,10 +98,12 @@ async function parsePackage(map) {
     const res = ue.resolution || {}
     const resolution = res.width && res.height ? `${res.width}x${res.height}` : null
     const batchId = pipeline.id ?? pipeline.batch_id
+    const p4raw = ue.p4_version
+    const p4 = (p4raw === undefined || p4raw === null || p4raw === '') ? null : parseInt(p4raw, 10)
     parsed.body = {
       id: batchId != null ? String(batchId) : null,
       scene_id: ue.world_name,
-      p4_version: parseInt(ue.p4_version, 10),
+      p4_version: Number.isNaN(p4) ? null : p4,   // 未上报 p4 则留空
       platform: ue.platform,
       creator: manifest.creator || '手动上报',
       batch_url: pipeline.url || pipeline.batch_url || null,
@@ -112,8 +114,8 @@ async function parsePackage(map) {
       shading_quality: ue.shading_quality ?? null,
       captured_at: pipeline.captured_at ?? null,
     }
-    if (!parsed.body.scene_id || Number.isNaN(parsed.body.p4_version) || !parsed.body.platform) {
-      error.value = 'manifest 缺少必要字段(world_name / p4_version / platform)'
+    if (!parsed.body.scene_id || !parsed.body.platform) {
+      error.value = 'manifest 缺少必要字段(world_name / platform)'
       parsed.body = null
       return
     }
@@ -126,11 +128,13 @@ async function parsePackage(map) {
     }
     if (!parsed.shots.length) { error.value = '数据包内没有可上传的截图'; parsed.body = null; return }
 
-    // 检测批次 ID 是否已存在(重复 ID 不会新建批次,只会补传/合并)
-    try {
-      const { items } = await api.batches({ q: parsed.body.id })
-      idExists.value = items.some((b) => String(b.id) === String(parsed.body.id))
-    } catch { idExists.value = false }
+    // 未带批次号 -> 后端上报时自动生成,无需查重;带了才检测是否已存在
+    if (parsed.body.id) {
+      try {
+        const { items } = await api.batches({ q: parsed.body.id })
+        idExists.value = items.some((b) => String(b.id) === String(parsed.body.id))
+      } catch { idExists.value = false }
+    }
 
     stage.value = 'preview'
   } catch (e) {
@@ -158,12 +162,13 @@ async function startUpload() {
   stage.value = 'uploading'
   progress.done = 0
   progress.total = parsed.shots.length
-  const batchId = parsed.body.id
+  let batchId = parsed.body.id
   try {
     try {
-      await api.createBatch(parsed.body)
+      const created = await api.createBatch(parsed.body)
+      batchId = created.id   // 后端可能自动生成批次号,以返回值为准
     } catch (e) {
-      if (e.status !== 409) throw e   // 409=已存在,继续补传
+      if (e.status !== 409) throw e   // 409=已存在(id 已提供),沿用原 id 继续补传
     }
 
     let failed = 0
@@ -223,9 +228,9 @@ async function startUpload() {
     <!-- 预览 -->
     <div v-else-if="stage === 'preview'">
       <a-descriptions :column="2" size="small" bordered :data="[
-        { label: '批次号', value: '#' + parsed.body.id },
+        { label: '批次号', value: parsed.body.id ? ('#' + parsed.body.id) : '上报时自动生成' },
         { label: '场景ID', value: parsed.body.scene_id },
-        { label: 'P4版本', value: parsed.body.p4_version },
+        { label: 'P4版本', value: parsed.body.p4_version ?? '——' },
         { label: '平台', value: parsed.body.platform },
         { label: '画质', value: qualityLabel },
         { label: '分辨率', value: parsed.body.resolution || '—' },

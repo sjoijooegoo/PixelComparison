@@ -12,7 +12,7 @@ class Batch(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)  # 例 20240524_1530
     scene_id: Mapped[str] = mapped_column(String)  # UE Level / 场景标识,同场景才能对比
-    p4_version: Mapped[int] = mapped_column(Integer)  # P4 changelist,越大越新
+    p4_version: Mapped[int | None] = mapped_column(Integer, nullable=True)  # P4 changelist,越大越新;可空(未上报)
     platform: Mapped[str] = mapped_column(String)
     creator: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

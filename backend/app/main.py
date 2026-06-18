@@ -157,7 +157,7 @@ def item_dto(it: ComparisonItem, with_metrics: bool = False) -> dict:
 class BatchIn(BaseModel):
     id: str | None = None
     scene_id: str
-    p4_version: int
+    p4_version: int | None = None
     platform: str
     creator: str = "CI机器人"
     # 新版上报附带(均可选)
@@ -224,29 +224,52 @@ def list_batches(
     }
 
 
+# 自动生成批次号时串行化,避免并发取到同一个序号
+_BATCH_LOCK = threading.Lock()
+
+
+def _next_batch_id(db: Session) -> str:
+    """未指定批次号时:取已有纯数字批次号的最大值 +1(从 1 起),并避开已占用的号。"""
+    mx = 0
+    for i in db.scalars(select(Batch.id)):
+        if i is not None and i.isdigit():
+            mx = max(mx, int(i))
+    nid = mx + 1
+    while db.get(Batch, str(nid)):
+        nid += 1
+    return str(nid)
+
+
 @app.post("/api/batches", status_code=201)
 def create_batch(body: BatchIn, db: Session = Depends(get_db)):
-    """其他模块上报批次:先建批次,再逐张上传截图。"""
-    batch_id = safe_segment(body.id, "batch id") if body.id else datetime.now().strftime("%Y%m%d_%H%M%S")
-    if db.get(Batch, batch_id):
-        raise HTTPException(409, f"batch {batch_id} already exists")
-    batch = Batch(
-        id=batch_id, scene_id=body.scene_id, p4_version=body.p4_version,
-        platform=normalize_platform(body.platform), creator=body.creator,
-        batch_url=body.batch_url, resolution=body.resolution,
-        capture_type=body.capture_type,
-        levelsequence_name=body.levelsequence_name,
-        levelsequence_path=body.levelsequence_path,
-        shading_quality=body.shading_quality,
-    )
-    if body.captured_at:
-        try:
-            batch.created_at = datetime.fromisoformat(body.captured_at)
-        except ValueError:
-            pass  # 解析失败则保留默认 now()
-    db.add(batch)
-    db.commit()
-    return batch_dto(batch, db)
+    """其他模块上报批次:先建批次,再逐张上传截图。
+
+    未指定 id 时按已有数字批次号自增生成(1、2、3…)。
+    """
+    with _BATCH_LOCK:
+        if body.id:
+            batch_id = safe_segment(body.id, "batch id")
+            if db.get(Batch, batch_id):
+                raise HTTPException(409, f"batch {batch_id} already exists")
+        else:
+            batch_id = _next_batch_id(db)
+        batch = Batch(
+            id=batch_id, scene_id=body.scene_id, p4_version=body.p4_version,
+            platform=normalize_platform(body.platform), creator=body.creator,
+            batch_url=body.batch_url, resolution=body.resolution,
+            capture_type=body.capture_type,
+            levelsequence_name=body.levelsequence_name,
+            levelsequence_path=body.levelsequence_path,
+            shading_quality=body.shading_quality,
+        )
+        if body.captured_at:
+            try:
+                batch.created_at = datetime.fromisoformat(body.captured_at)
+            except ValueError:
+                pass  # 解析失败则保留默认 now()
+        db.add(batch)
+        db.commit()
+        return batch_dto(batch, db)
 
 
 @app.post("/api/batches/{batch_id}/screenshots", status_code=201)
@@ -302,6 +325,80 @@ def list_screenshots(batch_id: str, db: Session = Depends(get_db)):
         "items": [
             {"scene_name": s.scene_name, "url": s.url, "frame_index": s.frame_index}
             for s in shots
+        ],
+    }
+
+
+@app.get("/api/scenes/{scene_id}/grid")
+def scene_grid(
+    scene_id: str,
+    platform: str | None = None,
+    shading_quality: int | None = None,
+    p4_min: int | None = None,
+    p4_max: int | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    q: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """批次列表图:同场景所有批次排成矩阵——列=批次(创建时间升序,左早右晚),
+    行=检查点(按 scene_name 对齐、frame_index 排序),cells 与 batches 同序,缺图为 null。
+
+    支持与批次列表一致的筛选(平台/画质/P4范围/创建时间/批次号)。"""
+    bstmt = select(Batch).where(Batch.scene_id == scene_id)
+    if platform:
+        bstmt = bstmt.where(Batch.platform == platform)
+    if shading_quality is not None:
+        if shading_quality == _DEFAULT_SHADING_QUALITY:
+            bstmt = bstmt.where(or_(Batch.shading_quality == shading_quality,
+                                    Batch.shading_quality.is_(None)))
+        else:
+            bstmt = bstmt.where(Batch.shading_quality == shading_quality)
+    if p4_min is not None:
+        bstmt = bstmt.where(Batch.p4_version >= p4_min)
+    if p4_max is not None:
+        bstmt = bstmt.where(Batch.p4_version <= p4_max)
+    if created_from:
+        try:
+            bstmt = bstmt.where(Batch.created_at >= datetime.fromisoformat(created_from))
+        except ValueError:
+            pass
+    if created_to:
+        try:
+            bstmt = bstmt.where(Batch.created_at < datetime.fromisoformat(created_to) + timedelta(days=1))
+        except ValueError:
+            pass
+    if q:
+        bstmt = bstmt.where(Batch.id.contains(q))
+    batches = db.scalars(bstmt.order_by(Batch.created_at.asc())).all()
+    bids = [b.id for b in batches]
+    rowmap: dict = {}
+    if bids:
+        for s in db.scalars(select(Screenshot).where(Screenshot.batch_id.in_(bids))):
+            r = rowmap.setdefault(
+                s.scene_name,
+                {"scene_name": s.scene_name, "frame_index": s.frame_index, "by_batch": {}},
+            )
+            r["by_batch"][s.batch_id] = s.url
+            if s.frame_index is not None and (r["frame_index"] is None or s.frame_index < r["frame_index"]):
+                r["frame_index"] = s.frame_index
+    rows = sorted(
+        rowmap.values(),
+        key=lambda r: (r["frame_index"] is None, r["frame_index"] or 0, r["scene_name"]),
+    )
+    return {
+        "scene_id": scene_id,
+        "batches": [
+            {"id": b.id, "p4_version": b.p4_version,
+             "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
+             "platform": b.platform,
+             "shading_quality_label": shading_quality_label(b.shading_quality)}
+            for b in batches
+        ],
+        "rows": [
+            {"scene_name": r["scene_name"], "frame_index": r["frame_index"],
+             "cells": [r["by_batch"].get(b.id) for b in batches]}
+            for r in rows
         ],
     }
 

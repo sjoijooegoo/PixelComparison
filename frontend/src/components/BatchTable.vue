@@ -5,8 +5,14 @@ import { useStore } from '../store'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
 import ManualUpload from './ManualUpload.vue'
+import BatchGrid from './BatchGrid.vue'
 
 const store = useStore()
+
+// 视图切换:list(列表) / grid(列表图);切到 grid 时按当前场景拉矩阵
+function onViewChange() {
+  if (store.batchView === 'grid') store.loadGrid()
+}
 
 // 批次图片预览弹窗
 const previewVisible = ref(false)
@@ -99,13 +105,17 @@ function roleOf(record) {
   <section class="batch-panel card">
     <div class="head">
       <h3>批次列表 ({{ store.batchTotal }})</h3>
+      <a-radio-group v-model="store.batchView" type="button" size="small" @change="onViewChange">
+        <a-radio value="list">列表</a-radio>
+        <a-radio value="grid">列表图</a-radio>
+      </a-radio-group>
       <div style="flex:1"></div>
-      <a-button size="small" @click="store.loadMeta(); store.loadBatches(); Message.success('已刷新')">刷新</a-button>
+      <a-button size="small" @click="store.loadMeta(); store.loadBatches(); store.batchView === 'grid' && store.loadGrid(); Message.success('已刷新')">刷新</a-button>
       <a-button size="small" type="primary" @click="uploadVisible = true">手动上报</a-button>
     </div>
 
     <!-- 选择条:已选的对比批次 / 基线批次 + 发起对比 -->
-    <div class="select-bar">
+    <div v-if="store.batchView === 'list'" class="select-bar">
       <div class="slot">
         <span class="slot-tag slot-base">基线批次</span>
         <template v-if="store.baselineBatch">
@@ -129,7 +139,7 @@ function roleOf(record) {
       </a-button>
     </div>
 
-    <div class="table-wrap" ref="tableWrap">
+    <div v-if="store.batchView === 'list'" class="table-wrap" ref="tableWrap">
       <a-table
         :columns="columns" :data="store.batches"
         :pagination="false"
@@ -138,7 +148,7 @@ function roleOf(record) {
           <a class="batch-link mono" :href="batchLink(record)" target="_blank" rel="noopener noreferrer">#{{ record.id }}</a>
         </template>
         <template #scene="{ record }">{{ record.scene_id }}</template>
-        <template #p4="{ record }"><span class="mono">{{ record.p4_version }}</span></template>
+        <template #p4="{ record }"><span class="mono">{{ record.p4_version ?? '——' }}</span></template>
         <template #platform="{ record }">
           <a-tag :color="platformColor(record.platform)" size="small">{{ record.platform }}</a-tag>
         </template>
@@ -161,11 +171,14 @@ function roleOf(record) {
       </a-table>
     </div>
 
-    <div class="foot">
+    <div v-if="store.batchView === 'list'" class="foot">
       <Pager
         :total="store.batchTotal" :page-size="store.batchPageSize" :current="store.batchPage"
         @change="(p) => { store.batchPage = p; store.loadBatches() }" />
     </div>
+
+    <!-- 列表图:同场景多批次图片矩阵 -->
+    <BatchGrid v-else />
 
     <BatchPreview v-model:visible="previewVisible" :batch="previewBatch" />
     <ManualUpload v-model:visible="uploadVisible" @done="onUploaded" />

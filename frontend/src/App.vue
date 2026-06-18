@@ -28,8 +28,8 @@ watch(() => store.activeTab, async (tab) => {
   <div class="app-layout">
     <TopBar :active="store.activeTab" @update:active="store.activeTab = $event" />
 
-    <!-- 批次管理:筛选 + 批次列表 -->
-    <div v-if="store.activeTab === 'batch'" class="app-body">
+    <!-- 批次管理:筛选条(上方横排) + 批次列表 -->
+    <div v-if="store.activeTab === 'batch'" class="app-body app-body--col">
       <FilterSidebar />
       <main class="app-main">
         <BatchTable />
@@ -73,6 +73,9 @@ watch(() => store.activeTab, async (tab) => {
 </template>
 
 <style scoped>
+/* 批次页:筛选条在上、列表在下(纵向堆叠) */
+.app-body--col { flex-direction: column; }
+
 .lower-empty {
   flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; color: var(--color-text-3);

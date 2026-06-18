@@ -44,6 +44,7 @@ export const api = {
   uploadScreenshot: (id, formData) => upload(`/api/batches/${id}/screenshots`, formData),
   autoCompare: (id) => post(`/api/batches/${id}/auto-compare`, {}),
   batchScreenshots: (id) => get(`/api/batches/${id}/screenshots`),
+  sceneGrid: (sceneId, params) => get(`/api/scenes/${sceneId}/grid`, params),
   comparisons: (filters) => get('/api/comparisons', filters),
   createComparison: (body) => post('/api/comparisons', body),
   comparisonTask: (taskId) => get(`/api/comparisons/tasks/${taskId}`),

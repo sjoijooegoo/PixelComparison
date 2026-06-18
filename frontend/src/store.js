@@ -34,6 +34,8 @@ export const useStore = defineStore('shotdiff', {
     batchTotal: 0,
     batchPage: 1,
     batchPageSize: PAGE_SIZE,
+    batchView: 'list',                 // list(列表) | grid(列表图:同场景多批次图片矩阵)
+    grid: { batches: [], rows: [] },   // 批次列表图数据
     // 对比的两侧选择(角色)
     currentBatch: null,   // 对比批次(待检查)
     baselineBatch: null,  // 基线批次(参照)
@@ -100,6 +102,13 @@ export const useStore = defineStore('shotdiff', {
       })
       this.batches = items
       this.batchTotal = total
+    },
+
+    // 批次列表图:同场景多批次的图片矩阵(需先选场景)
+    async loadGrid() {
+      if (!this.filters.scene_id) { this.grid = { batches: [], rows: [] }; return }
+      // 传全部筛选(scene_id 在路径里,多余的 status 等会被后端忽略)
+      this.grid = await api.sceneGrid(this.filters.scene_id, this.filters)
     },
 
     // role: 'current'(对比) | 'baseline'(基线)

@@ -93,10 +93,11 @@ def build_batch_body(manifest: dict) -> dict:
     # 兼容字段命名:新版 id/url,旧版 batch_id/batch_url
     batch_id = pipeline.get("id") or pipeline.get("batch_id")
     batch_url = pipeline.get("url") or pipeline.get("batch_url")
+    p4_raw = ue.get("p4_version")
     return {
         "id": str(batch_id) if batch_id is not None else None,
         "scene_id": ue["world_name"],
-        "p4_version": int(ue["p4_version"]),
+        "p4_version": int(p4_raw) if p4_raw not in (None, "") else None,  # 未上报则留空
         "platform": ue["platform"],            # 后端归一化(WindowsEditor→Windows)
         "creator": manifest.get("creator", "render-farm-ci"),
         "batch_url": batch_url,
@@ -130,7 +131,8 @@ def report(manifest_path: Path, base: str, auto_compare: bool = True) -> int:
     shots = manifest.get("screenshots", [])
 
     print(f"后端: {base}")
-    print(f"批次: {body['id']}  场景: {body['scene_id']}  P4: {body['p4_version']}  "
+    print(f"批次: {body['id']}  场景: {body['scene_id']}  "
+          f"P4: {body['p4_version'] if body['p4_version'] is not None else '-'}  "
           f"平台: {body['platform']}  截图: {len(shots)}")
 
     status, resp = post_json(base, "/api/batches", body)

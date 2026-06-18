@@ -51,6 +51,29 @@ def test_platform_normalized(client):
     assert body["platform"] == "Windows"
 
 
+def test_auto_batch_id_sequential(client):
+    # 不带 id -> 空库时自动号为 "1"
+    r = client.post("/api/batches", json={"scene_id": "S", "platform": "Windows"})
+    assert r.status_code == 201, r.text
+    assert r.json()["id"] == "1"
+    # 显式插入 "5"
+    assert client.post("/api/batches", json={
+        "id": "5", "scene_id": "S", "platform": "Windows"}).status_code == 201
+    # 再自动 -> max(1,5)+1 = "6"
+    r = client.post("/api/batches", json={"scene_id": "S", "platform": "Windows"})
+    assert r.json()["id"] == "6"
+
+
+def test_create_batch_without_p4(client):
+    # 未上报 p4_version 也应建批次成功,值为 None
+    r = client.post("/api/batches", json={
+        "id": "nop4", "scene_id": "SceneA", "platform": "Windows"})
+    assert r.status_code == 201, r.text
+    assert r.json()["p4_version"] is None
+    listed = client.get("/api/batches").json()["items"]
+    assert any(b["id"] == "nop4" and b["p4_version"] is None for b in listed)
+
+
 def test_path_traversal_rejected(client, png_bytes):
     _create_batch(client, "b2")
     r = _upload(client, "b2", "../evil", png_bytes())
