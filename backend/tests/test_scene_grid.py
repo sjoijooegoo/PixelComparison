@@ -22,17 +22,17 @@ def test_scene_grid_alignment_and_order(client, png_bytes):
     assert _shot(client, "new", "shot_01", png_bytes, 0).status_code == 201
 
     g = client.get("/api/scenes/S/grid").json()
-    # 列:创建时间升序(左早右晚)
-    assert [b["id"] for b in g["batches"]] == ["old", "new"]
+    # 列:创建时间降序(左新右旧)
+    assert [b["id"] for b in g["batches"]] == ["new", "old"]
     # 行:按 frame_index -> shot_01, shot_02
     assert [r["scene_name"] for r in g["rows"]] == ["shot_01", "shot_02"]
     # shot_01 两批都有
     row1 = g["rows"][0]
     assert row1["cells"][0] and row1["cells"][1]
     assert row1["cells"][0].startswith("/images/")
-    # shot_02 仅 old 有 -> new 那格为 null
+    # shot_02 仅 old 有 -> old 在右列(index 1),new(左)那格为 null
     row2 = g["rows"][1]
-    assert row2["cells"][0] and row2["cells"][1] is None
+    assert row2["cells"][0] is None and row2["cells"][1]
 
 
 def test_scene_grid_platform_filter(client, png_bytes):

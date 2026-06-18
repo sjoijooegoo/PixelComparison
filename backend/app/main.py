@@ -341,7 +341,7 @@ def scene_grid(
     q: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """批次列表图:同场景所有批次排成矩阵——列=批次(创建时间升序,左早右晚),
+    """批次列表图:同场景所有批次排成矩阵——列=批次(创建时间降序,左新右旧),
     行=检查点(按 scene_name 对齐、frame_index 排序),cells 与 batches 同序,缺图为 null。
 
     支持与批次列表一致的筛选(平台/画质/P4范围/创建时间/批次号)。"""
@@ -370,7 +370,7 @@ def scene_grid(
             pass
     if q:
         bstmt = bstmt.where(Batch.id.contains(q))
-    batches = db.scalars(bstmt.order_by(Batch.created_at.asc())).all()
+    batches = db.scalars(bstmt.order_by(Batch.created_at.desc())).all()
     bids = [b.id for b in batches]
     rowmap: dict = {}
     if bids:
@@ -389,7 +389,7 @@ def scene_grid(
     return {
         "scene_id": scene_id,
         "batches": [
-            {"id": b.id, "p4_version": b.p4_version,
+            {"id": b.id, "scene_id": b.scene_id, "p4_version": b.p4_version,
              "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
              "platform": b.platform,
              "shading_quality_label": shading_quality_label(b.shading_quality)}

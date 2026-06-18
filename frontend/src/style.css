@@ -40,3 +40,6 @@ body[arco-theme="dark"] { background: var(--color-bg-1); }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--color-fill-4); border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* 下拉选择列表加高,一次显示更多可选项(默认仅 200px) */
+.arco-select-dropdown-list-wrapper { max-height: 60vh; }

@@ -18,6 +18,31 @@ const collapsed = reactive(new Set())
 const isCollapsed = (id) => collapsed.has(id)
 function toggle(id) { collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id) }
 
+// 受控预览:点击缩略图时,用「本行」的图片列表打开 Arco 灯箱
+//(缩略图用原生 img 渲染,避免上千个重组件;放大体验不变)
+const previewVisible = ref(false)
+const previewList = ref([])
+const previewCurrent = ref(0)
+function openPreview(row, colIndex) {
+  const list = []
+  let cur = 0
+  row.cells.forEach((url, i) => {
+    if (!url) return
+    if (i === colIndex) cur = list.length
+    list.push(url)
+  })
+  previewList.value = list
+  previewCurrent.value = cur
+  previewVisible.value = true
+}
+
+// 基线/对比批次选择(复用 store,与列表视图同一套状态)
+function roleOf(id) {
+  if (store.currentBatch?.id === id) return 'current'
+  if (store.baselineBatch?.id === id) return 'baseline'
+  return null
+}
+
 // 按面板宽度算列宽:始终用 7 等分,使一屏正好放下 7 个批次列
 function recalc() {
   const el = panel.value
@@ -64,25 +89,33 @@ const gridStyle = computed(() => ({
                 <span class="dtime">{{ b.created_at.split(' ')[1] }}</span>
               </div>
               <div class="bsub"><span class="mono">#{{ b.id }}</span> · {{ b.shading_quality_label }}</div>
+              <div class="roles">
+                <button class="role-btn base" :class="{ on: roleOf(b.id) === 'baseline' }"
+                  @click="store.setRole(b, 'baseline')">基线</button>
+                <button class="role-btn cur" :class="{ on: roleOf(b.id) === 'current' }"
+                  @click="store.setRole(b, 'current')">对比</button>
+              </div>
             </div>
           </template>
         </div>
 
-        <!-- 每行一个预览组:放大后 < > 只在本行(同一检查点跨批次)翻看 -->
+        <!-- 数据行:首列检查点名 + 各批次缩略图(原生 img,轻量) -->
         <template v-for="r in rows" :key="r.scene_name">
           <div class="cell rowhead" :title="r.scene_name">{{ r.scene_name }}</div>
-          <a-image-preview-group infinite class="row-group">
-            <div v-for="(url, i) in r.cells" :key="cols[i].id" class="cell imgcell"
-              :class="{ collapsed: isCollapsed(cols[i].id) }">
-              <template v-if="!isCollapsed(cols[i].id)">
-                <a-image v-if="url" :src="url" :alt="r.scene_name" loading="lazy"
-                  width="100%" :height="imgH" fit="cover" show-loader />
-                <div v-else class="missing" :style="{ height: imgH + 'px' }">—</div>
-              </template>
-            </div>
-          </a-image-preview-group>
+          <div v-for="(url, i) in r.cells" :key="cols[i].id" class="cell imgcell"
+            :class="{ collapsed: isCollapsed(cols[i].id) }">
+            <template v-if="!isCollapsed(cols[i].id)">
+              <img v-if="url" class="thumb" :src="url" :alt="r.scene_name"
+                loading="lazy" decoding="async" :style="{ height: imgH + 'px' }"
+                @click="openPreview(r, i)" />
+              <div v-else class="missing" :style="{ height: imgH + 'px' }">—</div>
+            </template>
+          </div>
         </template>
       </div>
+      <!-- 放大后 < > 只在本行(同一检查点跨各批次)翻看 -->
+      <a-image-preview-group :src-list="previewList" v-model:current="previewCurrent"
+        v-model:visible="previewVisible" infinite />
     </div>
   </div>
 </template>
@@ -91,8 +124,6 @@ const gridStyle = computed(() => ({
 .grid-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; }
 .grid-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--color-border-2); border-radius: 8px; }
 .matrix { display: grid; width: max-content; transition: grid-template-columns .26s ease; }
-/* 每行预览组不参与布局,组内单元格直接落到 grid 上 */
-.row-group { display: contents; }
 
 .cell {
   border-right: 1px solid var(--color-border-2);
@@ -103,7 +134,7 @@ const gridStyle = computed(() => ({
 /* 表头:吸顶(固定高度,折叠/展开不抖动) */
 .head {
   position: sticky; top: 0; z-index: 3;
-  height: 56px; box-sizing: border-box;
+  height: 84px; box-sizing: border-box;
   display: flex; flex-direction: column; justify-content: center;
   background: var(--color-bg-3); padding: 4px 8px;
 }
@@ -118,7 +149,7 @@ const gridStyle = computed(() => ({
 /* 左上角:吸顶吸左,层级最高 */
 .corner {
   position: sticky; top: 0; left: 0; z-index: 4;
-  height: 56px; box-sizing: border-box;
+  height: 84px; box-sizing: border-box;
   display: flex; align-items: center;
   background: var(--color-bg-3); padding: 6px 8px;
   font-size: 11px; color: var(--color-text-3);
@@ -148,10 +179,18 @@ const gridStyle = computed(() => ({
 .date { font-size: 15px; font-weight: 800; color: rgb(var(--arcoblue-6)); letter-spacing: .2px; }
 .dtime { font-size: 12px; font-weight: 600; color: var(--color-text-2); }
 .bsub { font-size: 10px; color: var(--color-text-3); white-space: nowrap; margin-top: 2px; }
+.roles { display: flex; gap: 4px; justify-content: center; margin-top: 5px; }
+.role-btn {
+  border: 1px solid var(--color-border-2); background: transparent; cursor: pointer;
+  font-size: 10px; padding: 1px 7px; border-radius: 4px; line-height: 1.6; font-family: inherit;
+}
+.role-btn.base { color: rgb(var(--batch-base)); }
+.role-btn.cur { color: rgb(var(--batch-cur)); }
+.role-btn.base.on { background: rgb(var(--batch-base)); border-color: rgb(var(--batch-base)); color: #fff; }
+.role-btn.cur.on { background: rgb(var(--batch-cur)); border-color: rgb(var(--batch-cur)); color: #fff; }
 
 .imgcell { position: relative; z-index: 1; background: #0d1117; }
 .cell.collapsed { padding: 0; overflow: hidden; background: var(--color-fill-2); }
-.imgcell :deep(.arco-image) { display: block; width: 100%; }
-.imgcell :deep(.arco-image-img) { cursor: zoom-in; }
+.thumb { display: block; width: 100%; object-fit: cover; cursor: zoom-in; }
 .missing { display: flex; align-items: center; justify-content: center; color: var(--color-text-4); }
 </style>

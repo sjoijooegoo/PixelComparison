@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { useStore, SHADING_QUALITY_OPTIONS } from '../store'
+import { useStore, SHADING_QUALITY_OPTIONS, defaultDateRange } from '../store'
 
 const store = useStore()
 
@@ -18,13 +18,19 @@ async function applyNow() {
 }
 
 function onDateChange(v) {
-  store.filters.created_from = v?.[0] || ''
-  store.filters.created_to = v?.[1] || ''
+  if (v?.[0] && v?.[1]) {
+    store.filters.created_from = v[0]
+    store.filters.created_to = v[1]
+  } else {
+    // 不允许清空成全部时间,恢复默认近七天
+    Object.assign(store.filters, defaultDateRange())
+  }
   applyNow()
 }
 
 async function reset() {
-  store.filters = { scene_id: '', shading_quality: null, created_from: '', created_to: '', status: '' }
+  // 创建时间始终保留(恢复默认近七天),不放出全部时间数据
+  store.filters = { scene_id: '', shading_quality: null, ...defaultDateRange(), status: '' }
   await applyNow()
 }
 </script>
@@ -47,7 +53,8 @@ async function reset() {
     </div>
     <div class="field">
       <span class="label">创建时间</span>
-      <a-range-picker size="small" style="width: 230px" :model-value="dateRange" @change="onDateChange" />
+      <a-range-picker size="small" style="width: 230px" :allow-clear="false"
+        :model-value="dateRange" @change="onDateChange" />
     </div>
     <div class="spacer"></div>
     <a-button size="small" @click="reset">清空</a-button>

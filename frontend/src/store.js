@@ -3,6 +3,20 @@ import { api } from './api'
 
 export const PAGE_SIZE = 10   // 默认每页条数;实际由场景列表按可用高度动态覆盖
 
+// 本地日期 YYYY-MM-DD(避免 toISOString 的时区偏移)
+function ymd(d) {
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+// 默认创建时间范围:七天前 ~ 今天
+export function defaultDateRange() {
+  const today = new Date()
+  const from = new Date(today)
+  from.setDate(today.getDate() - 7)
+  return { created_from: ymd(from), created_to: ymd(today) }
+}
+
 // 画质档位选项(与后端 _SHADING_QUALITY_LABELS 一致),高→低
 export const SHADING_QUALITY_OPTIONS = [
   { value: 5, label: '电影' },
@@ -24,7 +38,7 @@ export const STATUS_META = {
 export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { scene_ids: [], platforms: [], baselines: [] },
-    filters: { scene_id: '', shading_quality: null, created_from: '', created_to: '', status: '' },
+    filters: { scene_id: '', shading_quality: null, ...defaultDateRange(), status: '' },
 
     // 顶部 tab:batch(批次管理) | 对比结果 | 基线管理 | 项目设置
     activeTab: 'batch',
