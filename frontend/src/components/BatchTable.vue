@@ -4,7 +4,6 @@ import { Message } from '@arco-design/web-vue'
 import { useStore } from '../store'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
-import ManualUpload from './ManualUpload.vue'
 import BatchGrid from './BatchGrid.vue'
 
 const store = useStore()
@@ -20,13 +19,6 @@ const previewBatch = ref(null)
 function openPreview(record) {
   previewBatch.value = record
   previewVisible.value = true
-}
-
-// 手动上报弹窗
-const uploadVisible = ref(false)
-function onUploaded() {
-  store.loadBatches()
-  store.loadMeta()
 }
 
 // 按表格区可用高度动态计算每页行数,填满整列
@@ -54,7 +46,6 @@ onUnmounted(() => ro?.disconnect())
 const columns = [
   { title: '批次ID', dataIndex: 'id', slotName: 'id', width: 120 },
   { title: '场景ID', dataIndex: 'scene_id', slotName: 'scene', width: 220, ellipsis: true, tooltip: true },
-  { title: 'P4版本', dataIndex: 'p4_version', slotName: 'p4', width: 120, sortable: { sortDirections: ['ascend', 'descend'] } },
   { title: '平台', dataIndex: 'platform', slotName: 'platform', width: 100 },
   { title: '画质', dataIndex: 'shading_quality_label', slotName: 'quality', width: 90 },
   { title: '检查点数', dataIndex: 'scene_count', width: 100 },
@@ -105,13 +96,11 @@ function roleOf(record) {
   <section class="batch-panel card">
     <div class="head">
       <h3>批次列表 ({{ store.batchTotal }})</h3>
+      <div style="flex:1"></div>
       <a-radio-group v-model="store.batchView" type="button" size="small" @change="onViewChange">
         <a-radio value="list">列表</a-radio>
         <a-radio value="grid">列表图</a-radio>
       </a-radio-group>
-      <div style="flex:1"></div>
-      <a-button size="small" @click="store.loadMeta(); store.loadBatches(); store.batchView === 'grid' && store.loadGrid(); Message.success('已刷新')">刷新</a-button>
-      <a-button size="small" type="primary" @click="uploadVisible = true">手动上报</a-button>
     </div>
 
     <!-- 选择条:已选的对比批次 / 基线批次 + 发起对比 -->
@@ -148,7 +137,6 @@ function roleOf(record) {
           <a class="batch-link mono" :href="batchLink(record)" target="_blank" rel="noopener noreferrer">#{{ record.id }}</a>
         </template>
         <template #scene="{ record }">{{ record.scene_id }}</template>
-        <template #p4="{ record }"><span class="mono">{{ record.p4_version ?? '——' }}</span></template>
         <template #platform="{ record }">
           <a-tag :color="platformColor(record.platform)" size="small">{{ record.platform }}</a-tag>
         </template>
@@ -181,7 +169,6 @@ function roleOf(record) {
     <BatchGrid v-else />
 
     <BatchPreview v-model:visible="previewVisible" :batch="previewBatch" />
-    <ManualUpload v-model:visible="uploadVisible" @done="onUploaded" />
   </section>
 </template>
 

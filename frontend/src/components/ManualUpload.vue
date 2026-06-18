@@ -230,7 +230,6 @@ async function startUpload() {
       <a-descriptions :column="2" size="small" bordered :data="[
         { label: '批次号', value: parsed.body.id ? ('#' + parsed.body.id) : '上报时自动生成' },
         { label: '场景ID', value: parsed.body.scene_id },
-        { label: 'P4版本', value: parsed.body.p4_version ?? '——' },
         { label: '平台', value: parsed.body.platform },
         { label: '画质', value: qualityLabel },
         { label: '分辨率', value: parsed.body.resolution || '—' },

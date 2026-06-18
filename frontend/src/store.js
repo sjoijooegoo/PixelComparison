@@ -24,7 +24,7 @@ export const STATUS_META = {
 export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { scene_ids: [], platforms: [], baselines: [] },
-    filters: { scene_id: '', platform: '', shading_quality: null, p4_min: null, p4_max: null, created_from: '', created_to: '', status: '' },
+    filters: { scene_id: '', shading_quality: null, created_from: '', created_to: '', status: '' },
 
     // 顶部 tab:batch(批次管理) | 对比结果 | 基线管理 | 项目设置
     activeTab: 'batch',
@@ -36,6 +36,7 @@ export const useStore = defineStore('shotdiff', {
     batchPageSize: PAGE_SIZE,
     batchView: 'list',                 // list(列表) | grid(列表图:同场景多批次图片矩阵)
     grid: { batches: [], rows: [] },   // 批次列表图数据
+    uploadVisible: false,              // 手动上报弹窗(由顶栏按钮触发)
     // 对比的两侧选择(角色)
     currentBatch: null,   // 对比批次(待检查)
     baselineBatch: null,  // 基线批次(参照)
@@ -102,6 +103,13 @@ export const useStore = defineStore('shotdiff', {
       })
       this.batches = items
       this.batchTotal = total
+    },
+
+    // 刷新批次(筛选项 + 列表 + 列表图)
+    async refreshBatches() {
+      await this.loadMeta()
+      await this.loadBatches()
+      if (this.batchView === 'grid') await this.loadGrid()
     },
 
     // 批次列表图:同场景多批次的图片矩阵(需先选场景)

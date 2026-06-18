@@ -9,6 +9,7 @@ import SceneList from './components/SceneList.vue'
 import DetailView from './components/DetailView.vue'
 import MetricsPanel from './components/MetricsPanel.vue'
 import ProjectSettings from './components/ProjectSettings.vue'
+import ManualUpload from './components/ManualUpload.vue'
 
 const store = useStore()
 
@@ -69,6 +70,9 @@ watch(() => store.activeTab, async (tab) => {
       style="margin-top: 120px">
       <template #subtitle>点击「批次管理」返回主界面</template>
     </a-result>
+
+    <!-- 手动上报弹窗(由顶栏按钮触发,全局挂载) -->
+    <ManualUpload v-model:visible="store.uploadVisible" @done="store.refreshBatches()" />
   </div>
 </template>
 
