@@ -7,8 +7,10 @@
     python report.py <manifest.json 或其所在目录>
     python report.py C:\\path\\to\\PixelComparison\\manifest.json
     python report.py C:\\path\\to\\PixelComparison          # 目录里需有 manifest.json
-    python report.py ./pkg --base http://host:8000          # 指定后端地址
-    BASE=http://host:8000 python report.py ./pkg            # 用环境变量指定
+    python report.py ./pkg --host 10.30.129.32 --port 8000  # 指定 IP/端口
+    python report.py ./pkg --base http://host:8000          # 或直接给完整地址
+    python report.py ./pkg --base 10.30.129.32:8000         # --base 省略 http:// 也可
+    BASE=http://host:8000 python report.py ./pkg            # 也支持 BASE/HOST/PORT 环境变量
 
 流程:
     1) POST /api/batches                    用 pipeline_data + ue_data 建批次
@@ -177,15 +179,27 @@ def report(manifest_path: Path, base: str, auto_compare: bool = True) -> int:
     return 0 if fail == 0 else 1
 
 
+def resolve_base(args) -> str:
+    """拼出后端地址:--base 优先(可省略 http://),否则由 --host/--port 组合。"""
+    base = args.base or f"http://{args.host}:{args.port}"
+    if not base.startswith(("http://", "https://")):
+        base = "http://" + base
+    return base.rstrip("/")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="按 manifest.json 上报采集结果到 PixelComparison 后端")
     ap.add_argument("manifest", help="manifest.json 文件路径,或其所在目录")
-    ap.add_argument("--base", default=os.environ.get("BASE", "http://127.0.0.1:8000"),
-                    help="后端地址(默认 http://127.0.0.1:8000,或读环境变量 BASE)")
+    ap.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"),
+                    help="后端 IP/主机名(默认 127.0.0.1,或读环境变量 HOST)")
+    ap.add_argument("--port", default=os.environ.get("PORT", "8000"),
+                    help="后端端口(默认 8000,或读环境变量 PORT)")
+    ap.add_argument("--base", default=os.environ.get("BASE"),
+                    help="后端完整地址,如 http://10.30.129.32:8000;给了它则忽略 --host/--port")
     ap.add_argument("--no-auto-compare", action="store_true",
                     help="上传完成后不自动与历史批次对比")
     args = ap.parse_args()
-    sys.exit(report(resolve_manifest(args.manifest), args.base.rstrip("/"),
+    sys.exit(report(resolve_manifest(args.manifest), resolve_base(args),
                     auto_compare=not args.no_auto_compare))
 
 

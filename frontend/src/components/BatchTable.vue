@@ -2,9 +2,9 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore } from '../store'
-import { api } from '../api'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
+import ManualUpload from './ManualUpload.vue'
 
 const store = useStore()
 
@@ -14,6 +14,13 @@ const previewBatch = ref(null)
 function openPreview(record) {
   previewBatch.value = record
   previewVisible.value = true
+}
+
+// 手动上报弹窗
+const uploadVisible = ref(false)
+function onUploaded() {
+  store.loadBatches()
+  store.loadMeta()
 }
 
 // 按表格区可用高度动态计算每页行数,填满整列
@@ -85,18 +92,7 @@ function roleOf(record) {
   return null
 }
 
-async function exportCsv() {
-  const head = '批次ID,场景ID,P4版本,平台,画质,检查点数,创建时间'
-  const { items } = await api.batches(store.filters)  // 不带分页 -> 全量
-  const rows = items.map(b =>
-    [b.id, b.scene_id, b.p4_version, b.platform, b.shading_quality_label, b.scene_count, b.created_at].join(','))
-  const blob = new Blob(['﻿' + head + '\n' + rows.join('\n')], { type: 'text/csv' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = 'pixelcomparison_batches.csv'
-  a.click()
-  URL.revokeObjectURL(a.href)
-}
+
 </script>
 
 <template>
@@ -105,7 +101,7 @@ async function exportCsv() {
       <h3>批次列表 ({{ store.batchTotal }})</h3>
       <div style="flex:1"></div>
       <a-button size="small" @click="store.loadMeta(); store.loadBatches(); Message.success('已刷新')">刷新</a-button>
-      <a-button size="small" @click="exportCsv">导出列表</a-button>
+      <a-button size="small" type="primary" @click="uploadVisible = true">手动上报</a-button>
     </div>
 
     <!-- 选择条:已选的对比批次 / 基线批次 + 发起对比 -->
@@ -172,6 +168,7 @@ async function exportCsv() {
     </div>
 
     <BatchPreview v-model:visible="previewVisible" :batch="previewBatch" />
+    <ManualUpload v-model:visible="uploadVisible" @done="onUploaded" />
   </section>
 </template>
 

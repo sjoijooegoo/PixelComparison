@@ -8,9 +8,10 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
+from .cleanup import prune_orphans
 from .db import IMAGES_DIR, Base, SessionLocal, engine, get_db, migrate_columns
 from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
 from .service import run_comparison
@@ -117,11 +118,13 @@ def comparison_dto(c: Comparison, db: Session) -> dict:
         "shading_quality": c.batch.shading_quality if c.batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY,
         "shading_quality_label": shading_quality_label(c.batch.shading_quality),
         "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
+        "batch_created_at": c.batch.created_at.strftime("%Y-%m-%d %H:%M"),       # 对比批次的创建时间
         # 参照批次:有基线版本则显示版本号,否则显示批次号
         "ref_batch_id": c.ref_batch_id,
         "ref_label": c.baseline.version if c.baseline else f"#{c.ref_batch_id}",
         "ref_p4_version": c.ref_batch.p4_version,
         "ref_shading_quality_label": shading_quality_label(c.ref_batch.shading_quality),
+        "ref_created_at": c.ref_batch.created_at.strftime("%Y-%m-%d %H:%M"),     # 参照批次的创建时间
         "status": c.status,
         "diff_avg": round(c.diff_avg, 2),
         "scene_count": scene_count,
@@ -303,6 +306,51 @@ def list_screenshots(batch_id: str, db: Session = Depends(get_db)):
     }
 
 
+@app.delete("/api/batches/{batch_id}")
+def delete_batch(batch_id: str, db: Session = Depends(get_db)):
+    """级联删除批次:连带删除它参与的对比(作为 batch 或 ref)及对比项、由它晋升的基线,
+    以及磁盘上的批次图片目录与相关热力图目录。
+
+    若该批次参与的某个对比正在后台计算中,返回 409,避免删到正在算的对比。
+    """
+    batch = db.get(Batch, batch_id)
+    if not batch:
+        raise HTTPException(404, "batch not found")
+
+    comp_ids = list(db.scalars(
+        select(Comparison.id).where(
+            or_(Comparison.batch_id == batch_id, Comparison.ref_batch_id == batch_id)
+        )
+    ))
+
+    # 临界区:与"建对比/起任务"互斥;正在计算的对比不允许删
+    with _COMPARE_LOCK:
+        if any(cid in _RUNNING for cid in comp_ids):
+            raise HTTPException(409, "批次正在对比计算中,请稍后再删")
+        # 删对比(级联对比项)
+        for cid in comp_ids:
+            comp = db.get(Comparison, cid)
+            if comp is not None:
+                db.delete(comp)
+        # 删由它晋升的基线
+        db.execute(delete(Baseline).where(Baseline.source_batch_id == batch_id))
+        # 删批次(级联截图)
+        db.delete(batch)
+        db.commit()
+        # 清掉这些对比对应的内存任务条目,避免轮询到已删对比
+        for tid in [t for t, info in _TASKS.items() if info.get("comparison_id") in comp_ids]:
+            _TASKS.pop(tid, None)
+
+    # 文件兜底清理:批次目录 / 已不存在对比的热力图目录(commit 后即成孤儿)
+    pruned = prune_orphans(db)
+    return {
+        "deleted": True,
+        "batch_id": batch_id,
+        "comparisons_removed": len(comp_ids),
+        "files_removed": pruned["dirs"] + pruned["files"],
+    }
+
+
 # ---------------------------------------------------------------- 对比
 
 class ComparisonIn(BaseModel):
@@ -320,6 +368,9 @@ _RUNNING: dict[int, str] = {}   # comparison_id -> 正在计算它的 task_id
 # 完成/失败的任务保留时长;超时后清理,避免 _TASKS 无限增长。
 _TASK_TTL_SECONDS = 3600
 
+# 对比历史全局上限;新建对比超过它就淘汰创建时间最早的(环形历史)。
+_MAX_COMPARISONS = 25
+
 
 def _prune_tasks(now: float | None = None) -> None:
     """删除已结束(done/error)且超过 TTL 的任务条目;running 的一律保留。
@@ -334,6 +385,32 @@ def _prune_tasks(now: float | None = None) -> None:
     ]
     for tid in stale:
         _TASKS.pop(tid, None)
+
+
+def _evict_old_comparisons(db: Session, keep_id: int | None = None) -> list[int]:
+    """对比总数超过 _MAX_COMPARISONS 时,删除创建时间最早的若干条(级联对比项)。
+
+    跳过刚建的(keep_id)与正在计算的(_RUNNING);调用方应已持有 _COMPARE_LOCK。
+    返回被淘汰的 comparison id 列表(供调用方清理其热力图文件)。
+    """
+    total = db.scalar(select(func.count()).select_from(Comparison)) or 0
+    excess = total - _MAX_COMPARISONS
+    if excess <= 0:
+        return []
+    evicted: list[int] = []
+    for c in db.scalars(select(Comparison).order_by(Comparison.created_at.asc())):
+        if excess <= 0:
+            break
+        if c.id == keep_id or c.id in _RUNNING:
+            continue
+        db.delete(c)            # 经 Comparison.items 关系级联删对比项
+        evicted.append(c.id)
+        excess -= 1
+    if evicted:
+        db.commit()
+        for tid in [t for t, i in _TASKS.items() if i.get("comparison_id") in evicted]:
+            _TASKS.pop(tid, None)
+    return evicted
 
 
 def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, settings):
@@ -384,6 +461,7 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
     )
 
     # 临界区:查重 / 建行 / 起任务,避免并发产生重复对比或重复计算
+    evicted: list[int] = []
     with _COMPARE_LOCK:
         comparison = db.scalars(
             select(Comparison)
@@ -400,6 +478,8 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             )
             db.add(comparison)
             db.commit()
+            # 新增了一行 -> 超限则淘汰最旧的对比(返回的 id 供下面清热力图)
+            evicted = _evict_old_comparisons(db, keep_id=comparison.id)
         cid = comparison.id
 
         # 已有任务在算这条对比 -> 直接复用其进度,不重复起线程
@@ -417,6 +497,9 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             args=(task_id, cid, batch.id, ref.id, baseline.id if baseline else None, get_settings(db)),
             daemon=True,
         ).start()
+    # 锁外清理被淘汰对比的热力图目录(已无 DB 记录,成孤儿)
+    if evicted:
+        prune_orphans(db)
     return {"task_id": task_id, "status": "running", "done": 0, "total": 0}
 
 

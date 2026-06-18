@@ -15,7 +15,21 @@ async function send(method, url, body) {
   })
   if (!res.ok) {
     const detail = (await res.json().catch(() => null))?.detail
-    throw new Error(detail || `${res.status} ${url}`)
+    const err = new Error(detail || `${res.status} ${url}`)
+    err.status = res.status
+    throw err
+  }
+  return res.json()
+}
+
+// multipart 上传:不要手动设 Content-Type,让浏览器带 boundary
+async function upload(url, formData) {
+  const res = await fetch(url, { method: 'POST', body: formData })
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => null))?.detail
+    const err = new Error(detail || `${res.status} ${url}`)
+    err.status = res.status
+    throw err
   }
   return res.json()
 }
@@ -26,6 +40,9 @@ const put = (url, body) => send('PUT', url, body)
 export const api = {
   meta: () => get('/api/meta'),
   batches: (params) => get('/api/batches', params),
+  createBatch: (body) => post('/api/batches', body),
+  uploadScreenshot: (id, formData) => upload(`/api/batches/${id}/screenshots`, formData),
+  autoCompare: (id) => post(`/api/batches/${id}/auto-compare`, {}),
   batchScreenshots: (id) => get(`/api/batches/${id}/screenshots`),
   comparisons: (filters) => get('/api/comparisons', filters),
   createComparison: (body) => post('/api/comparisons', body),

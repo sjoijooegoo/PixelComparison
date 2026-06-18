@@ -14,11 +14,13 @@ def client(tmp_path, monkeypatch):
     import app.models
     import app.service
     import app.settings
+    import app.cleanup
     import app.main
     importlib.reload(app.db)
     importlib.reload(app.models)
     importlib.reload(app.service)
     importlib.reload(app.settings)
+    importlib.reload(app.cleanup)   # app.main 从中导入 prune_orphans,须先于 app.main 重载
     importlib.reload(app.main)
 
     from fastapi.testclient import TestClient

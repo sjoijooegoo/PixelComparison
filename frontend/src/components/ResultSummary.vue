@@ -55,7 +55,7 @@ async function rerun() {
       <template #content>
         <div class="hist-pop">
           <div class="hist-head text-secondary">
-            对比历史 <b>{{ store.comparisons.length }}</b>
+            对比历史 <b>{{ store.comparisons.length }}</b> <span class="cap">/ 最多 25</span>
           </div>
           <div class="hist-list">
             <button v-for="h in store.comparisons" :key="h.id" class="hist-item"
@@ -67,19 +67,18 @@ async function rerun() {
                 <span class="diff mono" :style="{ color: diffColor(h.diff_avg) }">
                   {{ (h.diff_avg ?? 0).toFixed(2) }}%</span>
               </div>
-              <div class="row2 text-secondary">
+              <div class="scene">{{ h.scene_id }}</div>
+              <div class="meta text-secondary">
                 <span class="mono">P4 {{ h.ref_p4_version }}</span>
                 <span>{{ h.ref_shading_quality_label }}</span>
                 <span class="arrow">→</span>
                 <span class="mono">P4 {{ h.p4_version }}</span>
                 <span>{{ h.shading_quality_label }}</span>
               </div>
-              <div class="row3 text-secondary">
-                <span>{{ h.scene_id }}</span>
-                <span class="dot">·</span>
-                <span>{{ h.scene_count }} 检查点</span>
-                <span class="dot">·</span>
-                <span>{{ h.created_at }}</span>
+              <div class="meta text-secondary">
+                <span>{{ h.ref_created_at }}</span>
+                <span class="arrow">→</span>
+                <span>{{ h.batch_created_at }}</span>
               </div>
             </button>
             <a-empty v-if="!store.comparisons.length" description="暂无对比记录" style="margin:24px 0" />
@@ -142,6 +141,7 @@ async function rerun() {
 /* 历史弹层 */
 .hist-pop { width: 300px; }
 .hist-head { padding: 4px 8px 6px; font-size: 12px; }
+.hist-head .cap { color: var(--color-text-4); font-size: 11px; }
 .hist-list { max-height: 320px; overflow-y: auto; }
 .hist-item {
   display: block; width: 100%; text-align: left; cursor: pointer;
@@ -155,8 +155,7 @@ async function rerun() {
 .row1 .ref { color: rgb(var(--batch-base)); }
 .row1 .vs { color: var(--color-text-4); font-size: 11px; }
 .row1 .diff { margin-left: auto; font-weight: 600; }
-.row2 { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 3px; }
-.row2 .arrow { color: var(--color-text-4); }
-.row3 { display: flex; align-items: center; gap: 5px; font-size: 11px; margin-top: 3px; flex-wrap: wrap; }
-.row3 .dot { color: var(--color-text-4); }
+.scene { font-size: 13px; font-weight: 600; color: var(--color-text-1); margin-top: 4px; }
+.meta { display: flex; align-items: center; gap: 5px; font-size: 11px; margin-top: 3px; flex-wrap: wrap; }
+.meta .arrow, .meta .dot { color: var(--color-text-4); }
 </style>
