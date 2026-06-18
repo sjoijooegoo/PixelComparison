@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore } from '../store'
 import Pager from './Pager.vue'
@@ -42,6 +42,8 @@ onMounted(() => {
   recalc()
 })
 onUnmounted(() => ro?.disconnect())
+// 数据渲染后(行高才量得准)再校正一次每页行数,避免列表填不满高度
+watch(() => store.batches.length, () => nextTick(recalc))
 
 const columns = [
   { title: '批次ID', dataIndex: 'id', slotName: 'id', width: 120 },
@@ -196,8 +198,8 @@ function roleOf(record) {
 .slot-x:hover { color: rgb(var(--red-6)); }
 .vs { font-size: 11px; font-weight: 700; color: var(--color-text-4); }
 
-/* 行更舒展:增加单元格上下内边距(不影响列水平对齐) */
-:deep(.arco-table-td) { padding-top: 8px; padding-bottom: 8px; }
+/* 行内边距适度紧凑,同样高度能多放几行 */
+:deep(.arco-table-td) { padding-top: 4px; padding-bottom: 4px; }
 /* 表头分层:背景 + 字重,与数据区分 */
 :deep(.arco-table-th) { background: var(--color-fill-2); font-weight: 600; }
 /* 隔行斑马纹(淡),长表不串行 */
@@ -205,6 +207,10 @@ function roleOf(record) {
 /* 行 hover 反馈 */
 :deep(.arco-table-tbody tr:hover .arco-table-td) { background: var(--color-fill-3); }
 
-.table-wrap { flex: 1; min-height: 0; overflow: auto; }
+/* 与列表图一致:圆角边框容器,左右内缩与表头/分页对齐 */
+.table-wrap {
+  flex: 1; min-height: 0; overflow: auto; margin: 0 16px;
+  border: 1px solid var(--color-border-2); border-radius: 8px;
+}
 .foot { display: flex; justify-content: flex-end; padding: 10px 16px; }
 </style>

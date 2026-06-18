@@ -1,8 +1,12 @@
 import json
+import mimetypes
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+
+# Windows 上 .webp 可能未注册,确保静态文件返回正确 Content-Type
+mimetypes.add_type("image/webp", ".webp")
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware

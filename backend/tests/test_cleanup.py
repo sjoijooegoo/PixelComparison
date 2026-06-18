@@ -115,7 +115,7 @@ def test_rerun_clears_stale_heatmaps(tmp_path, monkeypatch):
         upload(client, "base", "b", (0, 0, 0)); upload(client, "cur", "b", (0, 255, 0))
         comp = run_and_wait(client, "cur", "base")
         hdir = images / "heatmaps" / str(comp["id"])
-        assert (hdir / "a.png").exists() and (hdir / "b.png").exists()
+        assert (hdir / "a.webp").exists() and (hdir / "b.webp").exists()
 
     from sqlalchemy import delete
     from app.models import Screenshot
@@ -129,5 +129,5 @@ def test_rerun_clears_stale_heatmaps(tmp_path, monkeypatch):
     with TestClient(app.main.app) as client:
         comp = run_and_wait(client, "cur", "base", force=True)
         hdir = images / "heatmaps" / str(comp["id"])
-        assert (hdir / "a.png").exists()
-        assert not (hdir / "b.png").exists()
+        assert (hdir / "a.webp").exists()
+        assert not (hdir / "b.webp").exists()

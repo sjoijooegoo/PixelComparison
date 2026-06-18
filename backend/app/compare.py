@@ -11,6 +11,9 @@ from PIL import Image, ImageFilter
 # 单像素任一通道差值超过该阈值则计为"差异像素"
 PIXEL_DIFF_THRESHOLD = 8
 
+# 热力图为纯展示派生物(不参与对比),用 WebP 有损压缩省盘;q90 观感无损
+HEATMAP_WEBP_QUALITY = 90
+
 # jet 色带控制点 (位置, RGB)
 _JET = [
     (0.00, (27, 27, 179)),
@@ -125,4 +128,5 @@ def _write_heatmap(
     backdrop[..., 2] += 40  # 偏蓝底色,贴近"低差异为深蓝"的视觉
     alpha = np.clip(norm * 1.6, 0, 0.9)[..., None]
     blended = backdrop * (1 - alpha) + heat * alpha
-    Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8)).save(out_path)
+    Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8)).save(
+        out_path, format="WEBP", quality=HEATMAP_WEBP_QUALITY, method=6)

@@ -149,7 +149,8 @@ export const useStore = defineStore('shotdiff', {
     },
 
     async loadComparisons() {
-      const { items } = await api.comparisons(this.filters)
+      // 对比历史不随批次页筛选(尤其场景ID)过滤,始终加载全部(已有 25 条上限)
+      const { items } = await api.comparisons({})
       this.comparisons = items
     },
 

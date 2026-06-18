@@ -59,7 +59,8 @@
 | `pipeline_data.captured_at` | `Batch.created_at` | 采集时间(ISO8601) |
 | `ue_data.world_name` | `Batch.scene_id` | 场景 ID(UE Level),**同场景才能对比** |
 | `ue_data.platform` | `Batch.platform` | **归一化**:WindowsEditor→Windows、IOSEditor→iOS、AndroidEditor→Android |
-| `ue_data.p4_version` | `Batch.p4_version` | P4 changelist(字符串,后端转 int,越大越新) |
+| `ue_data.p4_version` | `Batch.p4_version` | P4 changelist(字符串,后端转 int,越大越新;**可省略**) |
+| `ue_data.shading_quality` | `Batch.shading_quality` | 画质档位 0–5(节能/流畅/均衡/精美/极致/电影),缺省按「极致」 |
 | `ue_data.resolution` | `Batch.resolution` | 存为 `1920x1080` |
 | `ue_data.levelsequence_name/path` | `Batch.levelsequence_name/path` | LevelSequence 身份 |
 | `capture_type` | `Batch.capture_type` | 采集类型,如 `levelsequence` |
@@ -108,4 +109,4 @@ python mock_uploads\upload.py 7      # 仅上报指定批次(目录名/批次 ID
 - `13` vs `12` — Lv_Nebula 回归
 - `8` vs `9` — 跨平台同场景(Windows × iOS)也可对比
 
-不同场景ID的批次不能互比(界面会拦截);可用左侧筛选按场景ID、平台、P4 版本范围过滤。
+不同场景ID的批次不能互比(界面会拦截);可用顶部筛选按场景ID、画质、创建时间过滤。

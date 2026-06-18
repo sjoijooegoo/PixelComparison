@@ -227,7 +227,7 @@ async function startUpload() {
 
     <!-- 预览 -->
     <div v-else-if="stage === 'preview'">
-      <a-descriptions :column="2" size="small" bordered :data="[
+      <a-descriptions :column="1" size="small" bordered :label-style="{ width: '72px' }" :data="[
         { label: '批次号', value: parsed.body.id ? ('#' + parsed.body.id) : '上报时自动生成' },
         { label: '场景ID', value: parsed.body.scene_id },
         { label: '平台', value: parsed.body.platform },

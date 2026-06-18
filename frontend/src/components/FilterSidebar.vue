@@ -39,7 +39,7 @@ async function reset() {
   <div class="filter-bar card">
     <div class="field">
       <span class="label">场景ID</span>
-      <a-select v-model="store.filters.scene_id" placeholder="全部场景" allow-clear size="small"
+      <a-select v-model="store.filters.scene_id" placeholder="全部场景" allow-clear allow-search size="small"
         style="width: 320px" @change="applyNow">
         <a-option v-for="s in store.meta.scene_ids" :key="s" :value="s">{{ s }}</a-option>
       </a-select>

@@ -61,7 +61,7 @@ def run_comparison(
         return name, compare_images(
             str(IMAGES_DIR / cur.path),
             str(IMAGES_DIR / base.path),
-            str(IMAGES_DIR / f"heatmaps/{comparison.id}/{name}.png"),
+            str(IMAGES_DIR / f"heatmaps/{comparison.id}/{name}.webp"),
             pixel_threshold=int(cfg["pixel_diff_threshold"]),
             heatmap_blur=cfg["heatmap_blur"],
             heatmap_sensitivity=cfg["heatmap_sensitivity"],
@@ -95,7 +95,7 @@ def run_comparison(
                 comparison_id=comparison.id, scene_name=name,
                 current_shot_id=cur.id, baseline_shot_id=base.id,
                 status=status, diff_pct=metrics["diff_pct"],
-                metrics=metrics, heatmap_path=f"heatmaps/{comparison.id}/{name}.png",
+                metrics=metrics, heatmap_path=f"heatmaps/{comparison.id}/{name}.webp",
             )
         elif cur:
             status = "added"

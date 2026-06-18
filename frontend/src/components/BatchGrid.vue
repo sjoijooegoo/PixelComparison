@@ -123,9 +123,10 @@ const gridStyle = computed(() => ({
           </div>
         </template>
       </div>
-      <!-- 放大后 < > 只在本行(同一检查点跨各批次)翻看 -->
-      <a-image-preview-group :src-list="previewList" v-model:current="previewCurrent"
-        v-model:visible="previewVisible" infinite />
+      <!-- 放大后 < > 只在本行(同一检查点跨各批次)翻看;关闭即卸载,避免残留遮罩/滚轮锁 -->
+      <a-image-preview-group v-if="previewVisible" :src-list="previewList"
+        v-model:current="previewCurrent" :visible="true" @update:visible="previewVisible = $event"
+        infinite />
     </div>
 
     <!-- 放大时顶部显示当前图所属批次信息(叠在灯箱之上) -->
@@ -163,7 +164,7 @@ const gridStyle = computed(() => ({
   background: var(--color-bg-2); padding: 8px 10px;
   display: flex; align-items: center;
   font-size: 12px; color: var(--color-text-2);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  overflow: hidden; word-break: break-all;   /* 长检查点名换行,不溢出列 */
 }
 /* 左上角:吸顶吸左,层级最高 */
 .corner {
