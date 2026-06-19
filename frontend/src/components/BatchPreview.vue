@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { api } from '../api'
+import { p4Label } from '../store'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -43,7 +44,7 @@ function close() {
         批次 <span class="mono">#{{ batch.id }}</span>
         <span class="dot">·</span>{{ batch.scene_id }}
         <span class="dot">·</span>{{ batch.platform }}
-        <span class="dot">·</span>{{ batch.shading_quality_label }}
+        <span class="dot">·</span>{{ p4Label(batch.p4_version) }}
         <span class="dot">·</span>{{ shots.length }} 张
       </span>
     </template>

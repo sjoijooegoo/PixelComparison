@@ -204,6 +204,7 @@ def list_batches(
     p4_max: int | None = None,
     created_from: str | None = None,
     created_to: str | None = None,
+    created_dates: list[str] | None = Query(None),
     q: str | None = None,
     page: int = Query(1, ge=1),
     page_size: int | None = Query(None, ge=1, le=200),
@@ -234,6 +235,8 @@ def list_batches(
             stmt = stmt.where(Batch.created_at < datetime.fromisoformat(created_to) + timedelta(days=1))
         except ValueError:
             pass
+    if created_dates:  # 指定多天(跳着选):按本地日期 IN 匹配
+        stmt = stmt.where(func.date(Batch.created_at).in_(created_dates))
     if q:
         stmt = stmt.where(Batch.id.contains(q))
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
@@ -363,6 +366,7 @@ def scene_grid(
     p4_max: int | None = None,
     created_from: str | None = None,
     created_to: str | None = None,
+    created_dates: list[str] | None = Query(None),
     q: str | None = None,
     db: Session = Depends(get_db),
 ):
@@ -393,6 +397,8 @@ def scene_grid(
             bstmt = bstmt.where(Batch.created_at < datetime.fromisoformat(created_to) + timedelta(days=1))
         except ValueError:
             pass
+    if created_dates:  # 指定多天(跳着选):按本地日期 IN 匹配
+        bstmt = bstmt.where(func.date(Batch.created_at).in_(created_dates))
     if q:
         bstmt = bstmt.where(Batch.id.contains(q))
     batches = db.scalars(bstmt.order_by(Batch.created_at.desc())).all()

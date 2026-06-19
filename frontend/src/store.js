@@ -29,6 +29,11 @@ export const SHADING_QUALITY_OPTIONS = [
   { value: 0, label: '节能' },
 ]
 
+// P4 版本号展示:无版本时显示 ——
+export function p4Label(v) {
+  return (v === null || v === undefined || v === '') ? '——' : `P4 ${v}`
+}
+
 export const STATUS_META = {
   fail: { label: '失败', color: 'red' },
   warn: { label: '警告', color: 'orange' },
@@ -40,7 +45,7 @@ export const STATUS_META = {
 export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { scene_ids: [], platforms: [], baselines: [] },
-    filters: { scene_id: '', shading_quality: null, ...defaultDateRange(), status: '' },
+    filters: { scene_id: '', shading_quality: null, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' },
 
     // 顶部:原始批次列表
     batches: [],
@@ -49,6 +54,7 @@ export const useStore = defineStore('shotdiff', {
     batchPageSize: PAGE_SIZE,
     batchView: 'list',                 // list(列表) | grid(列表图:同场景多批次图片矩阵)
     grid: { batches: [], rows: [] },   // 批次列表图数据
+    gridCollapsed: new Set(),          // 列表图已折叠的批次列(按批次 id;跨刷新/切场景保留)
     uploadVisible: false,              // 手动上报弹窗(由顶栏按钮触发)
     // 对比的两侧选择(角色)
     currentBatch: null,   // 对比批次(待检查)
@@ -86,6 +92,13 @@ export const useStore = defineStore('shotdiff', {
   getters: {
     canCompare: (s) =>
       !!(s.currentBatch && s.baselineBatch && s.currentBatch.id !== s.baselineBatch.id),
+
+    // 下发给接口的筛选:按日期模式只带对应日期键(范围 / 指定多天),互不混用
+    requestFilters: (s) => {
+      const { dateMode, created_from, created_to, created_dates, ...rest } = s.filters
+      if (dateMode === 'days') return { ...rest, created_dates }
+      return { ...rest, created_from, created_to }
+    },
   },
 
   actions: {
@@ -110,7 +123,7 @@ export const useStore = defineStore('shotdiff', {
 
     async loadBatches() {
       const { items, total } = await api.batches({
-        ...this.filters,
+        ...this.requestFilters,
         page: this.batchPage,
         page_size: this.batchPageSize,
       })
@@ -129,7 +142,7 @@ export const useStore = defineStore('shotdiff', {
     async loadGrid() {
       if (!this.filters.scene_id) { this.grid = { batches: [], rows: [] }; return }
       // 传全部筛选(scene_id 在路径里,多余的 status 等会被后端忽略)
-      this.grid = await api.sceneGrid(this.filters.scene_id, this.filters)
+      this.grid = await api.sceneGrid(this.filters.scene_id, this.requestFilters)
     },
 
     // role: 'current'(对比) | 'baseline'(基线)

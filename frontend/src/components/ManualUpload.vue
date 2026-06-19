@@ -1,12 +1,11 @@
 <script setup>
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { api } from '../api'
+import { p4Label } from '../store'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
 const emit = defineEmits(['update:visible', 'done'])
-
-const QUALITY_LABELS = { 5: '电影', 4: '极致', 3: '精美', 2: '均衡', 1: '流畅', 0: '节能' }
 
 const stage = ref('idle')        // idle | preview | uploading
 const dragOver = ref(false)
@@ -14,15 +13,11 @@ const error = ref('')
 const autoCompare = ref(true)
 const idExists = ref(false)      // 该批次 ID 是否已存在(重复上报会变成补传/合并)
 const fileInput = ref(null)
+const manualP4 = ref(null)       // 数据包未带 P4 时,用户手填的版本号
 
 // 解析结果
 const parsed = reactive({ body: null, shots: [], missing: [] })
 const progress = reactive({ done: 0, total: 0 })
-
-const qualityLabel = computed(() => {
-  const q = parsed.body?.shading_quality
-  return q == null ? '极致(默认)' : (QUALITY_LABELS[q] ?? String(q))
-})
 
 function reset() {
   stage.value = 'idle'
@@ -31,6 +26,7 @@ function reset() {
   parsed.body = null
   parsed.shots = []
   parsed.missing = []
+  manualP4.value = null
   progress.done = 0
   progress.total = 0
 }
@@ -159,6 +155,10 @@ function onStart() {
 
 // ---- 执行上报,流程对齐 report.py ----
 async function startUpload() {
+  // 数据包未带 P4 时,采用用户手填的版本号(选填)
+  if (parsed.body.p4_version == null && manualP4.value != null && manualP4.value !== '') {
+    parsed.body.p4_version = Number(manualP4.value)
+  }
   stage.value = 'uploading'
   progress.done = 0
   progress.total = parsed.shots.length
@@ -231,9 +231,16 @@ async function startUpload() {
         { label: '批次号', value: parsed.body.id ? ('#' + parsed.body.id) : '上报时自动生成' },
         { label: '场景ID', value: parsed.body.scene_id },
         { label: '平台', value: parsed.body.platform },
-        { label: '画质', value: qualityLabel },
+        { label: 'P4版本', value: p4Label(parsed.body.p4_version) },
         { label: '分辨率', value: parsed.body.resolution || '—' },
-      ]" />
+      ]">
+        <template #value="{ data }">
+          <a-input-number v-if="data.label === 'P4版本' && parsed.body.p4_version == null"
+            v-model="manualP4" placeholder="数据包未带,可手动填写(选填)"
+            :min="0" :precision="0" hide-button allow-clear size="small" style="width: 100%" />
+          <span v-else>{{ data.value }}</span>
+        </template>
+      </a-descriptions>
       <div class="count">
         共 <b>{{ parsed.shots.length }}</b> 张截图
         <span v-if="parsed.missing.length" class="miss">(缺失 {{ parsed.missing.length }} 张,将跳过)</span>

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useStore } from '../store'
+import { useStore, p4Label } from '../store'
 
 const store = useStore()
 const c = computed(() => store.selectedComparison)
@@ -38,11 +38,11 @@ async function rerun() {
         <span class="pair">
           <span class="role role-base">基线</span>
           <span class="mono">#{{ c.ref_batch_id }}</span>
-          <span class="text-secondary br">{{ c.ref_shading_quality_label }}</span>
+          <span class="text-secondary br">{{ p4Label(c.ref_p4_version) }}</span>
           <span class="vs">VS</span>
           <span class="role role-cur">对比批次</span>
           <span class="mono">#{{ c.batch_id }}</span>
-          <span class="text-secondary br">{{ c.shading_quality_label }}</span>
+          <span class="text-secondary br">{{ p4Label(c.p4_version) }}</span>
         </span>
         <svg class="caret" width="12" height="12" viewBox="0 0 12 12" fill="none"
           stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -67,9 +67,9 @@ async function rerun() {
               </div>
               <div class="scene">{{ h.scene_id }}</div>
               <div class="meta text-secondary">
-                <span>{{ h.ref_shading_quality_label }}</span>
+                <span>{{ p4Label(h.ref_p4_version) }}</span>
                 <span class="arrow">→</span>
-                <span>{{ h.shading_quality_label }}</span>
+                <span>{{ p4Label(h.p4_version) }}</span>
               </div>
               <div class="meta text-secondary">
                 <span>{{ h.ref_created_at }}</span>

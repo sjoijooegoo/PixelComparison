@@ -5,6 +5,8 @@ import { useStore } from '../store'
 import FilterSidebar from '../components/FilterSidebar.vue'
 import BatchTable from '../components/BatchTable.vue'
 
+defineOptions({ name: 'BatchView' })   // 供 <keep-alive include> 命中
+
 const store = useStore()
 const route = useRoute()
 const router = useRouter()
@@ -18,8 +20,10 @@ function applyRoute() {
     store.filters.scene_id = sid
     store.batchPage = 1
     store.loadBatches()
+    store.loadGrid()
+  } else if (!store.grid.batches.length) {
+    store.loadGrid()                      // 同场景已有数据则不重复拉取/重渲染
   }
-  store.loadGrid()
 }
 onMounted(applyRoute)
 watch(() => route.params.sceneId, applyRoute)

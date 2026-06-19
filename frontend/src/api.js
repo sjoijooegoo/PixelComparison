@@ -1,9 +1,16 @@
 import { logger } from './logger'
 
 async function get(url, params = {}) {
-  const qs = new URLSearchParams(
-    Object.entries(params).filter(([, v]) => v !== null && v !== undefined && v !== '')
-  ).toString()
+  const sp = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v === null || v === undefined || v === '') continue
+    if (Array.isArray(v)) {
+      v.forEach((x) => { if (x !== null && x !== undefined && x !== '') sp.append(k, x) })
+    } else {
+      sp.append(k, v)
+    }
+  }
+  const qs = sp.toString()
   const res = await fetch(qs ? `${url}?${qs}` : url)
   if (!res.ok) {
     logger.error('接口失败', `GET ${url}`, res.status)

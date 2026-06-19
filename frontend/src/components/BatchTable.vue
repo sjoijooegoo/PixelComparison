@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useStore } from '../store'
+import { useStore, p4Label } from '../store'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
 import BatchGrid from './BatchGrid.vue'
@@ -50,6 +50,7 @@ const columns = [
   { title: '场景ID', dataIndex: 'scene_id', slotName: 'scene', width: 220, ellipsis: true, tooltip: true },
   { title: '平台', dataIndex: 'platform', slotName: 'platform', width: 100 },
   { title: '画质', dataIndex: 'shading_quality_label', slotName: 'quality', width: 90 },
+  { title: 'P4版本', dataIndex: 'p4_version', slotName: 'p4', width: 110 },
   { title: '检查点数', dataIndex: 'scene_count', width: 100 },
   { title: '创建时间', dataIndex: 'created_at', width: 160, sortable: { sortDirections: ['ascend', 'descend'] } },
   { title: '操作', slotName: 'ops', width: 270, align: 'center' },
@@ -144,6 +145,9 @@ function roleOf(record) {
         </template>
         <template #quality="{ record }">
           <a-tag :color="qualityColor(record.shading_quality_label)" size="small">{{ record.shading_quality_label }}</a-tag>
+        </template>
+        <template #p4="{ record }">
+          <span class="mono">{{ p4Label(record.p4_version) }}</span>
         </template>
         <template #ops="{ record }">
           <a-button size="mini" type="text" @click="openPreview(record)">预览</a-button>

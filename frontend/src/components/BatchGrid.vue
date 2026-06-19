@@ -1,6 +1,6 @@
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
-import { useStore } from '../store'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useStore, p4Label } from '../store'
 
 const store = useStore()
 const cols = computed(() => store.grid.batches)
@@ -15,10 +15,12 @@ const panel = ref(null)
 const colW = ref(160)         // 单个批次列宽(按全屏标定,固定;窗口拉伸不变)
 const imgH = computed(() => Math.round(colW.value * 9 / 16))   // 16:9 等比
 
-// 临时折叠的批次列(切场景/改筛选后重置)
-const collapsed = reactive(new Set())
-const isCollapsed = (id) => collapsed.has(id)
-function toggle(id) { collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id) }
+// 折叠的批次列(放在 store,按批次 id;跨刷新/改筛选/切场景保留)
+const isCollapsed = (id) => store.gridCollapsed.has(id)
+function toggle(id) {
+  const s = store.gridCollapsed
+  s.has(id) ? s.delete(id) : s.add(id)
+}
 
 // 受控预览:点击缩略图后在整个矩阵里用方向键二维翻看
 //(缩略图用原生 img 渲染,避免上千个重组件;放大体验不变)
@@ -33,7 +35,7 @@ const previewMeta = computed(() => {
   const row = rows.value[pr.value]
   const b = cols.value[pc.value]
   if (!row || !b) return null
-  return { scene_name: row.scene_name, created_at: b.created_at, id: b.id, quality: b.shading_quality_label }
+  return { scene_name: row.scene_name, created_at: b.created_at, id: b.id, p4_version: b.p4_version }
 })
 
 // 该格是否可作为导航落点:有图、列未折叠
@@ -106,7 +108,7 @@ onUnmounted(() => {
   ro?.disconnect()
   window.removeEventListener('keydown', onKey, true)
 })
-watch(cols, () => { collapsed.clear(); recalc() })
+watch(cols, recalc)
 
 const gridStyle = computed(() => ({
   gridTemplateColumns: `${FIRST_COL}px ` +
@@ -137,7 +139,7 @@ const gridStyle = computed(() => ({
                 <span class="date">{{ b.created_at.split(' ')[0] }}</span>
                 <span class="dtime">{{ b.created_at.split(' ')[1] }}</span>
               </div>
-              <div class="bsub"><span class="mono">#{{ b.id }}</span> · {{ b.shading_quality_label }}</div>
+              <div class="bsub"><span class="mono">#{{ b.id }}</span> · {{ p4Label(b.p4_version) }}</div>
               <div class="roles">
                 <button class="role-btn base" :class="{ on: roleOf(b.id) === 'baseline' }"
                   @click="store.setRole(b, 'baseline')">基线</button>
@@ -170,12 +172,20 @@ const gridStyle = computed(() => ({
     <!-- 放大时顶部显示当前图所属检查点 / 批次信息(叠在灯箱之上) -->
     <teleport to="body">
       <div v-if="previewVisible && previewMeta" class="preview-banner">
-        <span class="pb-scene">{{ previewMeta.scene_name }}</span>
-        <span class="pb-dot">·</span>
-        <span class="pb-date">{{ previewMeta.created_at }}</span>
-        <span class="pb-dot">·</span>
-        <span class="mono">批次 #{{ previewMeta.id }}</span>
-        <span class="pb-hint">← → 批次　↑ ↓ 检查点</span>
+        <div class="pb-main">
+          <span class="pb-scene">{{ previewMeta.scene_name }}</span>
+          <span class="pb-meta">
+            <span class="pb-date">{{ previewMeta.created_at }}</span>
+            <span class="pb-dot">·</span>
+            <span class="mono">批次 #{{ previewMeta.id }}</span>
+            <span class="pb-dot">·</span>
+            <span class="mono">{{ p4Label(previewMeta.p4_version) }}</span>
+          </span>
+        </div>
+        <div class="pb-hint">
+          <span class="pb-keys"><kbd>←</kbd><kbd>→</kbd></span>批次
+          <span class="pb-keys"><kbd>↑</kbd><kbd>↓</kbd></span>检查点
+        </div>
       </div>
     </teleport>
   </div>
@@ -184,7 +194,7 @@ const gridStyle = computed(() => ({
 <style scoped>
 .grid-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; }
 .grid-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--color-border-2); border-radius: 8px; }
-.matrix { display: grid; width: max-content; transition: grid-template-columns .26s ease; }
+.matrix { display: grid; width: max-content; transition: grid-template-columns .16s ease; }
 
 .cell {
   border-right: 1px solid var(--color-border-2);
@@ -250,7 +260,9 @@ const gridStyle = computed(() => ({
 .role-btn.base.on { background: rgb(var(--batch-base)); border-color: rgb(var(--batch-base)); color: #fff; }
 .role-btn.cur.on { background: rgb(var(--batch-cur)); border-color: rgb(var(--batch-cur)); color: #fff; }
 
-.imgcell { position: relative; z-index: 1; background: #0d1117; }
+/* contain:折叠动画逐帧改列宽时,把每个图片格的布局/重绘隔离在格内,
+   避免重排/重绘扩散到整张矩阵,显著降低折叠时的卡顿 */
+.imgcell { position: relative; z-index: 1; background: #0d1117; contain: layout paint; }
 .cell.collapsed { padding: 0; overflow: hidden; background: var(--color-fill-2); }
 .thumb { display: block; width: 100%; object-fit: cover; cursor: zoom-in; }
 .missing { display: flex; align-items: center; justify-content: center; color: var(--color-text-4); }
@@ -259,12 +271,27 @@ const gridStyle = computed(() => ({
 .preview-banner {
   position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
   z-index: 100000; pointer-events: none;
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 16px; border-radius: 8px;
-  background: rgba(0, 0, 0, .62); color: #fff; font-size: 13px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 9px 18px; border-radius: 10px;
+  background: rgba(0, 0, 0, .66); color: #fff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
 }
-.preview-banner .pb-scene { font-weight: 600; }
-.preview-banner .pb-date { color: rgb(var(--arcoblue-5)); font-weight: 700; }
-.preview-banner .pb-dot { opacity: .5; }
-.preview-banner .pb-hint { margin-left: 10px; padding-left: 12px; border-left: 1px solid rgba(255, 255, 255, .25); font-size: 12px; opacity: .7; }
+.preview-banner .pb-main { display: flex; align-items: baseline; gap: 10px; }
+.preview-banner .pb-scene { font-size: 14px; font-weight: 600; letter-spacing: .2px; }
+.preview-banner .pb-meta { display: flex; align-items: center; gap: 7px; font-size: 12px; color: rgba(255, 255, 255, .72); }
+.preview-banner .pb-date { color: rgb(var(--arcoblue-5)); font-weight: 600; }
+.preview-banner .pb-dot { opacity: .4; }
+.preview-banner .pb-hint {
+  display: flex; align-items: center; gap: 5px;
+  width: 100%; justify-content: center;
+  padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, .14);
+  font-size: 11px; color: rgba(255, 255, 255, .58);
+}
+.preview-banner .pb-keys { display: inline-flex; gap: 2px; margin-right: 1px; }
+.preview-banner kbd {
+  display: inline-block; min-width: 16px; text-align: center;
+  padding: 1px 4px; border-radius: 4px; line-height: 1.5;
+  font-family: inherit; font-size: 11px;
+  background: rgba(255, 255, 255, .16); border: 1px solid rgba(255, 255, 255, .22);
+}
 </style>
