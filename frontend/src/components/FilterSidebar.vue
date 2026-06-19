@@ -84,7 +84,6 @@ async function reset() {
         <div class="days">
           <a-tag v-for="d in store.filters.created_dates" :key="d" closable size="small"
             color="arcoblue" @close="removeDay(d)">{{ d }}</a-tag>
-          <span v-if="!store.filters.created_dates.length" class="days-hint">未选日期 = 不限</span>
         </div>
       </template>
     </div>
@@ -102,6 +101,5 @@ async function reset() {
 .field { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .field .label { color: var(--color-text-3); font-size: 12px; white-space: nowrap; }
 .days { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 360px; }
-.days-hint { color: var(--color-text-4); font-size: 12px; }
 .spacer { flex: 1; }
 </style>

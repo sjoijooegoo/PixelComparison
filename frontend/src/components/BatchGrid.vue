@@ -6,7 +6,7 @@ const store = useStore()
 const cols = computed(() => store.grid.batches)
 const rows = computed(() => store.grid.rows)
 
-const FIRST_COL = 180         // 首列(检查点名)固定宽
+const FIRST_COL = 140         // 首列(检查点名)固定宽
 const VISIBLE = 8             // 全屏时横向展示的批次列数(据此标定列宽)
 const COLLAPSED_W = 18        // 折叠后列宽(细条)
 const MIN_COL = 120           // 列宽下限
@@ -46,9 +46,8 @@ function cellOk(r, c) {
   return !!b && !isCollapsed(b.id)
 }
 
-function openPreview(row, colIndex) {
-  const r = rows.value.indexOf(row)
-  pr.value = r >= 0 ? r : 0
+function openPreview(rowIndex, colIndex) {
+  pr.value = rowIndex
   pc.value = colIndex
   previewVisible.value = true
 }
@@ -97,6 +96,7 @@ function recalc() {
   colW.value = Math.min(MAX_COL, Math.max(MIN_COL, Math.floor(avail / VISIBLE)))
 }
 let ro
+
 onMounted(() => {
   ro = new ResizeObserver(recalc)
   if (panel.value) ro.observe(panel.value)
@@ -151,14 +151,14 @@ const gridStyle = computed(() => ({
         </div>
 
         <!-- 数据行:首列检查点名 + 各批次缩略图(原生 img,轻量) -->
-        <template v-for="r in rows" :key="r.scene_name">
+        <template v-for="(r, rowIndex) in rows" :key="r.scene_name">
           <div class="cell rowhead" :title="r.scene_name" :style="{ height: imgH + 'px' }">{{ r.scene_name }}</div>
           <div v-for="(url, i) in r.cells" :key="cols[i].id" class="cell imgcell"
             :class="{ collapsed: isCollapsed(cols[i].id) }">
             <template v-if="!isCollapsed(cols[i].id)">
               <img v-if="url" class="thumb" :src="url" :alt="r.scene_name"
                 loading="lazy" decoding="async" :style="{ height: imgH + 'px' }"
-                @click="openPreview(r, i)" />
+                @click="openPreview(rowIndex, i)" />
               <div v-else class="missing" :style="{ height: imgH + 'px' }">—</div>
             </template>
           </div>

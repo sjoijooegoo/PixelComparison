@@ -309,20 +309,38 @@ def upload_screenshot(
     frame_index: int | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    original_scene_name = scene_name
+    filename = file.filename or ""
     if not db.get(Batch, batch_id):
+        log.warning(
+            "截图上报失败 batch=%s scene=%s file=%s reason=batch_not_found",
+            batch_id, original_scene_name, filename,
+        )
         raise HTTPException(404, "batch not found")
-    scene_name = safe_segment(scene_name, "scene name")
+    try:
+        scene_name = safe_segment(scene_name, "scene name")
+    except HTTPException:
+        log.warning(
+            "截图上报失败 batch=%s scene=%s file=%s reason=invalid_scene_name",
+            batch_id, original_scene_name, filename,
+        )
+        raise
     exists = db.scalar(
         select(Screenshot).where(
             Screenshot.batch_id == batch_id, Screenshot.scene_name == scene_name
         )
     )
     if exists:
+        log.info(
+            "截图已存在,跳过 batch=%s scene=%s file=%s",
+            batch_id, scene_name, filename,
+        )
         raise HTTPException(409, f"scene {scene_name} already uploaded")
     out_dir = IMAGES_DIR / "batches" / batch_id
     out_dir.mkdir(parents=True, exist_ok=True)
     path = f"batches/{batch_id}/{scene_name}.png"
-    (IMAGES_DIR / path).write_bytes(file.file.read())
+    data = file.file.read()
+    (IMAGES_DIR / path).write_bytes(data)
     cam = None
     if camera:
         try:
@@ -335,6 +353,10 @@ def upload_screenshot(
     )
     db.add(shot)
     db.commit()
+    log.info(
+        "截图上报成功 batch=%s scene=%s file=%s bytes=%s path=%s",
+        batch_id, scene_name, filename, len(data), path,
+    )
     return {"id": shot.id, "scene_name": scene_name, "url": shot.url}
 
 

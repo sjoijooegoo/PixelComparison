@@ -36,11 +36,16 @@ async function send(method, url, body) {
 }
 
 // multipart 上传:不要手动设 Content-Type,让浏览器带 boundary
-async function upload(url, formData) {
+async function upload(url, formData, context = {}) {
   const res = await fetch(url, { method: 'POST', body: formData })
   if (!res.ok) {
     const detail = (await res.json().catch(() => null))?.detail
-    logger.error('上传失败', `POST ${url}`, res.status, detail || '')
+    const ctx = [
+      context.batchId != null ? `batch=${context.batchId}` : '',
+      context.sceneName ? `scene=${context.sceneName}` : '',
+      context.fileName ? `file=${context.fileName}` : '',
+    ].filter(Boolean).join(' ')
+    logger.error('上传失败', `POST ${url}`, res.status, ctx, detail || '')
     const err = new Error(detail || `${res.status} ${url}`)
     err.status = res.status
     throw err
@@ -55,7 +60,8 @@ export const api = {
   meta: () => get('/api/meta'),
   batches: (params) => get('/api/batches', params),
   createBatch: (body) => post('/api/batches', body),
-  uploadScreenshot: (id, formData) => upload(`/api/batches/${id}/screenshots`, formData),
+  uploadScreenshot: (id, formData, context = {}) =>
+    upload(`/api/batches/${id}/screenshots`, formData, { ...context, batchId: id }),
   autoCompare: (id) => post(`/api/batches/${id}/auto-compare`, {}),
   batchScreenshots: (id) => get(`/api/batches/${id}/screenshots`),
   sceneGrid: (sceneId, params) => get(`/api/scenes/${sceneId}/grid`, params),

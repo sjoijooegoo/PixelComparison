@@ -42,6 +42,54 @@ export const STATUS_META = {
   missing: { label: '缺失', color: 'gray' },
 }
 
+const GRID_CACHE_LIMIT = 8
+const GRID_CACHE_FIELDS = [
+  'platform',
+  'shading_quality',
+  'p4_min',
+  'p4_max',
+  'created_from',
+  'created_to',
+  'created_dates',
+  'q',
+]
+const gridCacheState = globalThis.__PIXELCOMP_GRID_CACHE__ ||= {
+  cache: new Map(),
+  inflight: new Map(),
+}
+const gridCache = gridCacheState.cache
+const gridInflight = gridCacheState.inflight
+
+function emptyGrid() {
+  return { batches: [], rows: [] }
+}
+
+function hasGridParamValue(v) {
+  return !(v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length))
+}
+
+function gridCacheKey(sceneId, filters) {
+  const params = {}
+  for (const field of GRID_CACHE_FIELDS) {
+    const value = filters[field]
+    if (!hasGridParamValue(value)) continue
+    params[field] = Array.isArray(value) ? [...value].sort() : value
+  }
+  return JSON.stringify({ scene_id: sceneId, ...params })
+}
+
+function rememberGrid(key, data) {
+  gridCache.set(key, data)
+  if (gridCache.size > GRID_CACHE_LIMIT) {
+    gridCache.delete(gridCache.keys().next().value)
+  }
+}
+
+function clearGridCache() {
+  gridCache.clear()
+  gridInflight.clear()
+}
+
 export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { scene_ids: [], platforms: [], baselines: [] },
@@ -99,6 +147,9 @@ export const useStore = defineStore('shotdiff', {
       if (dateMode === 'days') return { ...rest, created_dates }
       return { ...rest, created_from, created_to }
     },
+
+    hasEmptyDateSelection: (s) =>
+      s.filters.dateMode === 'days' && !s.filters.created_dates.length,
   },
 
   actions: {
@@ -122,6 +173,11 @@ export const useStore = defineStore('shotdiff', {
     },
 
     async loadBatches() {
+      if (this.hasEmptyDateSelection) {
+        this.batches = []
+        this.batchTotal = 0
+        return
+      }
       const { items, total } = await api.batches({
         ...this.requestFilters,
         page: this.batchPage,
@@ -133,6 +189,7 @@ export const useStore = defineStore('shotdiff', {
 
     // 刷新批次(筛选项 + 列表 + 列表图)
     async refreshBatches() {
+      clearGridCache()
       await this.loadMeta()
       await this.loadBatches()
       if (this.batchView === 'grid') await this.loadGrid()
@@ -140,9 +197,30 @@ export const useStore = defineStore('shotdiff', {
 
     // 批次列表图:同场景多批次的图片矩阵(需先选场景)
     async loadGrid() {
-      if (!this.filters.scene_id) { this.grid = { batches: [], rows: [] }; return }
+      if (!this.filters.scene_id) { this.grid = emptyGrid(); return }
+      if (this.hasEmptyDateSelection) { this.grid = emptyGrid(); return }
       // 传全部筛选(scene_id 在路径里,多余的 status 等会被后端忽略)
-      this.grid = await api.sceneGrid(this.filters.scene_id, this.requestFilters)
+      const sceneId = this.filters.scene_id
+      const filters = this.requestFilters
+      const key = gridCacheKey(sceneId, filters)
+      if (gridCache.has(key)) {
+        this.grid = gridCache.get(key)
+        return this.grid
+      }
+      if (!gridInflight.has(key)) {
+        const request = api.sceneGrid(sceneId, filters)
+          .then((data) => {
+            rememberGrid(key, data)
+            return data
+          })
+          .finally(() => {
+            gridInflight.delete(key)
+          })
+        gridInflight.set(key, request)
+      }
+      const data = await gridInflight.get(key)
+      this.grid = data
+      return data
     },
 
     // role: 'current'(对比) | 'baseline'(基线)

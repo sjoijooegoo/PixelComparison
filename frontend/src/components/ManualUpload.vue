@@ -179,7 +179,7 @@ async function startUpload() {
       if (s.index != null) fd.append('frame_index', String(s.index))
       fd.append('file', s.file, s.file.name)
       try {
-        await api.uploadScreenshot(batchId, fd)
+        await api.uploadScreenshot(batchId, fd, { sceneName: s.name, fileName: s.file.name })
       } catch (e) {
         if (e.status !== 409) { failed++; console.warn('上传失败', s.name, e) }
       }
