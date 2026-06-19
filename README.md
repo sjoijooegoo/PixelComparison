@@ -31,6 +31,12 @@ npm run dev
 
 打开 http://localhost:5173 (dev server 已配置代理,`/api` 与 `/images` 转发到 8000 端口)。
 
+## 日志
+
+- 开发可用 `.\run-dev.ps1` 一键开**两个控制台**(后端 / 前端),实时看日志。
+- 后端请求(`→/←` + 耗时)与关键业务事件(建/删批次、发起对比、对比完成/失败、自动对比)用中文 INFO 打印,并写入 `backend/data/logs/backend.log`(滚动 5MB×5)。
+- 前端 console / 报错经 `POST /api/client-logs` 落到 `backend/data/logs/frontend.log`,便于事后排查。
+
 ## 三个界面(各自独立 URL)
 
 路由:`/batches`(批次管理)、`/comparison`(对比结果)、`/settings`(项目设置);

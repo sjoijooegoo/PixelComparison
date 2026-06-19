@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from './api'
 import { router } from './router'
+import { logger } from './logger'
 
 export const PAGE_SIZE = 10   // 默认每页条数;实际由场景列表按可用高度动态覆盖
 
@@ -171,6 +172,7 @@ export const useStore = defineStore('shotdiff', {
     async runComparison() {
       if (!this.canCompare) return
       this.running = true
+      logger.info('发起对比', `#${this.baselineBatch.id} vs #${this.currentBatch.id}`)
       try {
         const dto = await this._awaitComparison({
           batch_id: this.currentBatch.id,

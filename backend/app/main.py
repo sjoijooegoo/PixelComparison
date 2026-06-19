@@ -17,10 +17,12 @@ from sqlalchemy.orm import Session
 
 from .cleanup import prune_orphans
 from .db import IMAGES_DIR, Base, SessionLocal, engine, get_db, migrate_columns
+from .logging_setup import client_log, log, setup_logging
 from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
 from .service import run_comparison
 from .settings import get_settings, save_settings
 
+setup_logging()
 Base.metadata.create_all(engine)
 migrate_columns()
 
@@ -33,6 +35,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
+
+
+@app.middleware("http")
+async def _log_requests(request, call_next):
+    """记录 /api 请求:进入打 →,完成打 ← 状态 + 耗时(client-logs 自身不记,避免噪音)。"""
+    path = request.url.path
+    if not path.startswith("/api") or path == "/api/client-logs":
+        return await call_next(request)
+    t0 = time.perf_counter()
+    log.info("→ %s %s", request.method, path)
+    try:
+        resp = await call_next(request)
+    except Exception:
+        log.exception("✗ %s %s 处理异常", request.method, path)
+        raise
+    ms = (time.perf_counter() - t0) * 1000
+    log.info("← %s %s %s (%.0fms)", resp.status_code, request.method, path, ms)
+    return resp
 
 ITEM_STATUSES = ("fail", "warn", "pass", "added", "missing")
 
@@ -273,6 +293,7 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db)):
                 pass  # 解析失败则保留默认 now()
         db.add(batch)
         db.commit()
+        log.info("建批次 #%s 场景=%s 平台=%s", batch_id, batch.scene_id, batch.platform)
         return batch_dto(batch, db)
 
 
@@ -445,6 +466,7 @@ def delete_batch(batch_id: str, db: Session = Depends(get_db)):
         raise HTTPException(404, "batch not found")
     comps = _cascade_delete_batches(db, [batch])
     pruned = prune_orphans(db)
+    log.info("删批次 #%s,连带对比 %d 条", batch_id, comps)
     return {
         "deleted": True,
         "batch_id": batch_id,
@@ -469,6 +491,7 @@ def delete_batches_before(created_before: str = Query(...), db: Session = Depend
         return {"deleted_batches": 0, "comparisons_removed": 0, "files_removed": 0}
     comps = _cascade_delete_batches(db, batches)
     pruned = prune_orphans(db)
+    log.info("按日期删批次:删 %d 个(早于 %s),连带对比 %d 条", len(batches), created_before, comps)
     return {
         "deleted_batches": len(batches),
         "comparisons_removed": comps,
@@ -535,6 +558,7 @@ def _evict_old_comparisons(db: Session, keep_id: int | None = None) -> list[int]
         db.commit()
         for tid in [t for t, i in _TASKS.items() if i.get("comparison_id") in evicted]:
             _TASKS.pop(tid, None)
+        log.info("对比超上限 %d,淘汰最旧 %s", _MAX_COMPARISONS, evicted)
     return evicted
 
 
@@ -554,9 +578,11 @@ def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, set
         run_comparison(db, comparison, batch, ref, baseline, settings, on_progress=on_progress)
         db.commit()
         _TASKS[task_id].update(status="done", comparison_id=comparison_id, finished_at=time.monotonic())
+        log.info("对比 #%s 完成,整体差异 %.2f%%", comparison_id, comparison.diff_avg)
     except Exception as e:  # noqa: BLE001
         db.rollback()
         _TASKS[task_id].update(status="error", error=str(e), finished_at=time.monotonic())
+        log.warning("对比 #%s 失败: %s", comparison_id, e)
     finally:
         with _COMPARE_LOCK:
             _RUNNING.pop(comparison_id, None)
@@ -617,6 +643,7 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
         task_id = uuid.uuid4().hex
         _TASKS[task_id] = {"status": "running", "done": 0, "total": 0, "comparison_id": cid, "error": None}
         _RUNNING[cid] = task_id
+        log.info("发起对比 #%s: #%s vs #%s%s", cid, batch.id, ref.id, "(强制重算)" if body.force else "")
         threading.Thread(
             target=_run_compare_task,
             args=(task_id, cid, batch.id, ref.id, baseline.id if baseline else None, get_settings(db)),
@@ -655,7 +682,9 @@ def auto_compare_batch(batch_id: str, db: Session = Depends(get_db)):
         stmt = stmt.where(Batch.shading_quality == bq)
     ref = db.scalars(stmt).first()
     if ref is None:
+        log.info("自动对比 #%s:无同场景/平台/画质的历史批次,跳过", batch.id)
         return {"matched": False}
+    log.info("自动对比 #%s -> 参照 #%s", batch.id, ref.id)
     result = create_comparison(ComparisonIn(batch_id=batch.id, ref_batch_id=ref.id), db)
     return {"matched": True, "ref_batch_id": ref.id, **result}
 
@@ -797,6 +826,32 @@ def list_baselines(db: Session = Depends(get_db)):
             for b in baselines
         ]
     }
+
+
+# ---------------------------------------------------------------- 前端日志上报
+
+_LEVELS = {"info": 20, "warn": 30, "warning": 30, "error": 40, "debug": 10}
+
+
+class ClientLogEntry(BaseModel):
+    level: str = "info"
+    msg: str = ""
+    ts: str | None = None
+
+
+class ClientLogsIn(BaseModel):
+    logs: list[ClientLogEntry] = []
+
+
+@app.post("/api/client-logs", status_code=204)
+def client_logs(body: ClientLogsIn):
+    """前端把日志上报到此,写入 data/logs/frontend.log;尽量宽松,不影响前端。"""
+    for e in body.logs:
+        try:
+            client_log.log(_LEVELS.get((e.level or "info").lower(), 20), "%s", e.msg)
+        except Exception:  # noqa: BLE001
+            pass
+    return None
 
 
 class SettingsIn(BaseModel):

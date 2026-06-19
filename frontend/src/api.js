@@ -1,9 +1,14 @@
+import { logger } from './logger'
+
 async function get(url, params = {}) {
   const qs = new URLSearchParams(
     Object.entries(params).filter(([, v]) => v !== null && v !== undefined && v !== '')
   ).toString()
   const res = await fetch(qs ? `${url}?${qs}` : url)
-  if (!res.ok) throw new Error(`${res.status} ${url}`)
+  if (!res.ok) {
+    logger.error('接口失败', `GET ${url}`, res.status)
+    throw new Error(`${res.status} ${url}`)
+  }
   return res.json()
 }
 
@@ -15,6 +20,7 @@ async function send(method, url, body) {
   })
   if (!res.ok) {
     const detail = (await res.json().catch(() => null))?.detail
+    logger.error('接口失败', `${method} ${url}`, res.status, detail || '')
     const err = new Error(detail || `${res.status} ${url}`)
     err.status = res.status
     throw err
@@ -27,6 +33,7 @@ async function upload(url, formData) {
   const res = await fetch(url, { method: 'POST', body: formData })
   if (!res.ok) {
     const detail = (await res.json().catch(() => null))?.detail
+    logger.error('上传失败', `POST ${url}`, res.status, detail || '')
     const err = new Error(detail || `${res.status} ${url}`)
     err.status = res.status
     throw err

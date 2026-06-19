@@ -131,7 +131,7 @@ def report(manifest_path: Path, base: str, auto_compare: bool = True) -> int:
     shots = manifest.get("screenshots", [])
 
     print(f"后端: {base}")
-    print(f"批次: {body['id']}  场景: {body['scene_id']}  "
+    print(f"批次: {body['id'] or '(后端自动生成)'}  场景: {body['scene_id']}  "
           f"P4: {body['p4_version'] if body['p4_version'] is not None else '-'}  "
           f"平台: {body['platform']}  截图: {len(shots)}")
 
@@ -146,7 +146,11 @@ def report(manifest_path: Path, base: str, auto_compare: bool = True) -> int:
             print(f"  建批次失败: HTTP {status} {resp}")
             return 1
 
-    batch_id = body["id"]
+    # 未指定批次号时,后端会自动生成并在响应里返回,需以返回值为准
+    batch_id = body["id"] or (resp.get("id") if isinstance(resp, dict) else None)
+    if not batch_id:
+        print(f"  无法确定批次号(响应: {resp})")
+        return 1
     ok = fail = 0
     for s in shots:
         img = (pkg_dir / s["image"]).resolve()
