@@ -7,10 +7,12 @@ const cols = computed(() => store.grid.batches)
 const rows = computed(() => store.grid.rows)
 
 const FIRST_COL = 180         // 首列(检查点名)固定宽
-const VISIBLE = 7             // 每页横向展示的批次列数
+const VISIBLE = 8             // 全屏时横向展示的批次列数(据此标定列宽)
 const COLLAPSED_W = 18        // 折叠后列宽(细条)
+const MIN_COL = 120           // 列宽下限
+const MAX_COL = 300           // 列宽上限
 const panel = ref(null)
-const colW = ref(160)         // 单个批次列宽(随容器自适应)
+const colW = ref(160)         // 单个批次列宽(按全屏标定,固定;窗口拉伸不变)
 const imgH = computed(() => Math.round(colW.value * 9 / 16))   // 16:9 等比
 
 // 临时折叠的批次列(切场景/改筛选后重置)
@@ -18,32 +20,58 @@ const collapsed = reactive(new Set())
 const isCollapsed = (id) => collapsed.has(id)
 function toggle(id) { collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id) }
 
-// 受控预览:点击缩略图时,用「本行」的图片列表打开 Arco 灯箱
+// 受控预览:点击缩略图后在整个矩阵里用方向键二维翻看
 //(缩略图用原生 img 渲染,避免上千个重组件;放大体验不变)
+//   ← →  同一检查点的不同批次(跨列)   ↑ ↓  同一批次的不同检查点(跨行)
+//   到边界不循环。跳过空格(无图)与已折叠的列。
 const previewVisible = ref(false)
-const previewList = ref([])
-const previewMeta = ref([])      // 与 previewList 对齐:每张图所属批次信息
-const previewCurrent = ref(0)
+const pr = ref(0)   // 当前行(检查点)下标
+const pc = ref(0)   // 当前列(批次)下标
+
+const previewSrc = computed(() => rows.value[pr.value]?.cells[pc.value] || '')
+const previewMeta = computed(() => {
+  const row = rows.value[pr.value]
+  const b = cols.value[pc.value]
+  if (!row || !b) return null
+  return { scene_name: row.scene_name, created_at: b.created_at, id: b.id, quality: b.shading_quality_label }
+})
+
+// 该格是否可作为导航落点:有图、列未折叠
+function cellOk(r, c) {
+  const row = rows.value[r]
+  if (!row || !row.cells[c]) return false
+  const b = cols.value[c]
+  return !!b && !isCollapsed(b.id)
+}
+
 function openPreview(row, colIndex) {
-  const list = []
-  const meta = []
-  let cur = 0
-  row.cells.forEach((url, i) => {
-    if (!url) return
-    if (i === colIndex) cur = list.length
-    list.push(url)
-    const b = cols.value[i]
-    meta.push({
-      scene_name: row.scene_name,
-      created_at: b.created_at,
-      id: b.id,
-      quality: b.shading_quality_label,
-    })
-  })
-  previewList.value = list
-  previewMeta.value = meta
-  previewCurrent.value = cur
+  const r = rows.value.indexOf(row)
+  pr.value = r >= 0 ? r : 0
+  pc.value = colIndex
   previewVisible.value = true
+}
+
+// 朝某方向找下一个可落点;找不到就停在原地(不循环)
+function step(dRow, dCol) {
+  if (dCol) {
+    for (let c = pc.value + dCol; c >= 0 && c < cols.value.length; c += dCol) {
+      if (cellOk(pr.value, c)) { pc.value = c; return }
+    }
+  } else if (dRow) {
+    for (let r = pr.value + dRow; r >= 0 && r < rows.value.length; r += dRow) {
+      if (cellOk(r, pc.value)) { pr.value = r; return }
+    }
+  }
+}
+
+function onKey(e) {
+  if (!previewVisible.value) return
+  const map = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }
+  const d = map[e.key]
+  if (!d) return
+  e.preventDefault()
+  e.stopPropagation()
+  step(d[0], d[1])
 }
 
 // 基线/对比批次选择(复用 store,与列表视图同一套状态)
@@ -53,20 +81,31 @@ function roleOf(id) {
   return null
 }
 
-// 按面板宽度算列宽:始终用 7 等分,使一屏正好放下 7 个批次列
+// 列宽按「全屏时面板可用宽度」标定,使列宽不随当前窗口拉伸而变:
+//   - 窗口非占面板的部分(留白/滚动条)= innerWidth - 面板宽,与窗口大小无关;
+//   - 全屏面板宽 ≈ 屏幕可用宽 - 该占用 → 据此 7 等分,全屏正好 7 列、其余尺寸下保持不变。
+//   网页缩放(Ctrl±)由浏览器自身缩放固定的 CSS 像素列宽,图片随之放大/缩小;
+//   MIN_COL/MAX_COL 给出最大最小约束。
 function recalc() {
   const el = panel.value
   if (!el) return
-  const avail = el.clientWidth - 24 - FIRST_COL - 8
-  colW.value = Math.max(120, Math.floor(avail / VISIBLE))
+  const chrome = Math.max(0, window.innerWidth - el.clientWidth)   // 面板以外占用(与窗口宽无关)
+  const fullPanelW = (window.screen?.availWidth || window.innerWidth) - chrome
+  const avail = fullPanelW - 24 - FIRST_COL - 8
+  colW.value = Math.min(MAX_COL, Math.max(MIN_COL, Math.floor(avail / VISIBLE)))
 }
 let ro
 onMounted(() => {
   ro = new ResizeObserver(recalc)
   if (panel.value) ro.observe(panel.value)
   recalc()
+  // 用捕获阶段:抢在 Arco 灯箱自身的按键处理之前拿到方向键
+  window.addEventListener('keydown', onKey, true)
 })
-onUnmounted(() => ro?.disconnect())
+onUnmounted(() => {
+  ro?.disconnect()
+  window.removeEventListener('keydown', onKey, true)
+})
 watch(cols, () => { collapsed.clear(); recalc() })
 
 const gridStyle = computed(() => ({
@@ -123,18 +162,20 @@ const gridStyle = computed(() => ({
           </div>
         </template>
       </div>
-      <!-- 放大后 < > 只在本行(同一检查点跨各批次)翻看;关闭即卸载,避免残留遮罩/滚轮锁 -->
-      <a-image-preview-group v-if="previewVisible" :src-list="previewList"
-        v-model:current="previewCurrent" :visible="true" @update:visible="previewVisible = $event"
-        infinite />
+      <!-- 放大后用方向键翻看:← → 跨批次,↑ ↓ 跨检查点(到边界不循环);关闭即卸载,避免残留遮罩/滚轮锁 -->
+      <a-image-preview v-if="previewVisible" :src="previewSrc" :visible="true"
+        @update:visible="previewVisible = $event" />
     </div>
 
-    <!-- 放大时顶部显示当前图所属批次信息(叠在灯箱之上) -->
+    <!-- 放大时顶部显示当前图所属检查点 / 批次信息(叠在灯箱之上) -->
     <teleport to="body">
-      <div v-if="previewVisible && previewMeta[previewCurrent]" class="preview-banner">
-        <span class="pb-date">{{ previewMeta[previewCurrent].created_at }}</span>
+      <div v-if="previewVisible && previewMeta" class="preview-banner">
+        <span class="pb-scene">{{ previewMeta.scene_name }}</span>
         <span class="pb-dot">·</span>
-        <span class="mono">批次 #{{ previewMeta[previewCurrent].id }}</span>
+        <span class="pb-date">{{ previewMeta.created_at }}</span>
+        <span class="pb-dot">·</span>
+        <span class="mono">批次 #{{ previewMeta.id }}</span>
+        <span class="pb-hint">← → 批次　↑ ↓ 检查点</span>
       </div>
     </teleport>
   </div>
@@ -225,4 +266,5 @@ const gridStyle = computed(() => ({
 .preview-banner .pb-scene { font-weight: 600; }
 .preview-banner .pb-date { color: rgb(var(--arcoblue-5)); font-weight: 700; }
 .preview-banner .pb-dot { opacity: .5; }
+.preview-banner .pb-hint { margin-left: 10px; padding-left: 12px; border-left: 1px solid rgba(255, 255, 255, .25); font-size: 12px; opacity: .7; }
 </style>
