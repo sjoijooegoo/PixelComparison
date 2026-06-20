@@ -107,6 +107,7 @@ export const useStore = defineStore('shotdiff', {
     batchView: 'list',                 // list(列表) | grid(列表图:同场景多批次图片矩阵)
     grid: { batches: [], rows: [] },   // 批次列表图数据
     gridCollapsed: new Set(),          // 列表图已折叠的批次列(按批次 id;跨刷新/切场景保留)
+    gridHeatmaps: null,                // 列表图热力图列:{ current_id, baseline_id, exists, map:{scene_name:url} };只读命中缓存,不触发计算
     uploadVisible: false,              // 手动上报弹窗(由顶栏按钮触发)
     // 对比的两侧选择(角色)
     currentBatch: null,   // 对比批次(待检查)
@@ -260,6 +261,7 @@ export const useStore = defineStore('shotdiff', {
       const key = gridCacheKey(sceneId, filters)
       if (gridCache.has(key)) {
         this.grid = gridCache.get(key)
+        this.loadGridHeatmaps()
         return this.grid
       }
       if (!gridInflight.has(key)) {
@@ -275,6 +277,7 @@ export const useStore = defineStore('shotdiff', {
       }
       const data = await gridInflight.get(key)
       this.grid = data
+      this.loadGridHeatmaps()
       return data
     },
 
@@ -288,11 +291,34 @@ export const useStore = defineStore('shotdiff', {
       }
       if (role === 'current') this.currentBatch = batch
       else this.baselineBatch = batch
+      this.loadGridHeatmaps()
     },
 
     clearRole(role) {
       if (role === 'current') this.currentBatch = null
       else this.baselineBatch = null
+      this.loadGridHeatmaps()
+    },
+
+    // 列表图热力图列:两侧都选且都属于当前场景列表图时,只读查找已有对比的各检查点热力图;
+    // 命中缓存即填充,未对比过则 exists=false(留空提示),绝不触发计算。
+    async loadGridHeatmaps() {
+      const cur = this.currentBatch
+      const base = this.baselineBatch
+      const inGrid = (b) => b && this.grid.batches.some((x) => x.id === b.id)
+      if (!cur || !base || cur.id === base.id || !inGrid(cur) || !inGrid(base)) {
+        this.gridHeatmaps = null
+        return
+      }
+      const res = await api.comparisonLookup(cur.id, base.id)
+      // 异步返回后两侧选择可能已变,确认仍是同一对再写入
+      if (this.currentBatch?.id !== cur.id || this.baselineBatch?.id !== base.id) return
+      this.gridHeatmaps = {
+        current_id: cur.id,
+        baseline_id: base.id,
+        exists: !!res.exists,
+        map: res.heatmaps || {},
+      }
     },
 
     async loadComparisons() {
@@ -328,7 +354,9 @@ export const useStore = defineStore('shotdiff', {
         })
         await this.openComparison(comparison, flip)
         await this.loadComparisons()   // 刷新历史(可能新增了一条)
-        router.push('/comparison')     // 发起对比后自动跳到结果页
+        this.loadGridHeatmaps()        // 新对比已生成,列表图热力图列可直接命中
+        // 列表图里发起对比后留在原页(热力图列就地填充);列表视图仍跳到结果页
+        if (this.batchView !== 'grid') router.push('/comparison')
         return comparison
       } finally {
         this.running = false
@@ -350,6 +378,7 @@ export const useStore = defineStore('shotdiff', {
         })
         await this.openComparison(comparison, flip)
         await this.loadComparisons()
+        this.loadGridHeatmaps()        // 重算后热力图已更新,刷新列表图热力图列
         return comparison
       } finally {
         this.running = false

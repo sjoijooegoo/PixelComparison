@@ -67,6 +67,8 @@ export const api = {
   sceneGrid: (sceneId, params) => get(`/api/scenes/${sceneId}/grid`, params),
   comparisons: (filters) => get('/api/comparisons', filters),
   createComparison: (body) => post('/api/comparisons', body),
+  comparisonLookup: (batchId, refBatchId) =>
+    get('/api/comparisons/lookup', { batch_id: batchId, ref_batch_id: refBatchId }),
   comparisonTask: (taskId) => get(`/api/comparisons/tasks/${taskId}`),
   scenes: (comparisonId, params) => get(`/api/comparisons/${comparisonId}/scenes`, params),
   item: (id) => get(`/api/items/${id}`),

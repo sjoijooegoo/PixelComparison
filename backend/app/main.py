@@ -701,6 +701,26 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
     return {"task_id": task_id, "status": "running", "done": 0, "total": 0, "flip": flip}
 
 
+@app.get("/api/comparisons/lookup")
+def lookup_comparison(batch_id: str, ref_batch_id: str, db: Session = Depends(get_db)):
+    """只读:给定一对批次(忽略方向)返回已存在的对比及各检查点热力图;
+    不存在则 exists=false,绝不触发计算。供列表图热力图列命中缓存直接展示。"""
+    existing = db.scalars(
+        select(Comparison).where(or_(
+            and_(Comparison.batch_id == batch_id, Comparison.ref_batch_id == ref_batch_id),
+            and_(Comparison.batch_id == ref_batch_id, Comparison.ref_batch_id == batch_id),
+        )).order_by(Comparison.created_at.desc())
+    ).first()
+    if not existing:
+        return {"exists": False}
+    items = db.scalars(
+        select(ComparisonItem).where(ComparisonItem.comparison_id == existing.id)
+    ).all()
+    heatmaps = {it.scene_name: f"/images/{it.heatmap_path}"
+                for it in items if it.heatmap_path}
+    return {"exists": True, "comparison": comparison_dto(existing, db), "heatmaps": heatmaps}
+
+
 @app.post("/api/batches/{batch_id}/auto-compare", status_code=202)
 def auto_compare_batch(batch_id: str, db: Session = Depends(get_db)):
     """自动对比:挑一个"同场景 + 同平台 + 同画质"、创建时间早于本批次的最新批次作为参照并发起对比。
