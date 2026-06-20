@@ -3,7 +3,8 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useStore } from '../store'
 
 const store = useStore()
-const metrics = computed(() => store.detail?.metrics)
+const detail = computed(() => store.orientedDetail)   // 按当前换向(flip)取向
+const metrics = computed(() => detail.value?.metrics)
 const histMode = ref('RGB')
 const histCanvas = ref(null)
 
@@ -75,7 +76,7 @@ onMounted(drawHist)
     <template v-if="metrics">
       <div class="hero">
         <div class="hero-label text-secondary">差异率(像素)</div>
-        <div class="hero-value mono" :style="{ color: HERO_COLOR[store.detail.status] || 'var(--color-text-1)' }">
+        <div class="hero-value mono" :style="{ color: HERO_COLOR[detail.status] || 'var(--color-text-1)' }">
           {{ metrics.diff_pct.toFixed(2) }}<span class="hero-unit">%</span>
         </div>
       </div>
@@ -105,7 +106,7 @@ onMounted(drawHist)
         </a-collapse-item>
       </a-collapse>
     </template>
-    <a-empty v-else-if="store.detail" description="该场景无对比指标" style="margin-top: 40px" />
+    <a-empty v-else-if="detail" description="该场景无对比指标" style="margin-top: 40px" />
   </aside>
 </template>
 

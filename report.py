@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -55,7 +56,9 @@ def _field(name: str, value: str, boundary: str) -> bytes:
 
 
 def post_screenshot(base: str, batch_id: str, scene_name: str, image_path: Path,
-                    camera=None, frame_index=None):
+                    camera=None, frame_index=None, attempts: int = 3):
+    """上传单张截图,最多 attempts 次机会:网络错误/5xx 视为偶发,退避后重试;
+    409(已存在)与其它 4xx 不重试,直接返回。"""
     boundary = uuid.uuid4().hex
     parts = [_field("scene_name", scene_name, boundary)]
     if camera is not None:
@@ -69,17 +72,26 @@ def post_screenshot(base: str, batch_id: str, scene_name: str, image_path: Path,
     )
     parts.append(image_path.read_bytes())
     parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
-    req = urllib.request.Request(
-        base + f"/api/batches/{batch_id}/screenshots", data=b"".join(parts), method="POST",
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-    )
-    try:
-        with urllib.request.urlopen(req) as resp:
-            return resp.status, None
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", "ignore")
-    except urllib.error.URLError as e:
-        return None, str(e)
+    data = b"".join(parts)
+    url = base + f"/api/batches/{batch_id}/screenshots"
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+
+    code, err = None, None
+    for i in range(1, attempts + 1):
+        req = urllib.request.Request(url, data=data, method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, None
+        except urllib.error.HTTPError as e:
+            code, err = e.code, e.read().decode("utf-8", "ignore")
+        except urllib.error.URLError as e:
+            code, err = None, str(e)
+        transient = code is None or code >= 500   # 网络错误 / 服务端错误才重试
+        if not transient or i == attempts:
+            return code, err
+        print(f"  ↻ {scene_name} 第 {i} 次失败(HTTP {code}),重试…")
+        time.sleep(0.3 * i)
+    return code, err
 
 
 def build_batch_body(manifest: dict) -> dict:

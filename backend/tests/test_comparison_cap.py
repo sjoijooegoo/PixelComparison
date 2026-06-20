@@ -32,11 +32,11 @@ def test_cap_evicts_oldest(client, png_bytes, monkeypatch):
     monkeypatch.setattr(app.main, "_MAX_COMPARISONS", 3)
     images = app.db.IMAGES_DIR
 
-    for bid in ("a", "b", "c"):
+    for bid in ("a", "b", "c", "d"):
         _batch_with_shot(client, bid, png_bytes)
 
-    # 4 对不同的 (batch, ref),按顺序创建;cap=3 -> 第 4 次淘汰最早的一条
-    pairs = [("b", "a"), ("c", "a"), ("c", "b"), ("a", "b")]
+    # 4 对不同的无方向批次对(正反向视作同一对),按顺序创建;cap=3 -> 第 4 次淘汰最早的一条
+    pairs = [("b", "a"), ("c", "a"), ("c", "b"), ("d", "a")]
     comps = [_run_compare(client, cur, ref) for cur, ref in pairs]
     first_id = comps[0]["id"]
 

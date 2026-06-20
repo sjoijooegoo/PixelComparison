@@ -73,7 +73,7 @@ function onSearch(val) {
 
     <a-spin :loading="store.loading" class="list-wrap">
       <div class="list" ref="listEl">
-        <div v-for="s in store.scenes" :key="s.id" class="item"
+        <div v-for="s in store.orientedScenes" :key="s.id" class="item"
           :class="{ selected: s.id === store.detail?.id }"
           @click="store.selectScene(s.id)">
           <img :src="s.thumb_url" loading="lazy" alt="">

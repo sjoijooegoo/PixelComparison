@@ -153,6 +153,25 @@ function onStart() {
   }
 }
 
+// 单张截图上传:最多 3 次机会。网络错误/5xx 视为偶发,重试(退避);
+// 409=已存在按"跳过"原样抛出;其他 4xx 重试无意义,直接抛。
+async function uploadShot(batchId, s, attempts = 3) {
+  for (let i = 1; i <= attempts; i++) {
+    const fd = new FormData()
+    fd.append('scene_name', s.name)
+    if (s.camera != null) fd.append('camera', JSON.stringify(s.camera))
+    if (s.index != null) fd.append('frame_index', String(s.index))
+    fd.append('file', s.file, s.file.name)
+    try {
+      return await api.uploadScreenshot(batchId, fd, { sceneName: s.name, fileName: s.file.name })
+    } catch (e) {
+      const transient = !e.status || e.status >= 500
+      if (e.status === 409 || !transient || i === attempts) throw e
+      await new Promise((r) => setTimeout(r, 300 * i))   // 退避 300/600ms 后重试
+    }
+  }
+}
+
 // ---- 执行上报,流程对齐 report.py ----
 async function startUpload() {
   // 数据包未带 P4 时,采用用户手填的版本号(选填)
@@ -173,15 +192,10 @@ async function startUpload() {
 
     let failed = 0
     for (const s of parsed.shots) {
-      const fd = new FormData()
-      fd.append('scene_name', s.name)
-      if (s.camera != null) fd.append('camera', JSON.stringify(s.camera))
-      if (s.index != null) fd.append('frame_index', String(s.index))
-      fd.append('file', s.file, s.file.name)
       try {
-        await api.uploadScreenshot(batchId, fd, { sceneName: s.name, fileName: s.file.name })
+        await uploadShot(batchId, s)
       } catch (e) {
-        if (e.status !== 409) { failed++; console.warn('上传失败', s.name, e) }
+        if (e.status !== 409) { failed++; console.warn('上传失败(已重试 3 次)', s.name, e) }
       }
       progress.done++
     }

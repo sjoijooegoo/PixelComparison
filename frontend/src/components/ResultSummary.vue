@@ -4,7 +4,7 @@ import { Message } from '@arco-design/web-vue'
 import { useStore, p4Label } from '../store'
 
 const store = useStore()
-const c = computed(() => store.selectedComparison)
+const c = computed(() => store.orientedComparison)   // 按当前换向(flip)取向展示
 const open = ref(false)
 
 function diffColor(v) {
@@ -83,6 +83,16 @@ async function rerun() {
       </template>
     </a-popover>
 
+    <a-tooltip content="交换基线 / 对比">
+      <button class="swap-btn" :disabled="store.running" @click="store.swapComparison()" aria-label="交换基线/对比">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M7 4 3 8l4 4" /><path d="M3 8h14" />
+          <path d="m17 20 4-4-4-4" /><path d="M21 16H7" />
+        </svg>
+      </button>
+    </a-tooltip>
+
     <div class="spacer"></div>
 
     <div class="facts">
@@ -127,6 +137,14 @@ async function rerun() {
 .br { font-size: 12px; }
 .vs { font-size: 11px; font-weight: 700; color: var(--color-text-4); margin: 0 4px; }
 
+.swap-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--color-border-2); background: transparent;
+  color: var(--color-text-2); transition: background-color .15s, color .15s;
+}
+.swap-btn:hover { background: var(--color-fill-2); color: rgb(var(--arcoblue-6)); }
+.swap-btn:disabled { cursor: not-allowed; opacity: .5; }
 .spacer { flex: 1; }
 .facts { display: flex; align-items: center; gap: 18px; white-space: nowrap; }
 .fact { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }

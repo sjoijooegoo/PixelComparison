@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from .cleanup import prune_orphans
@@ -642,15 +642,23 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
     # 临界区:查重 / 建行 / 起任务,避免并发产生重复对比或重复计算
     evicted: list[int] = []
     with _COMPARE_LOCK:
-        comparison = db.scalars(
+        # 无方向查重:同一对批次正反向只存一行;反向请求命中后由前端翻转展示
+        existing = db.scalars(
             select(Comparison)
-            .where(Comparison.batch_id == batch.id, Comparison.ref_batch_id == ref.id)
+            .where(or_(
+                and_(Comparison.batch_id == batch.id, Comparison.ref_batch_id == ref.id),
+                and_(Comparison.batch_id == ref.id, Comparison.ref_batch_id == batch.id),
+            ))
             .order_by(Comparison.created_at.desc())
         ).first()
-        if comparison and not body.force:
-            return {"status": "done", "comparison": comparison_dto(comparison, db)}
-        if comparison is None:
-            # 先建空行拿到稳定 id;唯一索引兜底防重复
+        # flip:库内方向与本次请求相反(请求的 batch 实际是库里的参照)
+        flip = bool(existing) and existing.batch_id != batch.id
+
+        if existing and not body.force:
+            return {"status": "done", "comparison": comparison_dto(existing, db), "flip": flip}
+
+        if existing is None:
+            # 先建空行拿到稳定 id(按请求方向为规范方向)
             comparison = Comparison(
                 batch_id=batch.id, ref_batch_id=ref.id,
                 baseline_id=baseline.id if baseline else None,
@@ -659,28 +667,38 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             db.commit()
             # 新增了一行 -> 超限则淘汰最旧的对比(返回的 id 供下面清热力图)
             evicted = _evict_old_comparisons(db, keep_id=comparison.id)
+            comp_batch_id, comp_ref_id, comp_baseline = batch.id, ref.id, baseline
+        else:
+            # force 重算:复用该行,按其库内方向重算(基线取库内参照的 active 基线)
+            comparison = existing
+            comp_batch_id, comp_ref_id = existing.batch_id, existing.ref_batch_id
+            comp_baseline = db.scalar(
+                select(Baseline).where(
+                    Baseline.source_batch_id == comp_ref_id, Baseline.status == "active"
+                )
+            )
         cid = comparison.id
 
         # 已有任务在算这条对比 -> 直接复用其进度,不重复起线程
         if cid in _RUNNING:
             t = _TASKS.get(_RUNNING[cid], {})
             return {"task_id": _RUNNING[cid], "status": t.get("status", "running"),
-                    "done": t.get("done", 0), "total": t.get("total", 0)}
+                    "done": t.get("done", 0), "total": t.get("total", 0), "flip": flip}
 
         _prune_tasks()
         task_id = uuid.uuid4().hex
         _TASKS[task_id] = {"status": "running", "done": 0, "total": 0, "comparison_id": cid, "error": None}
         _RUNNING[cid] = task_id
-        log.info("发起对比 #%s: #%s vs #%s%s", cid, batch.id, ref.id, "(强制重算)" if body.force else "")
+        log.info("发起对比 #%s: #%s vs #%s%s", cid, comp_batch_id, comp_ref_id, "(强制重算)" if body.force else "")
         threading.Thread(
             target=_run_compare_task,
-            args=(task_id, cid, batch.id, ref.id, baseline.id if baseline else None, get_settings(db)),
+            args=(task_id, cid, comp_batch_id, comp_ref_id, comp_baseline.id if comp_baseline else None, get_settings(db)),
             daemon=True,
         ).start()
     # 锁外清理被淘汰对比的热力图目录(已无 DB 记录,成孤儿)
     if evicted:
         prune_orphans(db)
-    return {"task_id": task_id, "status": "running", "done": 0, "total": 0}
+    return {"task_id": task_id, "status": "running", "done": 0, "total": 0, "flip": flip}
 
 
 @app.post("/api/batches/{batch_id}/auto-compare", status_code=202)

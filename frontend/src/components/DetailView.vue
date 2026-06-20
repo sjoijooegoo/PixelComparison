@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useStore } from '../store'
 
 const store = useStore()
-const detail = computed(() => store.detail)
+const detail = computed(() => store.orientedDetail)   // 按当前换向(flip)取向
 const paired = computed(() => !!(detail.value?.current_url && detail.value?.baseline_url))
 
 // 相机位姿(新版上报带):location(x,y,z) + rotation(pitch,yaw,roll)
@@ -76,7 +76,7 @@ onUnmounted(() => {
       </div>
 
       <a-alert v-if="detail.status === 'added'" type="info" style="margin-top:10px">
-        新增检查点:基线批次 ({{ store.selectedComparison?.ref_label }}) 中没有此检查点,确认无误后可将其晋升进基线。
+        新增检查点:基线批次 ({{ store.orientedComparison?.ref_label }}) 中没有此检查点,确认无误后可将其晋升进基线。
       </a-alert>
       <a-alert v-if="detail.status === 'missing'" type="error" style="margin-top:10px">
         检查点缺失:基线批次中存在此检查点,但对比批次未产出截图,请检查采集任务。
@@ -122,7 +122,7 @@ onUnmounted(() => {
           <span class="tag" style="left:10px">基线版本</span>
           <span class="tag" style="right:10px">对比版本</span>
         </div>
-        <div class="meta text-secondary">拖动分割线对比两个版本<template v-if="store.selectedComparison?.resolution"> · {{ store.selectedComparison.resolution }}</template> · PNG</div>
+        <div class="meta text-secondary">拖动分割线对比两个版本<template v-if="store.orientedComparison?.resolution"> · {{ store.orientedComparison.resolution }}</template> · PNG</div>
       </div>
 
       <!-- 检查点切换:浮动在右下角 -->

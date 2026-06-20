@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useStore, p4Label } from '../store'
+import { useStore } from '../store'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
 import BatchGrid from './BatchGrid.vue'
@@ -147,7 +147,7 @@ function roleOf(record) {
           <a-tag :color="qualityColor(record.shading_quality_label)" size="small">{{ record.shading_quality_label }}</a-tag>
         </template>
         <template #p4="{ record }">
-          <span class="mono">{{ p4Label(record.p4_version) }}</span>
+          <span class="mono">{{ record.p4_version ?? '——' }}</span>
         </template>
         <template #ops="{ record }">
           <a-button size="mini" type="text" @click="openPreview(record)">预览</a-button>

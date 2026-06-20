@@ -42,6 +42,10 @@ export const STATUS_META = {
   missing: { label: '缺失', color: 'gray' },
 }
 
+// 换向(flip)时单点状态对调:新增↔缺失,其余不变
+const REVERSE_STATUS = { added: 'missing', missing: 'added' }
+const reverseStatus = (s) => REVERSE_STATUS[s] || s
+
 const GRID_CACHE_LIMIT = 8
 const GRID_CACHE_FIELDS = [
   'platform',
@@ -112,6 +116,7 @@ export const useStore = defineStore('shotdiff', {
     comparisons: [],
     // 运行后的活动对比
     selectedComparison: null,
+    flip: false,          // 结果页换向:true 时把当前对比按"基线↔对比"翻转展示
     running: false,
     progress: { done: 0, total: 0 },   // 后台对比进度
 
@@ -150,6 +155,56 @@ export const useStore = defineStore('shotdiff', {
 
     hasEmptyDateSelection: (s) =>
       s.filters.dateMode === 'days' && !s.filters.created_dates.length,
+
+    // ---- 换向展示:flip=true 时把规范方向的数据按"基线↔对比"翻转 ----
+    // 当前检查点详情(三视图/指标面板用):对调当前/基线图、状态、直方图
+    orientedDetail: (s) => {
+      const d = s.detail
+      if (!d || !s.flip) return d
+      const m = d.metrics
+      return {
+        ...d,
+        current_url: d.baseline_url,
+        baseline_url: d.current_url,
+        status: reverseStatus(d.status),
+        metrics: m ? { ...m, hist_current: m.hist_baseline, hist_baseline: m.hist_current } : m,
+      }
+    },
+
+    // 检查点缩略图列表:翻转时缩略图取另一侧
+    orientedScenes: (s) =>
+      s.flip
+        ? s.scenes.map((it) => ({ ...it, thumb_url: it.baseline_url || it.current_url }))
+        : s.scenes,
+
+    // 状态计数:翻转时新增↔缺失对调
+    orientedCounts: (s) => {
+      const c = s.counts
+      if (!s.flip) return c
+      return { ...c, added: c.missing, missing: c.added }
+    },
+
+    // 对比对(摘要头部):翻转时对调两侧批次信息,整体状态按对调后的计数推算
+    orientedComparison: (s) => {
+      const c = s.selectedComparison
+      if (!c) return c
+      if (!s.flip) return c
+      const cn = s.counts
+      const status = (cn.fail || cn.added) ? 'fail' : (cn.warn || cn.missing) ? 'warn' : 'pass'
+      return {
+        ...c,
+        status,
+        batch_id: c.ref_batch_id,
+        ref_batch_id: c.batch_id,
+        p4_version: c.ref_p4_version,
+        ref_p4_version: c.p4_version,
+        shading_quality_label: c.ref_shading_quality_label,
+        ref_shading_quality_label: c.shading_quality_label,
+        batch_created_at: c.ref_created_at,
+        ref_created_at: c.batch_created_at,
+        ref_label: `#${c.batch_id}`,   // 翻转后参照=原对比批次(不一定是已晋升基线)
+      }
+    },
   },
 
   actions: {
@@ -247,15 +302,17 @@ export const useStore = defineStore('shotdiff', {
     },
 
     // 发起对比 -> 命中缓存直接返回;否则轮询后台任务进度直到完成
+    // 返回 { comparison, flip }:flip 表示库内方向与请求相反(由前端翻转展示)
     async _awaitComparison(body) {
       this.progress = { done: 0, total: 0 }
       const res = await api.createComparison(body)
-      if (res.status === 'done' && res.comparison) return res.comparison   // 缓存命中
+      const flip = !!res.flip
+      if (res.status === 'done' && res.comparison) return { comparison: res.comparison, flip }
       while (true) {
         await new Promise((r) => setTimeout(r, 400))
         const t = await api.comparisonTask(res.task_id)
         this.progress = { done: t.done, total: t.total }
-        if (t.status === 'done') return t.comparison
+        if (t.status === 'done') return { comparison: t.comparison, flip }
         if (t.status === 'error') throw new Error(t.error || '对比失败')
       }
     },
@@ -265,42 +322,50 @@ export const useStore = defineStore('shotdiff', {
       this.running = true
       logger.info('发起对比', `#${this.baselineBatch.id} vs #${this.currentBatch.id}`)
       try {
-        const dto = await this._awaitComparison({
+        const { comparison, flip } = await this._awaitComparison({
           batch_id: this.currentBatch.id,
           ref_batch_id: this.baselineBatch.id,
         })
-        await this.openComparison(dto)
+        await this.openComparison(comparison, flip)
         await this.loadComparisons()   // 刷新历史(可能新增了一条)
         router.push('/comparison')     // 发起对比后自动跳到结果页
-        return dto
+        return comparison
       } finally {
         this.running = false
         this.progress = { done: 0, total: 0 }
       }
     },
 
-    // 强制重算当前对比(批次截图变更等场景)
+    // 强制重算当前对比(批次截图变更等场景);沿用当前查看方向(flip)
     async rerunComparison() {
       const c = this.selectedComparison
       if (!c) return
+      const flip = this.flip
       this.running = true
       try {
-        const dto = await this._awaitComparison({
+        const { comparison } = await this._awaitComparison({
           batch_id: c.batch_id,
           ref_batch_id: c.ref_batch_id,
           force: true,
         })
-        await this.openComparison(dto)
+        await this.openComparison(comparison, flip)
         await this.loadComparisons()
-        return dto
+        return comparison
       } finally {
         this.running = false
         this.progress = { done: 0, total: 0 }
       }
     },
 
-    async openComparison(comparison) {
+    // 结果页换向:纯展示翻转(数据已含两侧),零网络
+    async swapComparison() {
+      if (!this.selectedComparison) return
+      this.flip = !this.flip
+    },
+
+    async openComparison(comparison, flip = false) {
       this.selectedComparison = comparison
+      this.flip = flip
       this.page = 1
       this.sceneSearch = ''
       this.sceneSort = 'name'
