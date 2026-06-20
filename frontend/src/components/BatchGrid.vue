@@ -32,14 +32,6 @@ const heatExists = computed(() => !!heatForPair.value?.exists)
 const heatNoCache = computed(() => heatForPair.value?.exists === false)
 const heatUrl = (sceneName) => (heatExists.value ? heatForPair.value.map[sceneName] || '' : '')
 
-// 热力图单图放大(独立于矩阵方向键导航)
-const heatmapVisible = ref(false)
-const heatmapSrc = ref('')
-function openHeatmap(url) {
-  if (!url) return
-  heatmapSrc.value = url
-  heatmapVisible.value = true
-}
 // 刚算完的热力图文件可能有极短的落盘/服务竞态导致首次 404,失败后带缓存戳重试几次
 function onHeatErr(e) {
   const img = e.target
@@ -55,6 +47,7 @@ const grabbing = ref(false)
 let panning = false, moved = false, startX = 0, startY = 0, startLeft = 0, startTop = 0
 function onPanDown(e) {
   if (e.button !== 0 || previewVisible.value) return   // 仅左键;放大灯箱开启时不平移
+  if (e.target.closest('.head, .rowhead')) return      // 表头行 + 检查点名首列(整个框)不参与拖拽,仅图片区域可拖
   const el = scroll.value
   if (!el) return
   e.preventDefault()   // 阻止浏览器对 <img> 的原生拖拽(否则会吞掉 mousemove/mouseup,导致拖不动且状态卡住)
@@ -101,18 +94,32 @@ const previewVisible = ref(false)
 const pr = ref(0)   // 当前行(检查点)下标
 const pc = ref(0)   // 当前列(批次)下标
 
-const previewSrc = computed(() => rows.value[pr.value]?.cells[pc.value] || '')
+// 列索引 == cols.length 表示最右侧「差异热力图」虚拟列
+const isHeatCol = (c) => c === cols.value.length
+const previewSrc = computed(() => {
+  const row = rows.value[pr.value]
+  if (!row) return ''
+  if (isHeatCol(pc.value)) return heatUrl(row.scene_name)
+  return row.cells[pc.value] || ''
+})
 const previewMeta = computed(() => {
   const row = rows.value[pr.value]
+  if (!row) return null
+  if (isHeatCol(pc.value)) {
+    return { scene_name: row.scene_name, isHeat: true,
+             baseId: baselineBatch.value?.id, curId: currentBatch.value?.id }
+  }
   const b = cols.value[pc.value]
-  if (!row || !b) return null
+  if (!b) return null
   return { scene_name: row.scene_name, created_at: b.created_at, id: b.id, p4_version: b.p4_version }
 })
 
-// 该格是否可作为导航落点:有图、列未折叠
+// 该格是否可作为导航落点:有图、列未折叠;热力图虚拟列需该行有合法热力图
 function cellOk(r, c) {
   const row = rows.value[r]
-  if (!row || !row.cells[c]) return false
+  if (!row) return false
+  if (isHeatCol(c)) return heatExists.value && !!heatUrl(row.scene_name)
+  if (!row.cells[c]) return false
   const b = cols.value[c]
   return !!b && !isCollapsed(b.id)
 }
@@ -126,7 +133,7 @@ function openPreview(rowIndex, colIndex) {
 // 朝某方向找下一个可落点;找不到就停在原地(不循环)
 function step(dRow, dCol) {
   if (dCol) {
-    for (let c = pc.value + dCol; c >= 0 && c < cols.value.length; c += dCol) {
+    for (let c = pc.value + dCol; c >= 0 && c <= cols.value.length; c += dCol) {
       if (cellOk(pr.value, c)) { pc.value = c; return }
     }
   } else if (dRow) {
@@ -291,7 +298,7 @@ const gridStyle = computed(() => ({
               <img v-if="heatUrl(r.scene_name)" :key="heatUrl(r.scene_name)" class="thumb"
                 :src="heatUrl(r.scene_name)" :alt="r.scene_name" draggable="false"
                 :style="{ height: imgH + 'px' }"
-                @error="onHeatErr" @click="openHeatmap(heatUrl(r.scene_name))" />
+                @error="onHeatErr" @click="openPreview(rowIndex, cols.length)" />
               <div v-else class="missing" :style="{ height: imgH + 'px' }">—</div>
             </template>
             <div v-else class="heat-blank" :style="{ height: imgH + 'px' }"></div>
@@ -301,9 +308,6 @@ const gridStyle = computed(() => ({
       <!-- 放大后用方向键翻看:← → 跨批次,↑ ↓ 跨检查点(到边界不循环);关闭即卸载,避免残留遮罩/滚轮锁 -->
       <a-image-preview v-if="previewVisible" :src="previewSrc" :visible="true"
         @update:visible="previewVisible = $event" />
-      <!-- 热力图单图放大(独立预览) -->
-      <a-image-preview v-if="heatmapVisible" :src="heatmapSrc" :visible="true"
-        @update:visible="heatmapVisible = $event" />
     </div>
 
     <!-- 放大时顶部显示当前图所属检查点 / 批次信息(叠在灯箱之上) -->
@@ -311,7 +315,14 @@ const gridStyle = computed(() => ({
       <div v-if="previewVisible && previewMeta" class="preview-banner">
         <div class="pb-main">
           <span class="pb-scene">{{ previewMeta.scene_name }}</span>
-          <span class="pb-meta">
+          <span v-if="previewMeta.isHeat" class="pb-meta">
+            <span class="pb-date">差异热力图</span>
+            <span class="pb-dot">·</span>
+            <span class="mono">基线 #{{ previewMeta.baseId }}</span>
+            <span class="pb-dot">VS</span>
+            <span class="mono">对比 #{{ previewMeta.curId }}</span>
+          </span>
+          <span v-else class="pb-meta">
             <span class="pb-date">{{ previewMeta.created_at }}</span>
             <span class="pb-dot">·</span>
             <span class="mono">批次 #{{ previewMeta.id }}</span>
@@ -334,6 +345,8 @@ const gridStyle = computed(() => ({
 /* 拖拽平移进行中:统一抓手光标(覆盖图片的 zoom-in),并禁止选中 */
 .grid-scroll.grabbing { cursor: grabbing; user-select: none; }
 .grid-scroll.grabbing * { cursor: grabbing !important; }
+/* 表头行 + 检查点名首列不可拖,光标恢复默认(内部按钮自带 pointer 不受影响) */
+.head, .rowhead { cursor: default; }
 .matrix { display: grid; width: max-content; transition: grid-template-columns .16s ease; }
 
 .cell {
