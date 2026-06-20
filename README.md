@@ -31,6 +31,12 @@ npm run dev
 
 打开 http://localhost:5173 (dev server 已配置代理,`/api` 与 `/images` 转发到 8000 端口)。
 
+## 测试
+
+- 后端单测 + 并发用例:`cd backend; .\.venv\Scripts\python -m pytest -q`(含 `tests/test_concurrency.py` 多人并发上报/对比/读写)。
+- 前端交互 E2E + 多人并发界面冒烟(需后端+前端在跑):见 [scripts/README.md](scripts/README.md)
+  (`node scripts/e2e/run-all.mjs`、`node scripts/ui-load-smoke.mjs`)。
+
 ## 日志
 
 - 开发可用 `.\run-dev.ps1` 一键开**两个控制台**(后端 / 前端),实时看日志。

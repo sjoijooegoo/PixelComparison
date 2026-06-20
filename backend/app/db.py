@@ -115,3 +115,12 @@ def migrate_columns() -> None:
             ))
     except Exception:
         pass  # 历史遗留重复数据时跳过,不阻断启动
+    # 同一批次内 scene_name 唯一;防并发同名上传重复(应用层 409 兜底)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_screenshot_batch_scene "
+                "ON screenshots(batch_id, scene_name)"
+            ))
+    except Exception:
+        pass  # 历史遗留重复数据时跳过,不阻断启动

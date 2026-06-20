@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -32,6 +32,8 @@ class Batch(Base):
 class Screenshot(Base):
     """截图只属于批次;基线图即基线批次里的截图。"""
     __tablename__ = "screenshots"
+    # 同一批次内检查点名唯一:防并发同名上传产生重复行(应用层 409 兜底)
+    __table_args__ = (UniqueConstraint("batch_id", "scene_name", name="uq_screenshot_batch_scene"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"), index=True)

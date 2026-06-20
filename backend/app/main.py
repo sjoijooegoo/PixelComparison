@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .cleanup import prune_orphans
@@ -359,7 +360,13 @@ def upload_screenshot(
         camera=cam, frame_index=frame_index,
     )
     db.add(shot)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发同名上传:唯一约束兜底,视为"已存在"
+        db.rollback()
+        log.info("截图并发同名,跳过 batch=%s scene=%s", batch_id, scene_name)
+        raise HTTPException(409, f"scene {scene_name} already uploaded")
     log.info(
         "截图上报成功 batch=%s scene=%s file=%s bytes=%s path=%s",
         batch_id, scene_name, filename, len(data), path,
@@ -619,8 +626,19 @@ def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, set
         _TASKS[task_id].update(status="error", error=str(e), finished_at=time.monotonic())
         log.warning("对比 #%s 失败: %s", comparison_id, e)
     finally:
+        # 并发高峰时,建对比时若其它对比都在计算中可能无法淘汰、总数暂时超限;
+        # 任务完成、离开 _RUNNING 后再补一次淘汰,使总数最终收敛回上限。
+        evicted: list[int] = []
         with _COMPARE_LOCK:
             _RUNNING.pop(comparison_id, None)
+            try:
+                # keep_id=自己:绝不淘汰刚算完(最可能正被查看)的这条,优先淘汰更早的
+                evicted = _evict_old_comparisons(db, keep_id=comparison_id)
+            except Exception as e:  # noqa: BLE001
+                db.rollback()
+                log.warning("完成后淘汰对比失败(忽略): %s", e)
+        if evicted:
+            prune_orphans(db)
         db.close()
 
 
