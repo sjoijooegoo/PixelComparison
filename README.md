@@ -77,7 +77,7 @@ frontend/src/
 ## 批次上报与主要接口
 
 ```
-POST   /api/batches                      # 建批次;scene_id/platform 必填,id/p4_version/shading_quality(画质)可选
+POST   /api/batches                      # 建批次;scene_id/platform 必填,id/p4_version/shading_quality 可选;overwrite=true 同号删旧建新
 POST   /api/batches/{id}/screenshots     # multipart: scene_name + file(+camera/frame_index)
 GET    /api/batches/{id}/screenshots     # 该批次截图列表(预览/列表图用)
 DELETE /api/batches/{id}                 # 级联删除批次(连带其对比/对比项/基线/图片)
@@ -93,8 +93,9 @@ GET/PUT /api/settings                    # 读取 / 更新对比算法配置
 - 批次由 CI / 游戏端采集模块上报;`id` 省略时后端按**已有数字批次号自增**生成,`pipeline_data` 整体可省略。
 - 平台侧选两个**同场景ID**的批次发起对比(**可跨平台**);对比**异步执行**,前端轮询 `tasks/{task_id}` 获取进度,完成后持久化复用,`force=true` 强制重算。
 - 未带 `p4_version` 也能上报(前端显示「——」);`shading_quality`(0–5)对应 节能/流畅/均衡/精美/极致/电影,缺省按「极致」。
+- **同号覆盖**:上报体带 `overwrite=true`(脚本 `report.py --overwrite` 或 manifest `overwrite` 字段;网页手动上报勾选「覆盖同号批次」)时,若批次号已存在则**删旧建新**(连带清除旧批次的对比/对比项/基线/热力图);不带则同号返回 409,按现有补传逻辑处理。
 
-上报方式:① 网页「手动上报」拖入数据包文件夹;② 脚本 [`report.py`](report.py)(`python report.py <目录> --host <ip> --port <port>`);
+上报方式:① 网页「手动上报」拖入数据包文件夹;② 脚本 [`report.py`](report.py)(`python report.py <目录> --host <ip> --port <port>`,调用详解见 [docs/report脚本使用.md](docs/report脚本使用.md));
 数据包格式/示例见 [mock_uploads/](mock_uploads/README.md),接入细节见 [docs/上报接入指南.md](docs/上报接入指南.md)。
 
 ## 数据模型

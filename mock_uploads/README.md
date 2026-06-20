@@ -26,7 +26,8 @@
   "pipeline_data": {
     "batch_id": "7",
     "batch_url": "https://devops.woa.com/.../executeDetail",
-    "captured_at": "2024-06-01T10:00:00"
+    "captured_at": "2024-06-01T10:00:00",
+    "overwrite": false
   },
   "ue_data": {
     "levelsequence_path": "/Game/Cinematics/Seq_Lv_Starfall.Seq_Lv_Starfall",
@@ -57,6 +58,7 @@
 | `pipeline_data.batch_id` | `Batch.id` | 批次号 |
 | `pipeline_data.batch_url` | `Batch.batch_url` | 真实流水线链接(批次ID超链接用它,旧数据回退占位地址) |
 | `pipeline_data.captured_at` | `Batch.created_at` | 采集时间(ISO8601) |
+| `pipeline_data.overwrite`(或顶层 `overwrite`) | — | 可选;`true` 时若批次号已存在则**删旧建新**(连带清旧对比/热力图),否则同号返回 409。也可用 `report.py --overwrite` 强制 |
 | `ue_data.world_name` | `Batch.scene_id` | 场景 ID(UE Level),**同场景才能对比** |
 | `ue_data.platform` | `Batch.platform` | **归一化**:WindowsEditor→Windows、IOSEditor→iOS、AndroidEditor→Android |
 | `ue_data.p4_version` | `Batch.p4_version` | P4 changelist(字符串,后端转 int,越大越新;**可省略**) |

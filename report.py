@@ -10,6 +10,8 @@
     python report.py ./pkg --host 10.30.129.32 --port 8000  # 指定 IP/端口
     python report.py ./pkg --base http://host:8000          # 或直接给完整地址
     python report.py ./pkg --base 10.30.129.32:8000         # --base 省略 http:// 也可
+    python report.py ./pkg --overwrite                      # 批次号已存在则覆盖重建(删旧建新)
+    python report.py ./pkg --batch_id 88 --p4version 251200 # 命令行覆盖批次号/P4(优先于 manifest)
     BASE=http://host:8000 python report.py ./pkg            # 也支持 BASE/HOST/PORT 环境变量
 
 流程:
@@ -119,6 +121,8 @@ def build_batch_body(manifest: dict) -> dict:
         "levelsequence_path": ue.get("levelsequence_path"),
         "shading_quality": ue.get("shading_quality"),
         "captured_at": pipeline.get("captured_at"),
+        # 覆盖同号批次:manifest 里 overwrite / pipeline_data.overwrite 任一为真即可(也可用 --overwrite 强制)
+        "overwrite": bool(pipeline.get("overwrite") or manifest.get("overwrite")),
     }
 
 
@@ -136,10 +140,21 @@ def resolve_manifest(arg: str) -> Path:
     return p
 
 
-def report(manifest_path: Path, base: str, auto_compare: bool = True) -> int:
+def report(manifest_path: Path, base: str, auto_compare: bool = True,
+           overwrite: bool = False, batch_id: str | None = None,
+           batch_url: str | None = None, p4_version: int | None = None) -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     pkg_dir = manifest_path.parent
     body = build_batch_body(manifest)
+    if overwrite:
+        body["overwrite"] = True   # 命令行强制覆盖(优先于 manifest 设定)
+    # 命令行显式覆盖对应字段(优先于 manifest)
+    if batch_id is not None:
+        body["id"] = str(batch_id)
+    if batch_url is not None:
+        body["batch_url"] = batch_url
+    if p4_version is not None:
+        body["p4_version"] = p4_version
     shots = manifest.get("screenshots", [])
 
     print(f"后端: {base}")
@@ -153,10 +168,12 @@ def report(manifest_path: Path, base: str, auto_compare: bool = True) -> int:
         return 2
     if status not in (200, 201):
         if status == 409:
-            print("  批次已存在,继续补传截图…")
+            print("  批次已存在,继续补传截图…(如需替换旧数据请加 --overwrite)")
         else:
             print(f"  建批次失败: HTTP {status} {resp}")
             return 1
+    elif body.get("overwrite"):
+        print("  批次已存在 → 已覆盖重建(旧截图/对比已清除)")
 
     # 未指定批次号时,后端会自动生成并在响应里返回,需以返回值为准
     batch_id = body["id"] or (resp.get("id") if isinstance(resp, dict) else None)
@@ -216,9 +233,18 @@ def main() -> None:
                     help="后端完整地址,如 http://10.30.129.32:8000;给了它则忽略 --host/--port")
     ap.add_argument("--no-auto-compare", action="store_true",
                     help="上传完成后不自动与历史批次对比")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="批次号已存在时覆盖重建(删除旧截图与其对比/热力图),而非补传")
+    ap.add_argument("--batch_id", default=None,
+                    help="批次号,覆盖 manifest 里的批次号(不给则用 manifest 或后端自增)")
+    ap.add_argument("--batch_url", default=None,
+                    help="流水线/构建链接,覆盖 manifest 里的 batch_url")
+    ap.add_argument("--p4version", type=int, default=None,
+                    help="P4 版本号(changelist,整数),覆盖 manifest 里的 p4_version")
     args = ap.parse_args()
     sys.exit(report(resolve_manifest(args.manifest), resolve_base(args),
-                    auto_compare=not args.no_auto_compare))
+                    auto_compare=not args.no_auto_compare, overwrite=args.overwrite,
+                    batch_id=args.batch_id, batch_url=args.batch_url, p4_version=args.p4version))
 
 
 if __name__ == "__main__":

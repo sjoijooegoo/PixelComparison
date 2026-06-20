@@ -192,6 +192,7 @@ class BatchIn(BaseModel):
     levelsequence_path: str | None = None
     shading_quality: int | None = None
     captured_at: str | None = None
+    overwrite: bool = False        # 同号批次已存在时:True=删旧建新(级联清对比/热力图),False=409
 
 
 @app.get("/api/batches")
@@ -276,8 +277,14 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db)):
     with _BATCH_LOCK:
         if body.id:
             batch_id = safe_segment(body.id, "batch id")
-            if db.get(Batch, batch_id):
-                raise HTTPException(409, f"batch {batch_id} already exists")
+            existing = db.get(Batch, batch_id)
+            if existing:
+                if not body.overwrite:
+                    raise HTTPException(409, f"batch {batch_id} already exists")
+                # 覆盖:级联删旧批次(截图/对比/对比项/由其晋升的基线;计算中相关对比会抛 409),再清孤儿文件
+                _cascade_delete_batches(db, [existing])
+                prune_orphans(db)
+                log.info("覆盖批次 #%s", batch_id)
         else:
             batch_id = _next_batch_id(db)
         batch = Batch(

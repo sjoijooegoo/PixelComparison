@@ -12,6 +12,7 @@ const dragOver = ref(false)
 const error = ref('')
 const autoCompare = ref(true)
 const idExists = ref(false)      // 该批次 ID 是否已存在(重复上报会变成补传/合并)
+const overwrite = ref(false)     // 同号批次已存在时:勾选则删旧建新
 const fileInput = ref(null)
 const manualP4 = ref(null)       // 数据包未带 P4 时,用户手填的版本号
 
@@ -23,6 +24,7 @@ function reset() {
   stage.value = 'idle'
   error.value = ''
   idExists.value = false
+  overwrite.value = false
   parsed.body = null
   parsed.shots = []
   parsed.missing = []
@@ -141,10 +143,13 @@ async function parsePackage(map) {
 // 点击「开始上报」:ID 已存在则先弹确认,说明会变成补传/合并
 function onStart() {
   if (idExists.value) {
+    const content = overwrite.value
+      ? `将删除批次 #${parsed.body.id} 的旧截图与其对比记录(及热力图)并用本次数据重建。是否继续?`
+      : '该批次号已存在,继续不会新建批次,而是把截图补传/合并进已有批次(同名截图会跳过)。是否继续?'
     Modal.confirm({
       title: `批次 #${parsed.body.id} 已存在`,
-      content: '该批次号已存在,继续不会新建批次,而是把截图补传/合并进已有批次(同名截图会跳过)。是否继续?',
-      okText: '继续上报',
+      content,
+      okText: overwrite.value ? '覆盖重建' : '继续上报',
       cancelText: '取消',
       onOk: () => startUpload(),
     })
@@ -178,6 +183,7 @@ async function startUpload() {
   if (parsed.body.p4_version == null && manualP4.value != null && manualP4.value !== '') {
     parsed.body.p4_version = Number(manualP4.value)
   }
+  parsed.body.overwrite = overwrite.value   // 同号覆盖:后端删旧建新
   stage.value = 'uploading'
   progress.done = 0
   progress.total = parsed.shots.length
@@ -187,7 +193,7 @@ async function startUpload() {
       const created = await api.createBatch(parsed.body)
       batchId = created.id   // 后端可能自动生成批次号,以返回值为准
     } catch (e) {
-      if (e.status !== 409) throw e   // 409=已存在(id 已提供),沿用原 id 继续补传
+      if (e.status !== 409) throw e   // 409=已存在(未勾覆盖),沿用原 id 继续补传
     }
 
     let failed = 0
@@ -260,8 +266,12 @@ async function startUpload() {
         <span v-if="parsed.missing.length" class="miss">(缺失 {{ parsed.missing.length }} 张,将跳过)</span>
       </div>
       <a-alert v-if="idExists" type="warning" style="margin-top:12px">
-        批次 <b>#{{ parsed.body.id }}</b> 已存在!继续不会新建批次,只会把截图补传/合并进该批次(同名截图跳过)。
+        批次 <b>#{{ parsed.body.id }}</b> 已存在!默认会把截图补传/合并进该批次(同名截图跳过);
+        勾选下方「覆盖」则删除旧数据后重建。
       </a-alert>
+      <a-checkbox v-if="idExists" v-model="overwrite" style="margin-top:10px; display:block; color: rgb(var(--red-6))">
+        覆盖同号批次(删除旧截图与其对比/热力图后重建)
+      </a-checkbox>
       <a-checkbox v-model="autoCompare" style="margin-top:10px">上传完成后自动对比(同场景+平台+画质的最新历史批次)</a-checkbox>
       <div class="actions">
         <a-button @click="reset">重新选择</a-button>
