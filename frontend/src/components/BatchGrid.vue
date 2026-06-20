@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { Message } from '@arco-design/web-vue'
 import { useStore, p4Label } from '../store'
 
 const store = useStore()
@@ -12,6 +13,7 @@ const COLLAPSED_W = 18        // 折叠后列宽(细条)
 const MIN_COL = 120           // 列宽下限
 const MAX_COL = 300           // 列宽上限
 const panel = ref(null)
+const scroll = ref(null)      // 滚动容器(用于拖拽平移)
 const colW = ref(160)         // 单个批次列宽(按全屏标定,固定;窗口拉伸不变)
 const imgH = computed(() => Math.round(colW.value * 9 / 16))   // 16:9 等比
 
@@ -46,6 +48,42 @@ function onHeatErr(e) {
   img.dataset.retry = n + 1
   const base = img.src.split('?')[0]
   setTimeout(() => { img.src = `${base}?r=${Date.now()}` }, 300 * (n + 1))
+}
+
+// 拖拽平移:按住矩阵上下左右拖动滚动;移动超过阈值才算拖拽(并吞掉尾随 click,避免误触放大)
+const grabbing = ref(false)
+let panning = false, moved = false, startX = 0, startY = 0, startLeft = 0, startTop = 0
+function onPanDown(e) {
+  if (e.button !== 0 || previewVisible.value) return   // 仅左键;放大灯箱开启时不平移
+  const el = scroll.value
+  if (!el) return
+  e.preventDefault()   // 阻止浏览器对 <img> 的原生拖拽(否则会吞掉 mousemove/mouseup,导致拖不动且状态卡住)
+  panning = true; moved = false
+  startX = e.clientX; startY = e.clientY
+  startLeft = el.scrollLeft; startTop = el.scrollTop
+  window.addEventListener('mousemove', onPanMove, true)
+  window.addEventListener('mouseup', onPanUp, true)
+}
+function onPanMove(e) {
+  if (!panning) return
+  const dx = e.clientX - startX, dy = e.clientY - startY
+  if (!moved && Math.hypot(dx, dy) > 5) { moved = true; grabbing.value = true }
+  if (moved) {
+    e.preventDefault()
+    scroll.value.scrollLeft = startLeft - dx
+    scroll.value.scrollTop = startTop - dy
+  }
+}
+function onPanUp() {
+  window.removeEventListener('mousemove', onPanMove, true)
+  window.removeEventListener('mouseup', onPanUp, true)
+  if (moved) {
+    // 吞掉这次拖拽尾随的 click(捕获阶段),避免触发图片放大
+    const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault() }
+    window.addEventListener('click', swallow, true)
+    setTimeout(() => window.removeEventListener('click', swallow, true), 0)
+  }
+  panning = false; moved = false; grabbing.value = false
 }
 
 // 折叠的批次列(放在 store,按批次 id;跨刷新/改筛选/切场景保留)
@@ -114,6 +152,22 @@ function roleOf(id) {
   if (store.baselineBatch?.id === id) return 'baseline'
   return null
 }
+// 列头角色按钮:再点一次当前角色则取消(补偿列表图里没有选择条的 × 清除)
+function toggleRole(b, role) {
+  if (roleOf(b.id) === role) store.clearRole(role)
+  else store.setRole(b, role)
+}
+
+// 发起对比(列表图内,入口在热力图表头按钮);同场景天然成立,无需跨场景守卫
+async function runCompare() {
+  if (!store.canCompare || store.running) return
+  try {
+    await store.runComparison()
+    Message.success('对比完成')
+  } catch (e) {
+    Message.error(e.message || '对比失败')
+  }
+}
 
 // 列宽按「全屏时面板可用宽度」标定,使列宽不随当前窗口拉伸而变:
 //   - 窗口非占面板的部分(留白/滚动条)= innerWidth - 面板宽,与窗口大小无关;
@@ -141,6 +195,8 @@ onMounted(() => {
 onUnmounted(() => {
   ro?.disconnect()
   window.removeEventListener('keydown', onKey, true)
+  window.removeEventListener('mousemove', onPanMove, true)
+  window.removeEventListener('mouseup', onPanUp, true)
 })
 watch(cols, recalc)
 // 选择变化 / 切场景(cols 变)时刷新热力图列(组件级兜底,store 内也会触发)
@@ -157,7 +213,7 @@ const gridStyle = computed(() => ({
   <div class="grid-panel" ref="panel">
     <a-empty v-if="!store.filters.scene_id" description="请先在上方筛选条选择一个场景" style="margin-top: 60px" />
     <a-empty v-else-if="!cols.length" description="该场景下暂无批次" style="margin-top: 60px" />
-    <div v-else class="grid-scroll">
+    <div v-else class="grid-scroll" :class="{ grabbing }" ref="scroll" @mousedown="onPanDown">
       <div class="matrix" :style="gridStyle">
         <!-- 表头行:左上角 + 每个批次 -->
         <div class="cell head corner">检查点 \ 批次</div>
@@ -180,9 +236,9 @@ const gridStyle = computed(() => ({
               <div class="bsub"><span class="mono">#{{ b.id }}</span> · {{ p4Label(b.p4_version) }}</div>
               <div class="roles">
                 <button class="role-btn base" :class="{ on: roleOf(b.id) === 'baseline' }"
-                  @click="store.setRole(b, 'baseline')">基线</button>
+                  @click="toggleRole(b, 'baseline')">基线</button>
                 <button class="role-btn cur" :class="{ on: roleOf(b.id) === 'current' }"
-                  @click="store.setRole(b, 'current')">对比</button>
+                  @click="toggleRole(b, 'current')">对比</button>
               </div>
             </div>
           </template>
@@ -190,23 +246,31 @@ const gridStyle = computed(() => ({
 
         <!-- 末列表头:差异热力图(吸附右侧),展示已选基线/对比批次信息 -->
         <div class="cell head heat-head">
-          <template v-if="bothSelected">
-            <div class="heat-cmp">
-              <div class="cmp-col base">
-                <span class="cmp-pill base">基线</span>
-                <span class="cmp-date">{{ baselineBatch.created_at.split(' ')[0] }}</span>
-                <span class="cmp-p4">{{ p4Label(baselineBatch.p4_version) }}</span>
+          <div class="heat-title" :class="{ 'is-btn': bothSelected && heatNoCache }">
+            <a-button v-if="bothSelected && heatNoCache" type="primary" size="mini" long
+              :loading="store.running" :disabled="!store.canCompare || store.running" @click="runCompare">
+              {{ store.running && store.progress.total ? `对比中 ${store.progress.done}/${store.progress.total}` : '发起对比' }}
+            </a-button>
+            <template v-else><span class="heat-title-dot"></span>差异对比</template>
+          </div>
+          <div class="heat-body">
+            <template v-if="bothSelected">
+              <div class="heat-cmp">
+                <div class="cmp-col base">
+                  <span class="cmp-pill base">基线</span>
+                  <span class="cmp-date">{{ baselineBatch.created_at.split(' ')[0] }}</span>
+                  <span class="cmp-p4">{{ p4Label(baselineBatch.p4_version) }}</span>
+                </div>
+                <div class="cmp-mid"><span class="cmp-vs">VS</span></div>
+                <div class="cmp-col cur">
+                  <span class="cmp-pill cur">对比</span>
+                  <span class="cmp-date">{{ currentBatch.created_at.split(' ')[0] }}</span>
+                  <span class="cmp-p4">{{ p4Label(currentBatch.p4_version) }}</span>
+                </div>
               </div>
-              <div class="cmp-mid"><span class="cmp-vs">VS</span></div>
-              <div class="cmp-col cur">
-                <span class="cmp-pill cur">对比</span>
-                <span class="cmp-date">{{ currentBatch.created_at.split(' ')[0] }}</span>
-                <span class="cmp-p4">{{ p4Label(currentBatch.p4_version) }}</span>
-              </div>
-            </div>
-            <div v-if="heatNoCache" class="heat-hint">尚无对比,此列为空</div>
-          </template>
-          <div v-else class="heat-empty">选择基线 / 对比批次</div>
+            </template>
+            <div v-else class="heat-empty">选择基线 / 对比批次</div>
+          </div>
         </div>
 
         <!-- 数据行:首列检查点名 + 各批次缩略图(原生 img,轻量) -->
@@ -215,7 +279,7 @@ const gridStyle = computed(() => ({
           <div v-for="(url, i) in r.cells" :key="cols[i].id" class="cell imgcell"
             :class="{ collapsed: isCollapsed(cols[i].id) }">
             <template v-if="!isCollapsed(cols[i].id)">
-              <img v-if="url" class="thumb" :src="url" :alt="r.scene_name"
+              <img v-if="url" class="thumb" :src="url" :alt="r.scene_name" draggable="false"
                 loading="lazy" decoding="async" :style="{ height: imgH + 'px' }"
                 @click="openPreview(rowIndex, i)" />
               <div v-else class="missing" :style="{ height: imgH + 'px' }">—</div>
@@ -225,7 +289,7 @@ const gridStyle = computed(() => ({
           <div class="cell imgcell heat-cell">
             <template v-if="heatExists">
               <img v-if="heatUrl(r.scene_name)" :key="heatUrl(r.scene_name)" class="thumb"
-                :src="heatUrl(r.scene_name)" :alt="r.scene_name"
+                :src="heatUrl(r.scene_name)" :alt="r.scene_name" draggable="false"
                 :style="{ height: imgH + 'px' }"
                 @error="onHeatErr" @click="openHeatmap(heatUrl(r.scene_name))" />
               <div v-else class="missing" :style="{ height: imgH + 'px' }">—</div>
@@ -266,7 +330,10 @@ const gridStyle = computed(() => ({
 
 <style scoped>
 .grid-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; }
-.grid-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--color-border-2); border-radius: 8px; }
+.grid-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--color-border-2); border-radius: 8px; cursor: grab; }
+/* 拖拽平移进行中:统一抓手光标(覆盖图片的 zoom-in),并禁止选中 */
+.grid-scroll.grabbing { cursor: grabbing; user-select: none; }
+.grid-scroll.grabbing * { cursor: grabbing !important; }
 .matrix { display: grid; width: max-content; transition: grid-template-columns .16s ease; }
 
 .cell {
@@ -358,9 +425,25 @@ const gridStyle = computed(() => ({
   border-right: 0; border-left: 2px solid rgb(var(--arcoblue-5));
   /* fill-2 是半透明 token,叠在不透明 bg-3 上得到不透明的浅色调,滚动时不透出内容 */
   background: linear-gradient(var(--color-fill-2), var(--color-fill-2)), var(--color-bg-3);
-  height: auto; min-height: 84px;
-  align-items: center; justify-content: center; gap: 6px; padding: 6px 8px;
+  height: 94px; overflow: hidden;   /* 固定高度:发起对比按钮 / 空态提示切换时表头不抖动 */
+  flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0; padding: 0;
 }
+/* 顶部「差异对比」标题条:贯穿整列、蓝色强调 + 下分隔线 */
+.heat-title {
+  display: flex; align-items: center; justify-content: center;
+  height: 32px; box-sizing: border-box; padding: 0 8px;   /* 固定高度:标题文字 / 发起对比按钮两态等高,下方卡片对齐 */
+  border-bottom: 1px solid var(--color-border-2);
+  font-size: 12px; font-weight: 700; letter-spacing: .3px;
+  color: rgb(var(--arcoblue-6));
+}
+.heat-title-dot {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+  background: rgb(var(--arcoblue-5)); margin-right: 5px; vertical-align: -1px;
+}
+/* 按钮态:让「发起对比」按钮撑满标题条(高度仍由 .heat-title 固定,保证两态等高) */
+.heat-title.is-btn { padding: 0 6px; }
+.heat-title.is-btn :deep(.arco-btn) { width: 100%; }
+.heat-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; }
 /* 基线 / 对比 两栏,中间 VS 徽标 + 竖向分隔线,日期与 P4 按角色着色(参照对比结果卡片) */
 .heat-cmp {
   display: grid; grid-template-columns: 1fr auto 1fr;

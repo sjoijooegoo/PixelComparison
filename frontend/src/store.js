@@ -109,9 +109,10 @@ export const useStore = defineStore('shotdiff', {
     gridCollapsed: new Set(),          // 列表图已折叠的批次列(按批次 id;跨刷新/切场景保留)
     gridHeatmaps: null,                // 列表图热力图列:{ current_id, baseline_id, exists, map:{scene_name:url} };只读命中缓存,不触发计算
     uploadVisible: false,              // 手动上报弹窗(由顶栏按钮触发)
-    // 对比的两侧选择(角色)
+    // 对比的两侧选择(角色);currentBatch/baselineBatch 是「当前场景」的激活镜像
     currentBatch: null,   // 对比批次(待检查)
     baselineBatch: null,  // 基线批次(参照)
+    rolesByScene: {},     // 按场景记忆的选择 { sceneId: { baseline, current } };切场景保留、切回即恢复
 
     // 历史对比列表(对比结果页左侧)
     comparisons: [],
@@ -228,7 +229,20 @@ export const useStore = defineStore('shotdiff', {
       this.settings = await api.saveSettings(patch)
     },
 
+    // 切到某场景时,把激活的选择切换为该场景记忆的选择(无则置空)。
+    // 仅在选定了场景、且当前激活的不是该场景时才动;同场景内换页/改日期为 no-op。
+    syncRolesForScene() {
+      const sid = this.filters.scene_id
+      if (!sid) return
+      const activeScene = this.baselineBatch?.scene_id || this.currentBatch?.scene_id
+      if (activeScene === sid) return
+      const saved = this.rolesByScene[sid]
+      this.baselineBatch = saved?.baseline || null
+      this.currentBatch = saved?.current || null
+    },
+
     async loadBatches() {
+      this.syncRolesForScene()
       if (this.hasEmptyDateSelection) {
         this.batches = []
         this.batchTotal = 0
@@ -281,6 +295,16 @@ export const useStore = defineStore('shotdiff', {
       return data
     },
 
+    // 把当前激活的选择写入按场景记忆表(都为空则删除该场景条目)
+    _saveRoles(scene) {
+      if (!scene) return
+      if (this.baselineBatch || this.currentBatch) {
+        this.rolesByScene[scene] = { baseline: this.baselineBatch, current: this.currentBatch }
+      } else {
+        delete this.rolesByScene[scene]
+      }
+    },
+
     // role: 'current'(对比) | 'baseline'(基线)
     setRole(batch, role) {
       const other = role === 'current' ? this.baselineBatch : this.currentBatch
@@ -291,12 +315,15 @@ export const useStore = defineStore('shotdiff', {
       }
       if (role === 'current') this.currentBatch = batch
       else this.baselineBatch = batch
+      this._saveRoles(batch.scene_id)
       this.loadGridHeatmaps()
     },
 
     clearRole(role) {
+      const scene = this.currentBatch?.scene_id || this.baselineBatch?.scene_id || this.filters.scene_id
       if (role === 'current') this.currentBatch = null
       else this.baselineBatch = null
+      this._saveRoles(scene)
       this.loadGridHeatmaps()
     },
 
@@ -322,7 +349,7 @@ export const useStore = defineStore('shotdiff', {
     },
 
     async loadComparisons() {
-      // 对比历史不随批次页筛选(尤其场景ID)过滤,始终加载全部(已有 25 条上限)
+      // 对比历史不随批次页筛选(尤其场景ID)过滤,始终加载全部(已有 100 条上限)
       const { items } = await api.comparisons({})
       this.comparisons = items
     },

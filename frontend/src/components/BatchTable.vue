@@ -106,8 +106,8 @@ function roleOf(record) {
       </a-radio-group>
     </div>
 
-    <!-- 选择条:已选的对比批次 / 基线批次 + 发起对比(两种视图都可用) -->
-    <div class="select-bar">
+    <!-- 选择条:已选的对比批次 / 基线批次 + 发起对比(仅列表视图;列表图视图改用热力图表头按钮) -->
+    <div v-if="store.batchView === 'list'" class="select-bar">
       <div class="slot">
         <span class="slot-tag slot-base">基线批次</span>
         <template v-if="store.baselineBatch">

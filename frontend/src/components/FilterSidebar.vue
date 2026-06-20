@@ -130,7 +130,7 @@ async function reset() {
 }
 .field { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .field .label { color: var(--color-text-3); font-size: 12px; white-space: nowrap; }
-.days { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 360px; }
+.days { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 500px; }
 .day-cell {
   width: 100%;
   height: 100%;

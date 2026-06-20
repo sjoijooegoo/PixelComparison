@@ -545,7 +545,7 @@ _RUNNING: dict[int, str] = {}   # comparison_id -> 正在计算它的 task_id
 _TASK_TTL_SECONDS = 3600
 
 # 对比历史全局上限;新建对比超过它就淘汰创建时间最早的(环形历史)。
-_MAX_COMPARISONS = 25
+_MAX_COMPARISONS = 100
 
 
 def _prune_tasks(now: float | None = None) -> None:
