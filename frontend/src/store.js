@@ -265,6 +265,19 @@ export const useStore = defineStore('shotdiff', {
       if (this.batchView === 'grid') await this.loadGrid()
     },
 
+    // 删除单个批次(级联删其对比/对比项/基线/图片/热力图/缩略图);清理本地选择并刷新
+    async deleteBatch(id) {
+      await api.deleteBatch(id)
+      if (this.currentBatch?.id === id) this.currentBatch = null
+      if (this.baselineBatch?.id === id) this.baselineBatch = null
+      for (const k of Object.keys(this.rolesByScene)) {
+        const r = this.rolesByScene[k]
+        if (r.baseline?.id === id) r.baseline = null
+        if (r.current?.id === id) r.current = null
+      }
+      await this.refreshBatches()
+    },
+
     // 批次列表图:同场景多批次的图片矩阵(需先选场景)
     async loadGrid() {
       if (!this.filters.scene_id) { this.grid = emptyGrid(); return }

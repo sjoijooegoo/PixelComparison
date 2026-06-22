@@ -2,6 +2,15 @@
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore, p4Label } from '../store'
+import { thumbUrl } from '../api'
+
+// 缩略图加载失败时回退原图(只回退一次,防循环)
+function onThumbErr(e, orig) {
+  const img = e.target
+  if (img.dataset.fb || !orig) return
+  img.dataset.fb = '1'
+  img.src = orig
+}
 
 const store = useStore()
 const cols = computed(() => store.grid.batches)
@@ -286,9 +295,9 @@ const gridStyle = computed(() => ({
           <div v-for="(url, i) in r.cells" :key="cols[i].id" class="cell imgcell"
             :class="{ collapsed: isCollapsed(cols[i].id) }">
             <template v-if="!isCollapsed(cols[i].id)">
-              <img v-if="url" class="thumb" :src="url" :alt="r.scene_name" draggable="false"
+              <img v-if="url" class="thumb" :src="thumbUrl(url)" :alt="r.scene_name" draggable="false"
                 loading="lazy" decoding="async" :style="{ height: imgH + 'px' }"
-                @click="openPreview(rowIndex, i)" />
+                @error="onThumbErr($event, url)" @click="openPreview(rowIndex, i)" />
               <div v-else class="missing" :style="{ height: imgH + 'px' }">—</div>
             </template>
           </div>

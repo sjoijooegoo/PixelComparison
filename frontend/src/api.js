@@ -53,13 +53,18 @@ async function upload(url, formData, context = {}) {
   return res.json()
 }
 
+// 小尺寸预览用缩略图(/images/x -> /thumb/x);放大/对比/详情仍用原图
+export const thumbUrl = (url) => (url ? url.replace('/images/', '/thumb/') : url)
+
 const post = (url, body) => send('POST', url, body)
 const put = (url, body) => send('PUT', url, body)
+const del = (url) => send('DELETE', url)
 
 export const api = {
   meta: () => get('/api/meta'),
   batches: (params) => get('/api/batches', params),
   createBatch: (body) => post('/api/batches', body),
+  deleteBatch: (id) => del(`/api/batches/${encodeURIComponent(id)}`),
   uploadScreenshot: (id, formData, context = {}) =>
     upload(`/api/batches/${id}/screenshots`, formData, { ...context, batchId: id }),
   autoCompare: (id) => post(`/api/batches/${id}/auto-compare`, {}),

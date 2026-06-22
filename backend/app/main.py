@@ -1,16 +1,20 @@
 import json
 import mimetypes
+import shutil
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 # Windows 上 .webp 可能未注册,确保静态文件返回正确 Content-Type
 mimetypes.add_type("image/webp", ".webp")
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -35,7 +39,47 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.mount("/images", StaticFiles(directory=IMAGES_DIR), name="images")
+class _CachedStatic(StaticFiles):
+    """给静态图片加长缓存头(原图内容不变;覆盖同号批次时 mtime/ETag 会变)。
+    二次查看(放大/详情)直接命中浏览器缓存,不重复下载。"""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        resp.headers.setdefault("Cache-Control", "public, max-age=86400")
+        return resp
+
+
+app.mount("/images", _CachedStatic(directory=IMAGES_DIR), name="images")
+
+# ---- 缩略图:懒生成 + 磁盘缓存(仅用于小预览;原图/对比/放大仍走 /images) ----
+THUMB_DIR = IMAGES_DIR / "thumbs"
+THUMB_WIDTH = 600          # ≈ 显示宽 300 的 2×,高分屏也清晰
+THUMB_QUALITY = 80
+
+
+@app.get("/thumb/{path:path}")
+def get_thumb(path: str):
+    """把 /images/<path> 的原图缩成小图(WebP)并缓存到 thumbs/<path>.webp;
+    首次访问生成、之后命中缓存;原图缺失或解码失败 → 404(前端回退原图)。"""
+    images_root = IMAGES_DIR.resolve()
+    orig = (IMAGES_DIR / path).resolve()
+    if not str(orig).startswith(str(images_root)):   # 防目录遍历
+        raise HTTPException(404, "not found")
+    if THUMB_DIR.resolve() in orig.parents or not orig.is_file():
+        raise HTTPException(404, "not found")         # 不对缓存目录自身再缩略
+    cache = (THUMB_DIR / path).with_suffix(".webp")
+    if not (cache.is_file() and cache.stat().st_mtime >= orig.stat().st_mtime):
+        try:
+            img = Image.open(orig).convert("RGB")
+            img.thumbnail((THUMB_WIDTH, THUMB_WIDTH * 10))   # 按宽缩放、保持比例
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            tmp = cache.with_suffix(".webp.tmp")
+            img.save(tmp, format="WEBP", quality=THUMB_QUALITY)
+            tmp.replace(cache)                                # 原子落盘,并发安全
+        except Exception as e:  # noqa: BLE001
+            log.warning("缩略图生成失败 %s: %s", path, e)
+            raise HTTPException(404, "thumb failed")
+    return FileResponse(cache, media_type="image/webp",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.middleware("http")
@@ -497,6 +541,9 @@ def _cascade_delete_batches(db: Session, batches: list[Batch]) -> int:
         db.commit()
         for tid in [t for t, info in _TASKS.items() if info.get("comparison_id") in comp_ids]:
             _TASKS.pop(tid, None)
+    # 连带删除这些批次的缩略图缓存(覆盖 overwrite 也走这里,旧缩略图随之清掉)
+    for bid in bids:
+        shutil.rmtree(THUMB_DIR / "batches" / bid, ignore_errors=True)
     return len(comp_ids)
 
 

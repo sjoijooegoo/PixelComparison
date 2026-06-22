@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useStore } from '../store'
+import { thumbUrl } from '../api'
 import Pager from './Pager.vue'
 
 const store = useStore()
@@ -76,7 +77,8 @@ function onSearch(val) {
         <div v-for="s in store.orientedScenes" :key="s.id" class="item"
           :class="{ selected: s.id === store.detail?.id }"
           @click="store.selectScene(s.id)">
-          <img :src="s.thumb_url" loading="lazy" alt="">
+          <img :src="thumbUrl(s.thumb_url)" loading="lazy" alt=""
+            @error="(e) => { if (!e.target.dataset.fb) { e.target.dataset.fb = '1'; e.target.src = s.thumb_url } }">
           <span class="name" :title="s.name">{{ s.name }}</span>
           <span class="diff mono" :class="diffClass(s)">
             {{ s.diff_pct !== null ? s.diff_pct.toFixed(2) + '%' : '—' }}

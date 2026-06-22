@@ -21,12 +21,15 @@ def find_orphans(db) -> dict[str, list]:
     """返回需要清理的孤儿路径(尚未删除)。"""
     batches_dir = IMAGES_DIR / "batches"
     heat_dir = IMAGES_DIR / "heatmaps"
+    thumb_dir = IMAGES_DIR / "thumbs"
 
     live_batch_ids = set(db.scalars(select(Batch.id)))
     live_comparison_ids = {str(cid) for cid in db.scalars(select(Comparison.id))}
-    live_shot_paths = {
-        str((IMAGES_DIR / p).resolve())
-        for p in db.scalars(select(Screenshot.path))
+    shot_paths = list(db.scalars(select(Screenshot.path)))
+    live_shot_paths = {str((IMAGES_DIR / p).resolve()) for p in shot_paths}
+    # 每张存活截图对应的合法缩略图路径(thumbs/<原路径>.webp)
+    live_thumb_paths = {
+        str((thumb_dir / p).with_suffix(".webp").resolve()) for p in shot_paths
     }
 
     orphan_dirs: list = []
@@ -47,6 +50,12 @@ def find_orphans(db) -> dict[str, list]:
         for d in heat_dir.iterdir():
             if d.is_dir() and d.name not in live_comparison_ids:
                 orphan_dirs.append(d)
+
+    # 3) thumbs/**:缩略图是派生缓存,对应原图(存活截图)不存在的即孤儿
+    if thumb_dir.is_dir():
+        for f in thumb_dir.rglob("*"):
+            if f.is_file() and str(f.resolve()) not in live_thumb_paths:
+                orphan_files.append(f)
 
     return {"dirs": orphan_dirs, "files": orphan_files}
 

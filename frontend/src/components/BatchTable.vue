@@ -92,6 +92,20 @@ function roleOf(record) {
   return null
 }
 
+// 删除单个批次(低调入口:操作列末尾的小垃圾桶 + 二次确认)
+const deletingId = ref(null)
+async function onDelete(record) {
+  deletingId.value = record.id
+  try {
+    await store.deleteBatch(record.id)
+    Message.success(`已删除批次 #${record.id}`)
+  } catch (e) {
+    Message.error(e.message || '删除失败')
+  } finally {
+    deletingId.value = null
+  }
+}
+
 
 </script>
 
@@ -161,6 +175,19 @@ function roleOf(record) {
               ? { background: 'rgb(var(--batch-cur))', borderColor: 'rgb(var(--batch-cur))', color: '#fff' }
               : { color: 'rgb(var(--batch-cur))' }"
             @click="setRole(record, 'current')">设为对比</a-button>
+          <a-popconfirm position="br" type="warning" ok-text="删除" cancel-text="取消"
+            :content="`删除批次 #${record.id}?将连带删除它参与的对比、对比项、由其晋升的基线,以及图片/热力图/缩略图,不可恢复。`"
+            @ok="onDelete(record)">
+            <a-button size="mini" type="text" class="del-btn" title="删除批次"
+              :loading="deletingId === record.id">
+              <template #icon>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+                </svg>
+              </template>
+            </a-button>
+          </a-popconfirm>
         </template>
       </a-table>
     </div>
@@ -180,6 +207,9 @@ function roleOf(record) {
 
 <style scoped>
 .batch-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 删除入口低调:默认浅灰、悬停才变红 */
+.del-btn { color: var(--color-text-4); margin-left: 2px; }
+.del-btn:hover { color: rgb(var(--red-6)); background: var(--color-fill-2); }
 .head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
 .head h3 { margin: 0; font-size: 14px; }
 
