@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { useStore, defaultDateRange } from '../store'
+import { useStore, defaultDateRange, SHADING_QUALITY_OPTIONS } from '../store'
 
 const store = useStore()
 
@@ -73,7 +73,7 @@ function removeDay(d) {
 
 async function reset() {
   // 创建时间始终保留(恢复默认近七天),不放出全部时间数据
-  store.filters = { scene_id: '', shading_quality: null, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' }
+  store.filters = { scene_id: '', shading_quality: 5, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' }   // 画质默认「电影」
   dayPick.value = null
   dayPickerOpen.value = false
   await applyNow()
@@ -87,6 +87,13 @@ async function reset() {
       <a-select v-model="store.filters.scene_id" placeholder="全部场景" allow-clear allow-search size="small"
         style="width: 320px" @change="applyNow">
         <a-option v-for="s in store.meta.scene_ids" :key="s" :value="s">{{ s }}</a-option>
+      </a-select>
+    </div>
+    <div class="field">
+      <span class="label">画质</span>
+      <a-select v-model="store.filters.shading_quality" placeholder="全部画质" allow-clear size="small"
+        style="width: 130px" @change="applyNow">
+        <a-option v-for="o in SHADING_QUALITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</a-option>
       </a-select>
     </div>
     <div class="field">

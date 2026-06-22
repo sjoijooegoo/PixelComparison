@@ -24,7 +24,7 @@ async function pickGridScenes(page) {
   for (const s of meta.scene_ids || []) {
     await page.goto(`${base}/batches/${encodeURIComponent(s)}`, { waitUntil: 'networkidle' }).catch(() => {})
     await sleep(300)
-    const n = await page.locator('.role-btn.base').count().catch(() => 0)
+    const n = await page.locator('.role-btn').count().catch(() => 0)
     if (n >= 2) found.push({ scene: s, cols: n })
     if (found.length >= 2) break
   }
@@ -50,19 +50,19 @@ try {
   console.log('\n[T1] 列表图角色选择')
   await page.goto(`${base}/batches/${encodeURIComponent(scene)}`, { waitUntil: 'networkidle' })
   await sleep(400)
-  await page.locator('.role-btn.base').nth(0).click()
-  check('点「基线」后该按钮高亮', await page.locator('.role-btn.base').nth(0).evaluate((e) => e.classList.contains('on')))
-  await page.locator('.role-btn.cur').nth(1).click()
-  check('点「对比」后该按钮高亮', await page.locator('.role-btn.cur').nth(1).evaluate((e) => e.classList.contains('on')))
+  await page.locator('.role-btn').nth(0).click()        // 第一次:设为基线
+  check('点第一列后高亮为基线', await page.locator('.role-btn').nth(0).evaluate((e) => e.classList.contains('on')))
+  await page.locator('.role-btn').nth(1).click()        // 第二次:设为对比
+  check('点第二列后高亮为对比', await page.locator('.role-btn').nth(1).evaluate((e) => e.classList.contains('on')))
   check('两侧选定后表头出现 VS 卡片', await page.locator('.heat-cmp').count() === 1)
-  await page.locator('.role-btn.base').nth(0).click()   // 再点一次取消
-  check('再点「基线」取消高亮', !(await page.locator('.role-btn.base').nth(0).evaluate((e) => e.classList.contains('on'))))
+  await page.locator('.role-btn').nth(0).click()        // 再点一次取消
+  check('再点取消高亮', !(await page.locator('.role-btn').nth(0).evaluate((e) => e.classList.contains('on'))))
   check('取消后 VS 卡片消失', await page.locator('.heat-cmp').count() === 0)
 
   // ---- T2 差异列:发起对比就地计算并填充 ----
   console.log('\n[T2] 差异列发起对比(就地计算)')
-  await page.locator('.role-btn.base').nth(0).click()
-  await page.locator('.role-btn.cur').nth(1).click()
+  await page.locator('.role-btn').nth(0).click()
+  await page.locator('.role-btn').nth(1).click()
   await sleep(500)
   const urlBeforeCompare = page.url()
   const btn = page.locator('.heat-title .arco-btn')
@@ -144,8 +144,8 @@ try {
   }
   await page.goto(`${base}/batches/${encodeURIComponent(scene)}`, { waitUntil: 'networkidle' })
   await sleep(400)
-  await page.locator('.role-btn.base').nth(0).click()
-  await page.locator('.role-btn.cur').nth(1).click()
+  await page.locator('.role-btn').nth(0).click()
+  await page.locator('.role-btn').nth(1).click()
   await sleep(300)
   check('场景A:已选(VS 卡片在)', (await page.locator('.heat-cmp').count()) === 1)
   const sceneB = scenes[1]?.scene

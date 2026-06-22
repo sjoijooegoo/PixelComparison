@@ -97,7 +97,7 @@ function clearGridCache() {
 export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: { scene_ids: [], platforms: [], baselines: [] },
-    filters: { scene_id: '', shading_quality: null, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' },
+    filters: { scene_id: '', shading_quality: 5, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' },   // 画质默认「电影」(5)
 
     // 顶部:原始批次列表
     batches: [],

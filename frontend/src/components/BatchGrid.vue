@@ -120,7 +120,7 @@ const previewMeta = computed(() => {
   }
   const b = cols.value[pc.value]
   if (!b) return null
-  return { scene_name: row.scene_name, created_at: b.created_at, id: b.id, p4_version: b.p4_version }
+  return { scene_name: row.scene_name, created_at: b.created_at, id: b.id, p4_version: b.p4_version, shading_quality_label: b.shading_quality_label }
 })
 
 // 该格是否可作为导航落点:有图、列未折叠;热力图虚拟列需该行有合法热力图
@@ -168,10 +168,24 @@ function roleOf(id) {
   if (store.baselineBatch?.id === id) return 'baseline'
   return null
 }
-// 列头角色按钮:再点一次当前角色则取消(补偿列表图里没有选择条的 × 清除)
-function toggleRole(b, role) {
-  if (roleOf(b.id) === role) store.clearRole(role)
-  else store.setRole(b, role)
+// 列头单按钮(按全局选择状态决定):未选基线→设为基线;已选基线未选对比→设为对比;
+// 已是基线/对比→再点取消;两者都选→未选列点击重设基线。
+function roleBtnText(id) {
+  const r = roleOf(id)
+  if (r === 'baseline') return '基线'
+  if (r === 'current') return '对比'
+  return store.baselineBatch ? '设为对比' : '设为基线'   // 有基线 → 其余列都「设为对比」
+}
+function roleBtnKind(id) {            // 着色:base / cur
+  const r = roleOf(id)
+  if (r) return r === 'baseline' ? 'base' : 'cur'
+  return store.baselineBatch ? 'cur' : 'base'
+}
+function onRoleBtn(b) {
+  const r = roleOf(b.id)
+  if (r) return store.clearRole(r)                          // 已选 → 取消
+  if (!store.baselineBatch) return store.setRole(b, 'baseline')
+  return store.setRole(b, 'current')                        // 有基线 → 设为对比(含替换原对比)
 }
 
 // 发起对比(列表图内,入口在热力图表头按钮);同场景天然成立,无需跨场景守卫
@@ -249,12 +263,10 @@ const gridStyle = computed(() => ({
                 <span class="date">{{ b.created_at.split(' ')[0] }}</span>
                 <span class="dtime">{{ b.created_at.split(' ')[1] }}</span>
               </div>
-              <div class="bsub"><span class="mono">#{{ b.id }}</span> · {{ p4Label(b.p4_version) }}</div>
+              <div class="bsub"><span class="mono">#{{ b.id }}</span> · {{ p4Label(b.p4_version) }} · {{ b.shading_quality_label }}</div>
               <div class="roles">
-                <button class="role-btn base" :class="{ on: roleOf(b.id) === 'baseline' }"
-                  @click="toggleRole(b, 'baseline')">基线</button>
-                <button class="role-btn cur" :class="{ on: roleOf(b.id) === 'current' }"
-                  @click="toggleRole(b, 'current')">对比</button>
+                <button class="role-btn" :class="[roleBtnKind(b.id), { on: !!roleOf(b.id) }]"
+                  @click="onRoleBtn(b)">{{ roleBtnText(b.id) }}</button>
               </div>
             </div>
           </template>
@@ -275,13 +287,13 @@ const gridStyle = computed(() => ({
                 <div class="cmp-col base">
                   <span class="cmp-pill base">基线</span>
                   <span class="cmp-date">{{ baselineBatch.created_at.split(' ')[0] }}</span>
-                  <span class="cmp-p4">{{ p4Label(baselineBatch.p4_version) }}</span>
+                  <span class="cmp-p4">{{ p4Label(baselineBatch.p4_version) }} · {{ baselineBatch.shading_quality_label }}</span>
                 </div>
                 <div class="cmp-mid"><span class="cmp-vs">VS</span></div>
                 <div class="cmp-col cur">
                   <span class="cmp-pill cur">对比</span>
                   <span class="cmp-date">{{ currentBatch.created_at.split(' ')[0] }}</span>
-                  <span class="cmp-p4">{{ p4Label(currentBatch.p4_version) }}</span>
+                  <span class="cmp-p4">{{ p4Label(currentBatch.p4_version) }} · {{ currentBatch.shading_quality_label }}</span>
                 </div>
               </div>
             </template>
@@ -337,6 +349,8 @@ const gridStyle = computed(() => ({
             <span class="mono">批次 #{{ previewMeta.id }}</span>
             <span class="pb-dot">·</span>
             <span class="mono">{{ p4Label(previewMeta.p4_version) }}</span>
+            <span class="pb-dot">·</span>
+            <span>{{ previewMeta.shading_quality_label }}</span>
           </span>
         </div>
         <div class="pb-hint">
@@ -424,7 +438,8 @@ const gridStyle = computed(() => ({
 .roles { display: flex; gap: 4px; justify-content: center; margin-top: 5px; }
 .role-btn {
   border: 1px solid var(--color-border-2); background: transparent; cursor: pointer;
-  font-size: 10px; padding: 1px 7px; border-radius: 4px; line-height: 1.6; font-family: inherit;
+  font-size: 12px; padding: 3px 10px; border-radius: 5px; line-height: 1.5; font-family: inherit;
+  min-width: 70px; box-sizing: border-box; text-align: center;   /* 「基线」与「设为基线」等宽对齐 */
 }
 .role-btn.base { color: rgb(var(--batch-base)); }
 .role-btn.cur { color: rgb(var(--batch-cur)); }
