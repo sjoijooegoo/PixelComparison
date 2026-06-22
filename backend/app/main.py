@@ -998,6 +998,8 @@ class SettingsIn(BaseModel):
     warn_threshold: float | None = None
     heatmap_blur: int | None = None
     heatmap_sensitivity: float | None = None
+    default_shading_quality: int | None = None
+    default_date_range_days: int | None = None
 
 
 @app.get("/api/settings")

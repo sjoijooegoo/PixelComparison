@@ -37,8 +37,8 @@ function onDateChange(v) {
     store.filters.created_from = v[0]
     store.filters.created_to = v[1]
   } else {
-    // 不允许清空成全部时间,恢复默认近七天
-    Object.assign(store.filters, defaultDateRange())
+    // 不允许清空成全部时间,恢复默认日期范围(跟随项目设置)
+    Object.assign(store.filters, defaultDateRange(store.settings.default_date_range_days))
   }
   applyNow()
 }
@@ -72,8 +72,8 @@ function removeDay(d) {
 }
 
 async function reset() {
-  // 创建时间始终保留(恢复默认近七天),不放出全部时间数据
-  store.filters = { scene_id: '', shading_quality: 5, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' }   // 画质默认「电影」
+  // 恢复到项目设置里的默认筛选(默认画质 + 默认日期范围);不放出全部时间数据
+  store.filters = store.defaultFilters()
   dayPick.value = null
   dayPickerOpen.value = false
   await applyNow()

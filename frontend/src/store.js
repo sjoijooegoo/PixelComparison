@@ -11,11 +11,11 @@ function ymd(d) {
   const day = String(d.getDate()).padStart(2, '0')
   return `${d.getFullYear()}-${m}-${day}`
 }
-// 默认创建时间范围:七天前 ~ 今天
-export function defaultDateRange() {
+// 默认创建时间范围:最近 N 天(N 默认 7,可由项目设置覆盖)
+export function defaultDateRange(days = 7) {
   const today = new Date()
   const from = new Date(today)
-  from.setDate(today.getDate() - 7)
+  from.setDate(today.getDate() - days)
   return { created_from: ymd(from), created_to: ymd(today) }
 }
 
@@ -141,6 +141,8 @@ export const useStore = defineStore('shotdiff', {
       warn_threshold: 0.3,
       heatmap_blur: 6,
       heatmap_sensitivity: 0.25,
+      default_shading_quality: 5,   // 筛选默认画质;-1 表示「全部画质」
+      default_date_range_days: 7,   // 筛选默认日期范围:最近 N 天
     },
   }),
 
@@ -213,7 +215,21 @@ export const useStore = defineStore('shotdiff', {
     async init() {
       await this.loadMeta()
       await this.loadSettings()
+      this.filters = this.defaultFilters()   // 用项目设置里的默认画质/日期范围初始化筛选
       await this.loadBatches()
+    },
+
+    // 由项目设置算出的整套默认筛选(首次进入 / 点「清空」时套用)
+    defaultFilters() {
+      const q = this.settings.default_shading_quality
+      return {
+        scene_id: '',
+        shading_quality: (q === -1 || q == null) ? '' : q,   // -1/空 → 全部画质
+        dateMode: 'range',
+        ...defaultDateRange(this.settings.default_date_range_days ?? 7),
+        created_dates: [],
+        status: '',
+      }
     },
 
     // 筛选器选项(场景/平台/基线):随批次实时去重,刷新时一并更新

@@ -14,6 +14,8 @@ DEFAULT_SETTINGS: dict = {
     "warn_threshold": 0.3,         # 差异率 >= 此值 -> 橙色(原"警告"级)
     "heatmap_blur": 6,             # 热力图高斯模糊半径
     "heatmap_sensitivity": 0.25,   # 热力图归一化下限(越小越灵敏,越易显红)
+    "default_shading_quality": 5,  # 筛选默认画质;-1 表示「全部画质」(不筛选)
+    "default_date_range_days": 7,  # 筛选默认日期范围:最近 N 天
 }
 
 # 各参数允许范围 (min, max),保存时夹紧
@@ -23,6 +25,8 @@ RANGES: dict = {
     "warn_threshold": (0.0, 100.0),
     "heatmap_blur": (0, 50),
     "heatmap_sensitivity": (0.01, 1.0),
+    "default_shading_quality": (-1, 5),
+    "default_date_range_days": (1, 365),
 }
 
 

@@ -1,9 +1,12 @@
 <script setup>
 import { reactive, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useStore } from '../store'
+import { useStore, SHADING_QUALITY_OPTIONS } from '../store'
 
 const store = useStore()
+
+// 默认画质下拉:在标准档位前加「全部画质」(-1)
+const QUALITY_OPTIONS = [{ value: -1, label: '全部画质' }, ...SHADING_QUALITY_OPTIONS]
 
 const DEFAULTS = {
   pixel_diff_threshold: 8,
@@ -11,6 +14,8 @@ const DEFAULTS = {
   warn_threshold: 0.3,
   heatmap_blur: 6,
   heatmap_sensitivity: 0.25,
+  default_shading_quality: 5,
+  default_date_range_days: 7,
 }
 
 const form = reactive({ ...DEFAULTS })
@@ -32,7 +37,7 @@ async function save() {
   try {
     await store.saveSettings({ ...form })
     sync()
-    Message.success('已保存,新发起的对比将使用该配置')
+    Message.success('已保存;算法配置对新对比生效,筛选默认值在下次进入或点「清空」时套用')
   } catch (e) {
     Message.error(e.message || '保存失败')
   } finally {
@@ -47,12 +52,12 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
   <div class="settings-page">
     <div class="inner">
       <div class="page-head">
-        <h2>对比算法配置</h2>
-        <p>调整差异判定与热力图渲染参数</p>
+        <h2>项目设置</h2>
+        <p>调整对比算法参数与筛选默认值</p>
       </div>
 
       <a-alert type="info" closable class="tip">
-        配置仅对新发起的对比生效;已有对比结果如需套用新配置,可在「对比结果」页点「重新对比」。
+        对比算法配置仅对新发起的对比生效;已有对比结果如需套用新配置,可在「对比结果」页点「重新对比」。
       </a-alert>
 
       <!-- 差异判定 -->
@@ -90,6 +95,25 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
             <label>灵敏度</label>
             <a-input-number v-model="form.heatmap_sensitivity" :min="0.01" :max="1" :step="0.05" :precision="2" size="large" />
             <span class="hint">归一化下限,越小越灵敏、越易显红(0.01–1)</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 筛选默认值 -->
+      <section class="block">
+        <div class="block-title">筛选默认值</div>
+        <div class="grid grid-2">
+          <div class="field">
+            <label>默认画质</label>
+            <a-select v-model="form.default_shading_quality" size="large">
+              <a-option v-for="o in QUALITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</a-option>
+            </a-select>
+            <span class="hint">进入页面或点「清空」时,画质筛选默认选中此项(「全部画质」为不筛选)</span>
+          </div>
+          <div class="field">
+            <label>默认日期范围(最近 N 天)</label>
+            <a-input-number v-model="form.default_date_range_days" :min="1" :max="365" :step="1" size="large" />
+            <span class="hint">进入页面或点「清空」时,创建时间默认为「今天往前 N 天」</span>
           </div>
         </div>
       </section>
