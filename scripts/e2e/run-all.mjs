@@ -106,6 +106,50 @@ try {
     await page.keyboard.press('Escape'); await sleep(300)
   }
 
+  // ---- T7 列头「差异对比」跳转 + 深链刷新 + 历史菜单走路由 ----
+  // 承接 T1–T3:仍在列表图、首两列已选为基线/对比。确保这对已缓存后,测列头跳转。
+  console.log('\n[T7] 差异对比列头跳转 / 深链 / 历史切换路由')
+  const idOf = (u) => (u.match(/\/comparison\/(\d+)/) || [])[1] || null
+  const linkN = () => page.locator('.heat-title-link').count()
+  const btnN = () => page.locator('.heat-title .arco-btn').count()
+  // 角色按钮是「再点取消」的开关,前序用例可能只剩单选;先清空再干净地选两列(col0=基线、col1=对比)
+  while (await page.locator('.role-btn.on').count()) { await page.locator('.role-btn.on').first().click(); await sleep(150) }
+  await page.locator('.role-btn').nth(0).click()
+  await page.locator('.role-btn').nth(1).click()
+  await sleep(400)
+  // 先等 lookup 结算:列头要么是可点链接(已缓存),要么是「发起对比」按钮(未缓存)
+  await waitFor(async () => (await linkN()) + (await btnN()) > 0, 10000)
+  let linkReady = (await linkN()) > 0
+  if (!linkReady && (await btnN())) {            // 未缓存:先就地算一次,再等链接出现
+    await page.locator('.heat-title .arco-btn').click()
+    linkReady = await waitFor(async () => (await linkN()) > 0, 60000)
+  }
+  check('缓存命中时列头「差异对比」可点击', linkReady)
+  if (linkReady) {
+    await page.locator('.heat-title-link').click()
+    const navOk = await waitFor(async () => !!idOf(page.url()), 8000)
+    const cid = idOf(page.url())
+    check('点击后跳到 /comparison/:id', navOk, page.url().replace(base, ''))
+    const sumOk = await waitFor(async () => (await page.locator('.summary .pair-trigger').count()) > 0, 8000)
+    check('跳转后对比结果页加载出该对比', sumOk)
+
+    // 深链刷新:整页 reload 后仍停在同一条对比(URL 不变 + 摘要在)
+    await page.reload({ waitUntil: 'networkidle' })
+    const keep = await waitFor(async () => (await page.locator('.summary .pair-trigger').count()) > 0, 8000)
+    check('刷新后仍停在同一对比(深链)', keep && idOf(page.url()) === cid, `id=${idOf(page.url())}`)
+
+    // 历史菜单切换:点不同历史项后 URL 的 id 应随之改变(需≥2条历史)
+    await page.locator('.pair-trigger').click(); await sleep(300)
+    const items = page.locator('.hist-item:not(.active)')
+    if (await items.count()) {
+      await items.first().click()
+      const changed = await waitFor(async () => { const n = idOf(page.url()); return n && n !== cid }, 8000)
+      check('历史菜单切换后 URL 的 id 同步变化', changed, `${cid} -> ${idOf(page.url())}`)
+    } else {
+      check('历史菜单切换走路由', true, '历史仅一条,跳过(非失败)')
+    }
+  }
+
   // ---- T4 对比结果页:一键换向 ----
   console.log('\n[T4] 对比结果页换向(基线↔对比)')
   await page.goto(`${base}/comparison`, { waitUntil: 'networkidle' })

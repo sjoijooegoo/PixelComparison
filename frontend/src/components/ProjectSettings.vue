@@ -14,6 +14,11 @@ const DEFAULTS = {
   warn_threshold: 0.3,
   heatmap_blur: 6,
   heatmap_sensitivity: 0.25,
+  heatmap_method: 'enhanced',
+  heatmap_norm_scale: 80.0,
+  heatmap_gamma: 1.4,
+  heatmap_density_radius: 16.0,
+  heatmap_density_floor: 0.2,
   default_shading_quality: 5,
   default_date_range_days: 7,
 }
@@ -87,15 +92,45 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
         <div class="block-title">热力图渲染</div>
         <div class="grid grid-2">
           <div class="field">
+            <label>渲染方法</label>
+            <a-select v-model="form.heatmap_method" size="large">
+              <a-option value="enhanced">增强(绝对幅度+密度门控,推荐)</a-option>
+              <a-option value="legacy">传统(逐图峰值归一化)</a-option>
+            </a-select>
+            <span class="hint">增强:强化成片大改的区域感、抑制弱而散的噪声;传统:旧算法,每张图各自拉满量程</span>
+          </div>
+          <div class="field">
             <label>模糊半径</label>
             <a-input-number v-model="form.heatmap_blur" :min="0" :max="50" :step="1" size="large" />
             <span class="hint">高斯模糊半径,越大色块越连片(0 为不模糊)</span>
           </div>
-          <div class="field">
+          <div v-if="form.heatmap_method === 'legacy'" class="field">
             <label>灵敏度</label>
             <a-input-number v-model="form.heatmap_sensitivity" :min="0.01" :max="1" :step="0.05" :precision="2" size="large" />
             <span class="hint">归一化下限,越小越灵敏、越易显红(0.01–1)</span>
           </div>
+          <template v-else>
+            <div class="field">
+              <label>绝对量程</label>
+              <a-input-number v-model="form.heatmap_norm_scale" :min="4" :max="255" :step="4" size="large" />
+              <span class="hint">差异除以此值再上色,越小越敏感(差异越易显红);典型 60–100</span>
+            </div>
+            <div class="field">
+              <label>低端抑制 (gamma)</label>
+              <a-input-number v-model="form.heatmap_gamma" :min="0.5" :max="4" :step="0.1" :precision="1" size="large" />
+              <span class="hint">&gt;1 压低弱信号,弱散差异更冷;典型 1.2–2.0</span>
+            </div>
+            <div class="field">
+              <label>密度门控半径</label>
+              <a-input-number v-model="form.heatmap_density_radius" :min="0" :max="60" :step="2" size="large" />
+              <span class="hint">判定「成片」的邻域尺度,越大越只保留大块连续差异(0 为关闭门控)</span>
+            </div>
+            <div class="field">
+              <label>散点容忍下限</label>
+              <a-input-number v-model="form.heatmap_density_floor" :min="0" :max="0.9" :step="0.05" :precision="2" size="large" />
+              <span class="hint">邻域变化密度低于此值的散点被压暗,越大越只留密集区(0–0.9)</span>
+            </div>
+          </template>
         </div>
       </section>
 

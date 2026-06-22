@@ -22,7 +22,7 @@ const isActive = (path) => current.value === path || current.value.startsWith(pa
 const showBatchActions = computed(() => isActive('/batches') || isActive('/comparison'))
 
 async function refresh() {
-  if (current.value === '/comparison') {
+  if (isActive('/comparison')) {
     await store.loadComparisons()
   } else {
     await store.refreshBatches()

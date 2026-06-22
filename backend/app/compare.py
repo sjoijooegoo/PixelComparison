@@ -67,6 +67,11 @@ def compare_images(
     pixel_threshold: int = PIXEL_DIFF_THRESHOLD,
     heatmap_blur: float = 6,
     heatmap_sensitivity: float = 0.25,
+    heatmap_method: str = "enhanced",
+    heatmap_norm_scale: float = 80.0,
+    heatmap_gamma: float = 1.4,
+    heatmap_density_radius: float = 16.0,
+    heatmap_density_floor: float = 0.2,
 ) -> dict:
     """对比两张图,生成热力图文件,返回指标字典。"""
     cur_img = Image.open(current_path).convert("RGB")
@@ -107,21 +112,61 @@ def compare_images(
         "hist_baseline": _histogram(np.asarray(base_img)),
     }
 
-    _write_heatmap(base_img, per_pixel_max, heatmap_path, heatmap_blur, heatmap_sensitivity)
+    _write_heatmap(
+        base_img, per_pixel_max, heatmap_path,
+        method=heatmap_method, blur=heatmap_blur, sensitivity=heatmap_sensitivity,
+        norm_scale=heatmap_norm_scale, gamma=heatmap_gamma,
+        density_radius=heatmap_density_radius, density_floor=heatmap_density_floor,
+        pixel_threshold=pixel_threshold,
+    )
     return metrics
 
 
-def _write_heatmap(
-    base_img: Image.Image, per_pixel_max: np.ndarray, out_path: str,
-    blur: float = 6, sensitivity: float = 0.25,
-) -> None:
-    """差异强度 -> jet 色热力图,叠加在压暗的基线图上。"""
-    mag = Image.fromarray(per_pixel_max.astype(np.uint8), mode="L")
-    if blur > 0:
-        mag = mag.filter(ImageFilter.GaussianBlur(radius=blur))
-    norm = np.asarray(mag, dtype=np.float32) / 255.0
+def _blur_l(arr: np.ndarray, radius: float) -> np.ndarray:
+    """对单通道强度数组做高斯模糊,返回 float32(0–255)。"""
+    img = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), mode="L")
+    if radius > 0:
+        img = img.filter(ImageFilter.GaussianBlur(radius=radius))
+    return np.asarray(img, dtype=np.float32)
+
+
+def _norm_legacy(per_pixel_max: np.ndarray, blur: float, sensitivity: float) -> np.ndarray:
+    """M0:逐图峰值归一化(每张图拉满量程)。弱/强差异观感趋同。"""
+    norm = _blur_l(per_pixel_max, blur) / 255.0
     if norm.max() > 0:
-        norm = np.clip(norm / max(norm.max(), sensitivity), 0, 1)
+        norm = np.clip(norm / max(float(norm.max()), sensitivity), 0, 1)
+    return norm
+
+
+def _norm_enhanced(
+    per_pixel_max: np.ndarray, blur: float, norm_scale: float, gamma: float,
+    density_radius: float, density_floor: float, pixel_threshold: int,
+) -> np.ndarray:
+    """M4:绝对幅度 + gamma 低端抑制 + 空间密度门控。
+    - 绝对幅度(除以固定 norm_scale 而非峰值):弱差异天然偏冷,可跨图比较;
+    - gamma>1:进一步压低端弥散噪声;
+    - 密度门控:邻域'变化像素'密度低的散点被掐灭,成片大改放行。"""
+    n = np.clip(_blur_l(per_pixel_max, blur) / max(norm_scale, 1e-6), 0, 1) ** gamma
+    density = _blur_l((per_pixel_max > pixel_threshold).astype(np.float32) * 255.0,
+                      density_radius) / 255.0
+    gate = np.clip((density - density_floor) / 0.5, 0, 1)
+    return np.clip(n * gate, 0, 1)
+
+
+def _write_heatmap(
+    base_img: Image.Image, per_pixel_max: np.ndarray, out_path: str, *,
+    method: str = "enhanced", blur: float = 6, sensitivity: float = 0.25,
+    norm_scale: float = 80.0, gamma: float = 1.4,
+    density_radius: float = 16.0, density_floor: float = 0.2,
+    pixel_threshold: int = PIXEL_DIFF_THRESHOLD,
+) -> None:
+    """差异强度 -> jet 色热力图,叠加在压暗的基线图上。
+    method='enhanced' 强化区域感/抑制弱散噪声(默认);'legacy' 为旧的峰值归一化。"""
+    if method == "legacy":
+        norm = _norm_legacy(per_pixel_max, blur, sensitivity)
+    else:
+        norm = _norm_enhanced(per_pixel_max, blur, norm_scale, gamma,
+                              density_radius, density_floor, pixel_threshold)
 
     heat = _jet_colormap(norm).astype(np.float32)
     backdrop = np.asarray(base_img, dtype=np.float32) * 0.25

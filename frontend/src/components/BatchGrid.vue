@@ -279,6 +279,14 @@ const gridStyle = computed(() => ({
               :loading="store.running" :disabled="!store.canCompare || store.running" @click="runCompare">
               {{ store.running && store.progress.total ? `对比中 ${store.progress.done}/${store.progress.total}` : '发起对比' }}
             </a-button>
+            <span v-else-if="heatExists" class="heat-title-link" title="查看该对比结果"
+              @click="store.gotoGridComparison()">
+              <span class="heat-title-dot"></span>差异对比
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" class="heat-title-arrow">
+                <polyline points="9 6 15 12 9 18" />
+              </svg>
+            </span>
             <template v-else><span class="heat-title-dot"></span>差异对比</template>
           </div>
           <div class="heat-body">
@@ -477,6 +485,13 @@ const gridStyle = computed(() => ({
   display: inline-block; width: 10px; height: 10px; border-radius: 2px;
   background: rgb(var(--arcoblue-5)); margin-right: 5px; vertical-align: -1px;
 }
+/* 命中缓存:列头可点击进入对比结果页 */
+.heat-title-link {
+  display: inline-flex; align-items: center; cursor: pointer; border-radius: 4px;
+  padding: 1px 4px; transition: color .15s, background .15s;
+}
+.heat-title-link:hover { color: rgb(var(--arcoblue-5)); background: var(--color-fill-2); }
+.heat-title-arrow { margin-left: 3px; opacity: .8; }
 /* 按钮态:让「发起对比」按钮撑满标题条(高度仍由 .heat-title 固定,保证两态等高) */
 .heat-title.is-btn { padding: 0 6px; }
 .heat-title.is-btn :deep(.arco-btn) { width: 100%; }

@@ -13,9 +13,20 @@ DEFAULT_SETTINGS: dict = {
     "fail_threshold": 2.0,         # 差异率 >= 此值 -> 红色(原"失败"级)
     "warn_threshold": 0.3,         # 差异率 >= 此值 -> 橙色(原"警告"级)
     "heatmap_blur": 6,             # 热力图高斯模糊半径
-    "heatmap_sensitivity": 0.25,   # 热力图归一化下限(越小越灵敏,越易显红)
+    "heatmap_sensitivity": 0.25,   # 热力图归一化下限(越小越灵敏,越易显红);仅 legacy 方法用
+    # 热力图渲染方法:enhanced=绝对幅度+gamma+密度门控(强化区域感/抑噪);legacy=旧峰值归一化
+    "heatmap_method": "enhanced",
+    "heatmap_norm_scale": 80.0,    # enhanced:绝对量程,越小越敏感(差异除以此值)
+    "heatmap_gamma": 1.4,          # enhanced:低端抑制强度(>1 压弱信号)
+    "heatmap_density_radius": 16.0,  # enhanced:密度门控的邻域尺度
+    "heatmap_density_floor": 0.2,  # enhanced:散点容忍下限(邻域变化密度低于此值被压)
     "default_shading_quality": 5,  # 筛选默认画质;-1 表示「全部画质」(不筛选)
     "default_date_range_days": 7,  # 筛选默认日期范围:最近 N 天
+}
+
+# 非数值参数的合法取值(save 时校验)
+ENUMS: dict = {
+    "heatmap_method": ("enhanced", "legacy"),
 }
 
 # 各参数允许范围 (min, max),保存时夹紧
@@ -25,6 +36,10 @@ RANGES: dict = {
     "warn_threshold": (0.0, 100.0),
     "heatmap_blur": (0, 50),
     "heatmap_sensitivity": (0.01, 1.0),
+    "heatmap_norm_scale": (4.0, 255.0),
+    "heatmap_gamma": (0.5, 4.0),
+    "heatmap_density_radius": (0.0, 60.0),
+    "heatmap_density_floor": (0.0, 0.9),
     "default_shading_quality": (-1, 5),
     "default_date_range_days": (1, 365),
 }
@@ -44,6 +59,10 @@ def save_settings(db: Session, patch: dict) -> dict:
     data = get_settings(db)
     for k, v in patch.items():
         if k not in DEFAULT_SETTINGS or v is None:
+            continue
+        if k in ENUMS:
+            if v in ENUMS[k]:
+                data[k] = v
             continue
         lo, hi = RANGES[k]
         data[k] = max(lo, min(hi, v))

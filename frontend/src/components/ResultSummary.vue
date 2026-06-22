@@ -1,9 +1,11 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useStore, p4Label } from '../store'
 
 const store = useStore()
+const router = useRouter()
 const c = computed(() => store.orientedComparison)   // 按当前换向(flip)取向展示
 const open = ref(false)
 
@@ -16,7 +18,8 @@ function diffColor(v) {
 
 function pick(item) {
   open.value = false
-  if (item.id !== c.value?.id) store.openComparison(item)
+  // 走路由让 URL 成为单一事实源(可分享/后退/刷新一致);打开由 ComparisonView 的路由监听处理
+  if (item.id !== c.value?.id) router.push(`/comparison/${item.id}`)
 }
 
 async function rerun() {

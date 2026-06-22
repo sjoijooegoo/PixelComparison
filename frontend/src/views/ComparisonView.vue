@@ -1,6 +1,6 @@
 <script setup>
-import { onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useStore } from '../store'
 import ResultSummary from '../components/ResultSummary.vue'
 import SceneList from '../components/SceneList.vue'
@@ -8,15 +8,25 @@ import DetailView from '../components/DetailView.vue'
 import MetricsPanel from '../components/MetricsPanel.vue'
 
 const store = useStore()
+const route = useRoute()
 const router = useRouter()
 
-// 进入对比结果页:拉取历史,若未选中则自动打开最近一条
-onMounted(async () => {
-  await store.loadComparisons()
-  if (!store.selectedComparison && store.comparisons.length) {
-    store.openComparison(store.comparisons[0])
+// 路由驱动:带 id 则打开该对比(深链/列头跳转,方向由 ?flip 还原),否则默认打开最近一条
+async function sync() {
+  const id = route.params.id
+  if (id) {
+    // openComparisonById 在历史已加载时直接命中,缺失才补拉一次,避免每次切换都重复请求
+    const ok = await store.openComparisonById(id, route.query.flip === '1')
+    if (!ok && store.comparisons.length) await store.openComparison(store.comparisons[0])
+  } else {
+    if (!store.comparisons.length) await store.loadComparisons()
+    if (!store.selectedComparison && store.comparisons.length) {
+      await store.openComparison(store.comparisons[0])
+    }
   }
-})
+}
+onMounted(sync)
+watch(() => route.params.id, sync)   // 同组件内仅 id 变化(如从一条跳另一条)也重新加载
 </script>
 
 <template>

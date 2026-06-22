@@ -65,6 +65,11 @@ def run_comparison(
             pixel_threshold=int(cfg["pixel_diff_threshold"]),
             heatmap_blur=cfg["heatmap_blur"],
             heatmap_sensitivity=cfg["heatmap_sensitivity"],
+            heatmap_method=cfg["heatmap_method"],
+            heatmap_norm_scale=cfg["heatmap_norm_scale"],
+            heatmap_gamma=cfg["heatmap_gamma"],
+            heatmap_density_radius=cfg["heatmap_density_radius"],
+            heatmap_density_floor=cfg["heatmap_density_floor"],
         )
 
     metrics_by_name: dict = {}

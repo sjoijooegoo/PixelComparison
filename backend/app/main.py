@@ -164,6 +164,20 @@ def batch_dto(b: Batch, db: Session) -> dict:
     }
 
 
+def _heatmap_url(heatmap_path: str | None) -> str | None:
+    """热力图 URL 带缓存破坏参数(文件 mtime)。
+    重算复用同一 comparison id、URL 不变,而 /images 是 24h 强缓存,
+    若不带版本号浏览器会一直显示旧图;用 mtime 做版本:文件重写则 URL 变、refetch,
+    未变则 URL 稳定、命中缓存。"""
+    if not heatmap_path:
+        return None
+    try:
+        mtime = int((IMAGES_DIR / heatmap_path).stat().st_mtime)
+        return f"/images/{heatmap_path}?v={mtime}"
+    except OSError:
+        return f"/images/{heatmap_path}"
+
+
 def comparison_dto(c: Comparison, db: Session) -> dict:
     # 检查点数 = 本次对比的全部检查点(两批并集),与 SceneList 列表总数一致
     scene_count = db.scalar(
@@ -210,7 +224,7 @@ def item_dto(it: ComparisonItem, with_metrics: bool = False) -> dict:
         "diff_pct": round(it.diff_pct, 2) if it.diff_pct is not None else None,
         "current_url": it.current_shot.url if it.current_shot else None,
         "baseline_url": it.baseline_shot.url if it.baseline_shot else None,
-        "heatmap_url": f"/images/{it.heatmap_path}" if it.heatmap_path else None,
+        "heatmap_url": _heatmap_url(it.heatmap_path),
     }
     d["thumb_url"] = d["current_url"] or d["baseline_url"]
     # 相机位姿:优先取当前批截图,缺则取参照批
@@ -788,7 +802,7 @@ def lookup_comparison(batch_id: str, ref_batch_id: str, db: Session = Depends(ge
     items = db.scalars(
         select(ComparisonItem).where(ComparisonItem.comparison_id == existing.id)
     ).all()
-    heatmaps = {it.scene_name: f"/images/{it.heatmap_path}"
+    heatmaps = {it.scene_name: _heatmap_url(it.heatmap_path)
                 for it in items if it.heatmap_path}
     return {"exists": True, "comparison": comparison_dto(existing, db), "heatmaps": heatmaps}
 

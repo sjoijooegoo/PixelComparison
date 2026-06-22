@@ -141,6 +141,11 @@ export const useStore = defineStore('shotdiff', {
       warn_threshold: 0.3,
       heatmap_blur: 6,
       heatmap_sensitivity: 0.25,
+      heatmap_method: 'enhanced',   // enhanced=绝对幅度+gamma+密度门控;legacy=旧峰值归一化
+      heatmap_norm_scale: 80.0,
+      heatmap_gamma: 1.4,
+      heatmap_density_radius: 16.0,
+      heatmap_density_floor: 0.2,
       default_shading_quality: 5,   // 筛选默认画质;-1 表示「全部画质」
       default_date_range_days: 7,   // 筛选默认日期范围:最近 N 天
     },
@@ -215,7 +220,11 @@ export const useStore = defineStore('shotdiff', {
     async init() {
       await this.loadMeta()
       await this.loadSettings()
+      // 保留深链/路由已设置的场景(BatchView.onMounted 先于本 init 执行),
+      // 否则默认筛选会清掉 scene_id,导致 /batches/:scene 被重定向回 /batches
+      const sid = this.filters.scene_id
       this.filters = this.defaultFilters()   // 用项目设置里的默认画质/日期范围初始化筛选
+      if (sid) this.filters.scene_id = sid
       await this.loadBatches()
     },
 
@@ -374,7 +383,29 @@ export const useStore = defineStore('shotdiff', {
         baseline_id: base.id,
         exists: !!res.exists,
         map: res.heatmaps || {},
+        comparison: res.comparison || null,   // 列头「差异对比」点击跳转需要 id/方向
       }
+    },
+
+    // 列表图列头「差异对比」点击:跳到该对批次的对比结果页(/comparison/:id)
+    gotoGridComparison() {
+      const h = this.gridHeatmaps
+      if (!h?.exists || !h.comparison) return
+      // 库内规范方向:batch_id=对比侧、ref_batch_id=基线侧;与当前网格所选对比侧不一致则翻转展示
+      const flip = String(h.comparison.batch_id) !== String(this.currentBatch?.id)
+      router.push({ path: `/comparison/${h.comparison.id}`, query: flip ? { flip: '1' } : undefined })
+    },
+
+    // 按 id 打开对比(深链/列头跳转用);在已加载历史中查找,缺失再拉一次,仍无则返回 false
+    async openComparisonById(id, flip = false) {
+      let c = this.comparisons.find((x) => String(x.id) === String(id))
+      if (!c) {
+        await this.loadComparisons()
+        c = this.comparisons.find((x) => String(x.id) === String(id))
+      }
+      if (!c) return false
+      await this.openComparison(c, flip)
+      return true
     },
 
     async loadComparisons() {
