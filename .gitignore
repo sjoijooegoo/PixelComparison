@@ -1,0 +1,16 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# 运行时数据(SQLite 库 + 上报的截图/热力图)
+backend/data/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# 真实 UE 客户端样例副本 / 联调用的散图(非示例集,避免误当批次上报)
+mock_uploads/PixelComparison/
+mock_uploads/test1/
+mock_uploads/test2/
