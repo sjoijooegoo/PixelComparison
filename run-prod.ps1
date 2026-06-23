@@ -20,6 +20,7 @@
 #>
 param(
   [int]$Port = 8800,
+  [string]$DataDir = "",
   [switch]$SkipBuild,
   [switch]$Background
 )
@@ -30,6 +31,18 @@ $backend  = Join-Path $root "backend"
 $frontend = Join-Path $root "frontend"
 $venvPy   = Join-Path $backend ".venv\Scripts\python.exe"
 $dist     = Join-Path $frontend "dist"
+
+if ([string]::IsNullOrWhiteSpace($DataDir)) {
+  if ($env:PIXELCOMP_DATA_DIR) {
+    $DataDir = $env:PIXELCOMP_DATA_DIR
+  } elseif (Test-Path "Y:\") {
+    $DataDir = "Y:\PixelComparison"
+  } else {
+    $DataDir = Join-Path $backend "data"
+  }
+}
+New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+$env:PIXELCOMP_DATA_DIR = $DataDir
 
 # --- 依赖检查 ---
 if (-not (Test-Path $venvPy)) {
@@ -76,6 +89,7 @@ Write-Host ""
 Write-Host "PixelComparison(生产模式 · 单端口同源)" -ForegroundColor Green
 Write-Host "  本机访问 : http://localhost:$Port"
 if ($ip) { Write-Host "  局域网访问: http://${ip}:$Port" -ForegroundColor Cyan }
+Write-Host "  后端数据 : $DataDir" -ForegroundColor Cyan
 Write-Host "  (页面 / 接口 / 图片同端口提供;单 worker,无热重载)" -ForegroundColor DarkGray
 Write-Host ""
 

@@ -12,11 +12,27 @@
   前置(只需首次):
     后端依赖 backend\.venv;前端依赖 frontend\node_modules
 #>
+param(
+  [string]$DataDir = ""
+)
+
 $ErrorActionPreference = "Stop"
 $root     = $PSScriptRoot
 $backend  = Join-Path $root "backend"
 $frontend = Join-Path $root "frontend"
 $venvPy   = Join-Path $backend ".venv\Scripts\python.exe"
+
+if ([string]::IsNullOrWhiteSpace($DataDir)) {
+  if ($env:PIXELCOMP_DATA_DIR) {
+    $DataDir = $env:PIXELCOMP_DATA_DIR
+  } elseif (Test-Path "Y:\") {
+    $DataDir = "Y:\PixelComparison"
+  } else {
+    $DataDir = Join-Path $backend "data"
+  }
+}
+New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+$env:PIXELCOMP_DATA_DIR = $DataDir
 
 if (-not (Test-Path $venvPy)) {
   Write-Host "[!] 找不到后端虚拟环境: $venvPy" -ForegroundColor Yellow
@@ -45,5 +61,6 @@ Write-Host ""
 Write-Host "PixelComparison 开发模式已启动(两个控制台窗口)" -ForegroundColor Green
 Write-Host "  前端: http://localhost:5173"
 Write-Host "  后端: http://127.0.0.1:8000  (API 文档 /docs)"
-Write-Host "  日志: backend\data\logs\backend.log  /  frontend.log" -ForegroundColor Cyan
+Write-Host "  后端数据: $DataDir" -ForegroundColor Cyan
+Write-Host "  日志: $DataDir\logs\backend.log  /  frontend.log" -ForegroundColor Cyan
 Write-Host "  关闭对应控制台窗口即停止服务。" -ForegroundColor DarkGray

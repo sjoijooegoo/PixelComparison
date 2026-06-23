@@ -306,13 +306,18 @@ export const useStore = defineStore('shotdiff', {
     // 批次列表图:同场景多批次的图片矩阵(需先选场景)
     async loadGrid() {
       if (!this.filters.scene_id) { this.grid = emptyGrid(); return }
-      if (this.hasEmptyDateSelection) { this.grid = emptyGrid(); return }
+      if (this.hasEmptyDateSelection) {
+        this.grid = emptyGrid()
+        this._clearRolesOutsideGrid(this.filters.scene_id)
+        return
+      }
       // 传全部筛选(scene_id 在路径里,多余的 status 等会被后端忽略)
       const sceneId = this.filters.scene_id
       const filters = this.requestFilters
       const key = gridCacheKey(sceneId, filters)
       if (gridCache.has(key)) {
         this.grid = gridCache.get(key)
+        this._clearRolesOutsideGrid(sceneId)
         this.loadGridHeatmaps()
         return this.grid
       }
@@ -329,8 +334,26 @@ export const useStore = defineStore('shotdiff', {
       }
       const data = await gridInflight.get(key)
       this.grid = data
+      this._clearRolesOutsideGrid(sceneId)
       this.loadGridHeatmaps()
       return data
+    },
+
+    // 筛选项变化后,已选基线/对比若不在当前列表图列里,就清掉;
+    // 避免用户看不到高亮列,但状态里仍残留一个被筛选隐藏的批次。
+    _clearRolesOutsideGrid(scene) {
+      if (!scene) return
+      const visibleIds = new Set(this.grid.batches.map((b) => String(b.id)))
+      let changed = false
+      if (this.baselineBatch && !visibleIds.has(String(this.baselineBatch.id))) {
+        this.baselineBatch = null
+        changed = true
+      }
+      if (this.currentBatch && !visibleIds.has(String(this.currentBatch.id))) {
+        this.currentBatch = null
+        changed = true
+      }
+      if (changed) this._saveRoles(scene)
     },
 
     // 把当前激活的选择写入按场景记忆表(都为空则删除该场景条目)

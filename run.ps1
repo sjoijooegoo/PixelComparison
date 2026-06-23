@@ -9,7 +9,8 @@
 #>
 param(
   [int]$BackendPort = 8000,
-  [int]$FrontendPort = 5173
+  [int]$FrontendPort = 5173,
+  [string]$DataDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +18,18 @@ $root     = $PSScriptRoot
 $backend  = Join-Path $root "backend"
 $frontend = Join-Path $root "frontend"
 $venvPy   = Join-Path $backend ".venv\Scripts\python.exe"
+
+if ([string]::IsNullOrWhiteSpace($DataDir)) {
+  if ($env:PIXELCOMP_DATA_DIR) {
+    $DataDir = $env:PIXELCOMP_DATA_DIR
+  } elseif (Test-Path "Y:\") {
+    $DataDir = "Y:\PixelComparison"
+  } else {
+    $DataDir = Join-Path $backend "data"
+  }
+}
+New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
+$env:PIXELCOMP_DATA_DIR = $DataDir
 
 # 依赖检查
 if (-not (Test-Path $venvPy)) {
@@ -54,4 +67,5 @@ Write-Host ""
 Write-Host "PixelComparison 启动中(两个新窗口分别是前端/后端日志)" -ForegroundColor Green
 Write-Host "  本机访问 : http://localhost:$FrontendPort"
 if ($ip) { Write-Host "  局域网访问: http://${ip}:$FrontendPort" -ForegroundColor Cyan }
+Write-Host "  后端数据 : $DataDir" -ForegroundColor Cyan
 Write-Host "  (前端通过代理转发 /api、/images 到后端,只需开放 $FrontendPort 端口)"
