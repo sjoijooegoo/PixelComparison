@@ -9,6 +9,7 @@ backend/data/
 # Node
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
 
 # 真实 UE 客户端样例副本 / 联调用的散图(非示例集,避免误当批次上报)
 mock_uploads/PixelComparison/
