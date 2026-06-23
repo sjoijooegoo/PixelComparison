@@ -56,7 +56,7 @@ async function rerun() {
       <template #content>
         <div class="hist-pop">
           <div class="hist-head text-secondary">
-            对比历史 <b>{{ store.comparisons.length }}</b> <span class="cap">/ 最多 100</span>
+            对比历史 <span class="cap">近 14 天</span>
           </div>
           <div class="hist-list">
             <button v-for="h in store.comparisons" :key="h.id" class="hist-item"
