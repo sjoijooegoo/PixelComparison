@@ -241,10 +241,9 @@ async function onDelete(record) {
 /* 行 hover 反馈 */
 :deep(.arco-table-tbody tr:hover .arco-table-td) { background: var(--color-fill-3); }
 
-/* 与列表图一致:圆角边框容器,左右内缩与表头/分页对齐 */
+/* 表格区:去掉外层容器整体边框,只保留表格自身随数据变化的行/表头边框 */
 .table-wrap {
   flex: 1; min-height: 0; overflow: auto; margin: 0 16px;
-  border: 1px solid var(--color-border-2); border-radius: 8px;
 }
 .foot { display: flex; justify-content: flex-end; padding: 10px 16px; }
 </style>
