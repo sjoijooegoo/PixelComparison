@@ -31,6 +31,58 @@ npm run dev
 
 打开 http://localhost:5173 (dev server 已配置代理,`/api` 与 `/images` 转发到 8000 端口)。
 
+### Linux 部署/开发启动
+
+Linux 上后端数据目录不要写 Windows 的 `Y:\PixelComparison`,要用 Linux 挂载路径,并通过
+`PIXELCOMP_DATA_DIR` 指向数据盘。后端会把 SQLite 数据库、截图、缩略图、热力图、日志都读写到这个目录。
+
+推荐目录结构:
+
+```text
+/agentdrive/v_sycisong/PixelComparison/
+  shotdiff.db
+  images/
+  logs/
+```
+
+后端启动:
+
+```bash
+cd /data/workspace/PixelComparison/backend
+
+# 首次初始化;Python 需 3.10+ / 3.11 更稳
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 每次启动前设置数据目录
+export PIXELCOMP_DATA_DIR=/agentdrive/v_sycisong/PixelComparison
+
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+前端启动:
+
+```bash
+cd /data/workspace/PixelComparison/frontend
+
+# 建议 Node 20+
+node -v
+npm -v
+
+npm install
+npm run dev
+```
+
+访问 `http://服务器IP:5173`。前端 dev server 会代理 `/api`、`/images`、`/thumb` 到同机后端
+`127.0.0.1:8000`,因此通常只需要对外开放 `5173` 端口。
+
+后台启动后端示例:
+
+```bash
+nohup bash -c 'export PIXELCOMP_DATA_DIR=/agentdrive/v_sycisong/PixelComparison && cd /data/workspace/PixelComparison/backend && source .venv/bin/activate && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000' > backend.log 2>&1 &
+```
+
 ## 测试
 
 - 后端单测 + 并发用例:`cd backend; .\.venv\Scripts\python -m pytest -q`(含 `tests/test_concurrency.py` 多人并发上报/对比/读写)。
