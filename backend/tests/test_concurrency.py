@@ -146,12 +146,9 @@ def test_concurrent_same_pair_dedup(client, png_bytes):
     assert client.get("/api/comparisons").json()["total"] == 1
 
 
-# ---- 7. 并发对比·不同对 + 淘汰上限 ----
+# ---- 7. 并发对比·不同对:全部成功、无 5xx、各成一条 ----
 
-def test_concurrent_distinct_pairs_cap(client, png_bytes, monkeypatch):
-    import app.main
-    import app.db
-    monkeypatch.setattr(app.main, "_MAX_COMPARISONS", 5)
+def test_concurrent_distinct_pairs(client, png_bytes):
     ids = [str(i) for i in range(7)]
     for bid in ids:
         assert _batch(client, bid=bid).status_code == 201
@@ -165,21 +162,10 @@ def test_concurrent_distinct_pairs_cap(client, png_bytes, monkeypatch):
 
     res = _run(fire, 6)
     _no_5xx([c for c, _ in res])
-    for _, body in res:
-        _await_compare(client, body)   # 等全部到达终态(完成或被淘汰)
-    # 淘汰发生在任务 finally(DB 删稍早、热力图目录 prune 稍晚,均异步),
-    # 轮询等「总数 ≤ 上限 且 热力图目录 ≤ 总数」一起收敛。
-    heat_root = app.db.IMAGES_DIR / "heatmaps"
-    total = None
-    dirs = []
-    for _ in range(80):
-        total = client.get("/api/comparisons").json()["total"]
-        dirs = [d for d in heat_root.iterdir() if d.is_dir()] if heat_root.exists() else []
-        if total <= 5 and len(dirs) <= total:
-            break
-        time.sleep(0.1)
-    assert total <= 5, f"上限未收敛: total={total}"
-    assert len(dirs) <= total, f"残留热力图目录 {len(dirs)} > 对比 {total}"
+    cids = {_await_compare(client, body) for _, body in res}
+    assert len(cids) == 6, f"6 对不同对应得 6 条对比: {cids}"
+    # 都是刚创建的(在保留期内),不应被时间淘汰
+    assert client.get("/api/comparisons").json()["total"] == 6
 
 
 # ---- 8. 混合读写负载:读不被压垮 ----

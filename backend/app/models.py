@@ -44,10 +44,8 @@ class Screenshot(Base):
     camera: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     batch: Mapped[Batch] = relationship(back_populates="screenshots")
-
-    @property
-    def url(self) -> str:
-        return f"/images/{self.path}"
+    # 图片 URL 统一由 main._versioned_url(path) 生成(带 ?v=mtime 缓存破坏);
+    # 不在模型上提供裸 /images/<path> 属性, 防覆盖后浏览器/CDN 服务旧图。
 
 
 class Baseline(Base):

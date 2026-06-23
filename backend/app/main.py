@@ -164,18 +164,20 @@ def batch_dto(b: Batch, db: Session) -> dict:
     }
 
 
-def _heatmap_url(heatmap_path: str | None) -> str | None:
-    """热力图 URL 带缓存破坏参数(文件 mtime)。
-    重算复用同一 comparison id、URL 不变,而 /images 是 24h 强缓存,
-    若不带版本号浏览器会一直显示旧图;用 mtime 做版本:文件重写则 URL 变、refetch,
-    未变则 URL 稳定、命中缓存。"""
-    if not heatmap_path:
-        return None
+def _versioned_url(path: str) -> str:
+    """/images/<path> 带缓存破坏参数(文件 mtime)。
+    /images 是 24h 强缓存,而覆盖同号批次/重算热力图会原地重写文件但 URL(路径)不变;
+    不带版本号浏览器/CDN 会一直显示旧图。用 mtime 做版本:文件重写 → mtime 变 → URL 变 → refetch;
+    未变 → URL 稳定 → 命中缓存。/images 与 /thumb 都按路径匹配,忽略 ?v=。"""
     try:
-        mtime = int((IMAGES_DIR / heatmap_path).stat().st_mtime)
-        return f"/images/{heatmap_path}?v={mtime}"
+        mtime = int((IMAGES_DIR / path).stat().st_mtime)
+        return f"/images/{path}?v={mtime}"
     except OSError:
-        return f"/images/{heatmap_path}"
+        return f"/images/{path}"
+
+
+def _heatmap_url(heatmap_path: str | None) -> str | None:
+    return _versioned_url(heatmap_path) if heatmap_path else None
 
 
 def comparison_dto(c: Comparison, db: Session) -> dict:
@@ -222,8 +224,8 @@ def item_dto(it: ComparisonItem, with_metrics: bool = False) -> dict:
         "name": it.scene_name,
         "status": it.status,
         "diff_pct": round(it.diff_pct, 2) if it.diff_pct is not None else None,
-        "current_url": it.current_shot.url if it.current_shot else None,
-        "baseline_url": it.baseline_shot.url if it.baseline_shot else None,
+        "current_url": _versioned_url(it.current_shot.path) if it.current_shot else None,
+        "baseline_url": _versioned_url(it.baseline_shot.path) if it.baseline_shot else None,
         "heatmap_url": _heatmap_url(it.heatmap_path),
     }
     d["thumb_url"] = d["current_url"] or d["baseline_url"]
@@ -429,7 +431,7 @@ def upload_screenshot(
         "截图上报成功 batch=%s scene=%s file=%s bytes=%s path=%s",
         batch_id, scene_name, filename, len(data), path,
     )
-    return {"id": shot.id, "scene_name": scene_name, "url": shot.url}
+    return {"id": shot.id, "scene_name": scene_name, "url": _versioned_url(shot.path)}
 
 
 @app.get("/api/batches/{batch_id}/screenshots")
@@ -445,7 +447,7 @@ def list_screenshots(batch_id: str, db: Session = Depends(get_db)):
     return {
         "total": len(shots),
         "items": [
-            {"scene_name": s.scene_name, "url": s.url, "frame_index": s.frame_index}
+            {"scene_name": s.scene_name, "url": _versioned_url(s.path), "frame_index": s.frame_index}
             for s in shots
         ],
     }
@@ -504,7 +506,7 @@ def scene_grid(
                 s.scene_name,
                 {"scene_name": s.scene_name, "frame_index": s.frame_index, "by_batch": {}},
             )
-            r["by_batch"][s.batch_id] = s.url
+            r["by_batch"][s.batch_id] = _versioned_url(s.path)
             if s.frame_index is not None and (r["frame_index"] is None or s.frame_index < r["frame_index"]):
                 r["frame_index"] = s.frame_index
     rows = sorted(
@@ -620,7 +622,9 @@ _RUNNING: dict[int, str] = {}   # comparison_id -> 正在计算它的 task_id
 _TASK_TTL_SECONDS = 3600
 
 # 对比历史全局上限;新建对比超过它就淘汰创建时间最早的(环形历史)。
-_MAX_COMPARISONS = 100
+# 对比是「短期可重跑产物」:保留最近 N 天,过期整条删除(记录 + 本地热力图)。
+# 需要看更老的对比时,用仍在的批次重跑即可。替代了旧的「最新 100 条」计数上限。
+COMPARISON_RETENTION_DAYS = 14
 
 
 def _prune_tasks(now: float | None = None) -> None:
@@ -639,29 +643,24 @@ def _prune_tasks(now: float | None = None) -> None:
 
 
 def _evict_old_comparisons(db: Session, keep_id: int | None = None) -> list[int]:
-    """对比总数超过 _MAX_COMPARISONS 时,删除创建时间最早的若干条(级联对比项)。
+    """删除创建时间早于保留期(COMPARISON_RETENTION_DAYS 天)的对比(级联对比项)。
 
+    对比是短期可重跑产物,过期整条删除;本地热力图由调用方 prune_orphans 清理。
     跳过刚建的(keep_id)与正在计算的(_RUNNING);调用方应已持有 _COMPARE_LOCK。
     返回被淘汰的 comparison id 列表(供调用方清理其热力图文件)。
     """
-    total = db.scalar(select(func.count()).select_from(Comparison)) or 0
-    excess = total - _MAX_COMPARISONS
-    if excess <= 0:
-        return []
+    cutoff = datetime.now() - timedelta(days=COMPARISON_RETENTION_DAYS)
     evicted: list[int] = []
-    for c in db.scalars(select(Comparison).order_by(Comparison.created_at.asc())):
-        if excess <= 0:
-            break
+    for c in db.scalars(select(Comparison).where(Comparison.created_at < cutoff)):
         if c.id == keep_id or c.id in _RUNNING:
             continue
         db.delete(c)            # 经 Comparison.items 关系级联删对比项
         evicted.append(c.id)
-        excess -= 1
     if evicted:
         db.commit()
         for tid in [t for t, i in _TASKS.items() if i.get("comparison_id") in evicted]:
             _TASKS.pop(tid, None)
-        log.info("对比超上限 %d,淘汰最旧 %s", _MAX_COMPARISONS, evicted)
+        log.info("对比保留 %d 天,淘汰过期 %s", COMPARISON_RETENTION_DAYS, evicted)
     return evicted
 
 
@@ -687,8 +686,8 @@ def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, set
         _TASKS[task_id].update(status="error", error=str(e), finished_at=time.monotonic())
         log.warning("对比 #%s 失败: %s", comparison_id, e)
     finally:
-        # 并发高峰时,建对比时若其它对比都在计算中可能无法淘汰、总数暂时超限;
-        # 任务完成、离开 _RUNNING 后再补一次淘汰,使总数最终收敛回上限。
+        # 任务完成、离开 _RUNNING 后再补一次过期淘汰(此刻自己已可被纳入判断,
+        # 但 keep_id=自己保护刚算完最可能正被查看的这条)。
         evicted: list[int] = []
         with _COMPARE_LOCK:
             _RUNNING.pop(comparison_id, None)
@@ -751,7 +750,7 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             )
             db.add(comparison)
             db.commit()
-            # 新增了一行 -> 超限则淘汰最旧的对比(返回的 id 供下面清热力图)
+            # 顺带淘汰过期对比(超保留期),返回的 id 供下面清热力图
             evicted = _evict_old_comparisons(db, keep_id=comparison.id)
             comp_batch_id, comp_ref_id, comp_baseline = batch.id, ref.id, baseline
         else:
