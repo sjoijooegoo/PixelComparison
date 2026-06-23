@@ -14,3 +14,7 @@ frontend/dist/
 mock_uploads/PixelComparison/
 mock_uploads/test1/
 mock_uploads/test2/
+
+# 本机 COS 配置/运行日志(可能包含密钥或访问细节)
+scripts/CosConfig.yaml
+cos_helper.log
