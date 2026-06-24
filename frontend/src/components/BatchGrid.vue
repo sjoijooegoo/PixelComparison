@@ -372,7 +372,7 @@ const gridStyle = computed(() => ({
 
 <style scoped>
 .grid-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; }
-.grid-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--color-border-2); border-radius: 8px; cursor: grab; }
+.grid-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--color-border-2); border-radius: 8px; cursor: default; }
 /* 拖拽平移进行中:统一抓手光标(覆盖图片的 zoom-in),并禁止选中 */
 .grid-scroll.grabbing { cursor: grabbing; user-select: none; }
 .grid-scroll.grabbing * { cursor: grabbing !important; }
