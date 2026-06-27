@@ -41,12 +41,20 @@ function autoTick() {
   if (document.hidden) return                       // 后台标签页不刷,省请求
   if (!showBatchActions.value) return               // 仅批次/对比页(设置页不刷)
   if (store.uploadVisible || store.running) return  // 上传弹窗 / 对比中,不打断
-  if (store.batchView === 'grid') return            // 列表图暂停(避免滚动跳顶/图片重闪)
+  // 列表图也刷新:渲染 key 稳定(列=批次id、行=检查点名),Vue 复用 DOM,
+  // 已有图片不重载、滚动位置不丢;有新批次时仅在末尾插入新列。
   doRefresh({ silent: true }).catch(() => {})       // 异常不应中断定时器
 }
 
-onMounted(() => { autoTimer = setInterval(autoTick, AUTO_REFRESH_MS) })
-onUnmounted(() => { if (autoTimer) clearInterval(autoTimer) })
+onMounted(() => {
+  autoTimer = setInterval(autoTick, AUTO_REFRESH_MS)
+  // 切回前台(标签重新可见)立即刷一次,不必等下一拍;切走时 autoTick 内部守卫自会跳过
+  document.addEventListener('visibilitychange', autoTick)
+})
+onUnmounted(() => {
+  if (autoTimer) clearInterval(autoTimer)
+  document.removeEventListener('visibilitychange', autoTick)
+})
 </script>
 
 <template>
