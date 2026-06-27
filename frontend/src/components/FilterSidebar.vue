@@ -1,8 +1,11 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { useStore, defaultDateRange, SHADING_QUALITY_OPTIONS } from '../store'
+import { useStore, defaultDateRange, visibleQualityOptions } from '../store'
 
 const store = useStore()
+
+// 画质下拉选项:跟随项目设置「筛选框显示的画质」
+const qualityOptions = computed(() => visibleQualityOptions(store.settings))
 
 // 创建时间范围:绑定到 filters.created_from/created_to(YYYY-MM-DD)
 const dateRange = computed(() => {
@@ -93,7 +96,7 @@ async function reset() {
       <span class="label">画质</span>
       <a-select v-model="store.filters.shading_quality" placeholder="全部画质" allow-clear size="small"
         style="width: 130px" @change="applyNow">
-        <a-option v-for="o in SHADING_QUALITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</a-option>
+        <a-option v-for="o in qualityOptions" :key="o.value" :value="o.value">{{ o.label }}</a-option>
       </a-select>
     </div>
     <div class="field">

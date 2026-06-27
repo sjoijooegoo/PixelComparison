@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { theme, toggleTheme } from '../theme'
@@ -21,14 +21,32 @@ const current = computed(() => (route.path === '/' ? '/batches' : route.path))
 const isActive = (path) => current.value === path || current.value.startsWith(path + '/')
 const showBatchActions = computed(() => isActive('/batches') || isActive('/comparison'))
 
-async function refresh() {
+// 按当前视图刷新对应数据;silent=true 时不弹提示(供定时自动刷新复用)
+async function doRefresh({ silent = false } = {}) {
   if (isActive('/comparison')) {
     await store.loadComparisons()
   } else {
     await store.refreshBatches()
   }
-  Message.success('已刷新')
+  if (!silent) Message.success('已刷新')
 }
+
+function refresh() { return doRefresh() }   // 顶栏按钮:有提示
+
+// 定时自动刷新:固定 1 分钟一次,静默;按多重守卫跳过本轮(下一轮再判断)
+const AUTO_REFRESH_MS = 60000
+let autoTimer = null
+
+function autoTick() {
+  if (document.hidden) return                       // 后台标签页不刷,省请求
+  if (!showBatchActions.value) return               // 仅批次/对比页(设置页不刷)
+  if (store.uploadVisible || store.running) return  // 上传弹窗 / 对比中,不打断
+  if (store.batchView === 'grid') return            // 列表图暂停(避免滚动跳顶/图片重闪)
+  doRefresh({ silent: true }).catch(() => {})       // 异常不应中断定时器
+}
+
+onMounted(() => { autoTimer = setInterval(autoTick, AUTO_REFRESH_MS) })
+onUnmounted(() => { if (autoTimer) clearInterval(autoTimer) })
 </script>
 
 <template>

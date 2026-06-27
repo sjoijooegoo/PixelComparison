@@ -1013,6 +1013,7 @@ class SettingsIn(BaseModel):
     heatmap_sensitivity: float | None = None
     default_shading_quality: int | None = None
     default_date_range_days: int | None = None
+    filter_shading_qualities: list[int] | None = None
 
 
 @app.get("/api/settings")

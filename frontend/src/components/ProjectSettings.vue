@@ -1,12 +1,15 @@
 <script setup>
-import { reactive, onMounted } from 'vue'
+import { reactive, computed, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore, SHADING_QUALITY_OPTIONS } from '../store'
 
 const store = useStore()
 
-// 默认画质下拉:在标准档位前加「全部画质」(-1)
-const QUALITY_OPTIONS = [{ value: -1, label: '全部画质' }, ...SHADING_QUALITY_OPTIONS]
+// 默认画质下拉:「全部画质」(-1) + 当前勾选为可见的画质档位(随复选框联动)
+const defaultQualityOptions = computed(() => [
+  { value: -1, label: '全部画质' },
+  ...SHADING_QUALITY_OPTIONS.filter((o) => form.filter_shading_qualities.includes(o.value)),
+])
 
 const DEFAULTS = {
   pixel_diff_threshold: 8,
@@ -21,6 +24,7 @@ const DEFAULTS = {
   heatmap_density_floor: 0.2,
   default_shading_quality: 5,
   default_date_range_days: 7,
+  filter_shading_qualities: [5, 4, 3, 2, 1, 0],
 }
 
 const form = reactive({ ...DEFAULTS })
@@ -37,6 +41,10 @@ async function save() {
   if (form.warn_threshold > form.fail_threshold) {
     Message.warning('橙色阈值不能大于红色阈值')
     return
+  }
+  if (form.default_shading_quality !== -1
+      && !form.filter_shading_qualities.includes(form.default_shading_quality)) {
+    Message.info('默认画质不在所选画质内,将以「全部画质」生效')
   }
   saving.v = true
   try {
@@ -138,10 +146,17 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
       <section class="block">
         <div class="block-title">筛选默认值</div>
         <div class="grid grid-2">
+          <div class="field field-full">
+            <label>筛选框显示的画质</label>
+            <a-checkbox-group v-model="form.filter_shading_qualities">
+              <a-checkbox v-for="o in SHADING_QUALITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</a-checkbox>
+            </a-checkbox-group>
+            <span class="hint">勾选哪些画质会出现在筛选框的画质下拉里(至少勾一个;不勾任何项保存时回退为全部)</span>
+          </div>
           <div class="field">
             <label>默认画质</label>
             <a-select v-model="form.default_shading_quality" size="large">
-              <a-option v-for="o in QUALITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</a-option>
+              <a-option v-for="o in defaultQualityOptions" :key="o.value" :value="o.value">{{ o.label }}</a-option>
             </a-select>
             <span class="hint">进入页面或点「清空」时,画质筛选默认选中此项(「全部画质」为不筛选)</span>
           </div>
@@ -190,6 +205,7 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
 
 .field { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.field-full { grid-column: 1 / -1; }
 .field label { font-size: 13px; color: var(--color-text-2); }
 .field :deep(.arco-input-number) { width: 100%; }
 .field .hint { font-size: 12px; color: var(--color-text-3); line-height: 1.5; }

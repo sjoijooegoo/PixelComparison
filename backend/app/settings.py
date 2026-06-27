@@ -22,7 +22,12 @@ DEFAULT_SETTINGS: dict = {
     "heatmap_density_floor": 0.2,  # enhanced:散点容忍下限(邻域变化密度低于此值被压)
     "default_shading_quality": 5,  # 筛选默认画质;-1 表示「全部画质」(不筛选)
     "default_date_range_days": 7,  # 筛选默认日期范围:最近 N 天
+    # 筛选框画质下拉显示哪几档(value 列表);默认全显,与无配置时一致
+    "filter_shading_qualities": [5, 4, 3, 2, 1, 0],
 }
+
+# 画质合法档位(0=节能 … 5=电影);用于 filter_shading_qualities 规整
+VALID_SHADING_QUALITIES = frozenset(range(0, 6))
 
 # 非数值参数的合法取值(save 时校验)
 ENUMS: dict = {
@@ -60,12 +65,22 @@ def save_settings(db: Session, patch: dict) -> dict:
     for k, v in patch.items():
         if k not in DEFAULT_SETTINGS or v is None:
             continue
+        if k == "filter_shading_qualities":
+            # 规整:去重、仅保留合法档位、降序;空集则忽略本次(保留原值,避免下拉为空)
+            cleaned = sorted({q for q in v if q in VALID_SHADING_QUALITIES}, reverse=True)
+            if cleaned:
+                data[k] = cleaned
+            continue
         if k in ENUMS:
             if v in ENUMS[k]:
                 data[k] = v
             continue
         lo, hi = RANGES[k]
         data[k] = max(lo, min(hi, v))
+    # 一致性:默认画质必须落在可见集合内(或 -1 全部画质),否则回退为 -1
+    if data["default_shading_quality"] != -1 \
+            and data["default_shading_quality"] not in data["filter_shading_qualities"]:
+        data["default_shading_quality"] = -1
     row = db.get(Setting, 1)
     if row:
         row.payload = dict(data)   # 重新赋值以触发 JSON 列更新

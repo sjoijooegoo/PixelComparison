@@ -29,6 +29,13 @@ export const SHADING_QUALITY_OPTIONS = [
   { value: 0, label: '节能' },
 ]
 
+// 按项目设置过滤出筛选框画质下拉应显示的档位;空集兜底为全部
+export function visibleQualityOptions(settings) {
+  const set = new Set(settings?.filter_shading_qualities ?? [5, 4, 3, 2, 1, 0])
+  const opts = SHADING_QUALITY_OPTIONS.filter((o) => set.has(o.value))
+  return opts.length ? opts : SHADING_QUALITY_OPTIONS
+}
+
 // P4 版本号展示:无版本时显示 ——
 export function p4Label(v) {
   return (v === null || v === undefined || v === '') ? '——' : `P4 ${v}`
@@ -148,6 +155,7 @@ export const useStore = defineStore('shotdiff', {
       heatmap_density_floor: 0.2,
       default_shading_quality: 5,   // 筛选默认画质;-1 表示「全部画质」
       default_date_range_days: 7,   // 筛选默认日期范围:最近 N 天
+      filter_shading_qualities: [5, 4, 3, 2, 1, 0],   // 筛选框画质下拉显示哪几档
     },
   }),
 
