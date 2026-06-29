@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import shutil
 import sys
+import time
 
 from sqlalchemy import select
 
 from .db import IMAGES_DIR, SessionLocal
 from .models import Batch, Comparison, Screenshot
+
+# 缩略图是可重建的派生缓存:超过此天数「未被访问」(mtime)即淘汰,下次看列表图自动重生成
+THUMBNAIL_RETENTION_DAYS = 60
 
 
 def find_orphans(db) -> dict[str, list]:
@@ -73,6 +77,37 @@ def prune_orphans(db, dry_run: bool = False) -> dict[str, int]:
     return {"dirs": len(found["dirs"]), "files": len(found["files"])}
 
 
+def prune_thumbnails(days: int = THUMBNAIL_RETENTION_DAYS, dry_run: bool = False) -> int:
+    """删除 thumbs/ 下「mtime 早于 days 天」的缩略图缓存,并清掉随之变空的目录。
+
+    缩略图是纯派生缓存(原图仍在则可由 /thumb 端点按需重建),删除无损;
+    /thumb 命中缓存时会刷新 mtime,因此这里的「mtime 旧」近似「久未被访问」。
+    返回删除的文件数。
+    """
+    thumb_dir = IMAGES_DIR / "thumbs"
+    if not thumb_dir.is_dir():
+        return 0
+    cutoff = time.time() - days * 86400
+    removed = 0
+    for f in thumb_dir.rglob("*.webp"):
+        try:
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                print(("[dry-run] " if dry_run else "") + f"rm thumb {f}")
+                if not dry_run:
+                    f.unlink(missing_ok=True)
+                removed += 1
+        except OSError:
+            pass
+    if not dry_run:   # 自底向上清空目录(rmdir 仅在目录为空时成功)
+        for d in sorted((p for p in thumb_dir.rglob("*") if p.is_dir()),
+                        key=lambda p: len(p.parts), reverse=True):
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+    return removed
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     dry_run = "--dry-run" in argv
@@ -81,8 +116,10 @@ def main(argv: list[str] | None = None) -> int:
         result = prune_orphans(db, dry_run=dry_run)
     finally:
         db.close()
+    thumbs = prune_thumbnails(dry_run=dry_run)
     print(f"{'would remove' if dry_run else 'removed'}: "
-          f"{result['dirs']} dir(s), {result['files']} file(s)")
+          f"{result['dirs']} dir(s), {result['files']} file(s), "
+          f"{thumbs} stale thumb(s)")
     return 0
 
 

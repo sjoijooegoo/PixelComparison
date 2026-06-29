@@ -1,5 +1,7 @@
-"""缩略图:懒生成 + 缓存 + 随批次清理 + 孤儿清理。"""
+"""缩略图:懒生成 + 缓存 + 随批次清理 + 孤儿清理 + 久未访问淘汰。"""
 import io
+import os
+import time
 
 from PIL import Image
 
@@ -59,3 +61,55 @@ def test_thumb_generate_cache_and_cleanup(client, png_bytes):
         app.cleanup.prune_orphans(s)
     finally:
         s.close()
+
+
+def test_thumb_retention_evicts_stale_and_keeps_fresh(client, png_bytes):
+    import app.main
+    from app.cleanup import prune_thumbnails
+
+    big = png_bytes((20, 130, 200), size=(1600, 900))
+    assert _batch(client, "rb").status_code == 201
+    for name in ("old", "new"):
+        assert _upload(client, "rb", name, big).status_code == 201
+        client.get(f"/thumb/batches/rb/{name}.png")
+
+    old_cache = app.main.THUMB_DIR / "batches" / "rb" / "old.webp"
+    new_cache = app.main.THUMB_DIR / "batches" / "rb" / "new.webp"
+    assert old_cache.is_file() and new_cache.is_file()
+
+    # 把 old 的 mtime 回拨到 70 天前(> 60 天保留期),new 保持新鲜
+    stale = time.time() - 70 * 86400
+    os.utime(old_cache, (stale, stale))
+
+    removed = prune_thumbnails(days=60)
+    assert removed == 1
+    assert not old_cache.exists()        # 久未访问 → 淘汰
+    assert new_cache.is_file()           # 新鲜 → 保留
+
+    # 被淘汰的缩略图可由 /thumb 端点按原图重建(无损)
+    assert client.get("/thumb/batches/rb/old.png").status_code == 200
+    assert old_cache.is_file()
+
+
+def test_thumb_hit_refreshes_mtime(client, png_bytes):
+    """命中缓存时刷新 mtime:让"久未访问"按访问算,经常看的不会被 60 天淘汰误删。"""
+    import app.db
+    import app.main
+
+    big = png_bytes((20, 130, 200), size=(1600, 900))
+    assert _batch(client, "hb").status_code == 201
+    assert _upload(client, "hb", "s1", big).status_code == 201
+    assert client.get("/thumb/batches/hb/s1.png").status_code == 200   # 生成
+
+    orig = app.db.IMAGES_DIR / "batches" / "hb" / "s1.png"
+    cache = app.main.THUMB_DIR / "batches" / "hb" / "s1.webp"
+
+    # 把原图与缩略图都回拨 2 天(保持 cache.mtime >= orig.mtime 以走命中分支,
+    # 且 > 1 天阈值,命中时应刷新 mtime)
+    old = time.time() - 2 * 86400
+    os.utime(orig, (old, old))
+    os.utime(cache, (old, old))
+    assert cache.stat().st_mtime < time.time() - 86400
+
+    assert client.get("/thumb/batches/hb/s1.png").status_code == 200   # 命中 → touch
+    assert cache.stat().st_mtime >= time.time() - 60                   # mtime 已刷新到接近现在

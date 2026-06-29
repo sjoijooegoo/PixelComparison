@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import os
 import shutil
 import threading
 import time
@@ -20,7 +21,7 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .cleanup import prune_orphans
+from .cleanup import prune_orphans, prune_thumbnails
 from .db import IMAGES_DIR, Base, SessionLocal, engine, get_db, migrate_columns
 from .logging_setup import client_log, log, setup_logging
 from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
@@ -55,6 +56,31 @@ THUMB_DIR = IMAGES_DIR / "thumbs"
 THUMB_WIDTH = 600          # ≈ 显示宽 300 的 2×,高分屏也清晰
 THUMB_QUALITY = 80
 
+# 缩略图缓存淘汰:生成新缩略图时低频触发一次,清掉久未访问的旧缓存(后台线程,不阻塞请求)
+_THUMB_PRUNE_INTERVAL = 6 * 3600
+_thumb_prune_lock = threading.Lock()
+_thumb_pruned_at = 0.0
+
+
+def _maybe_prune_thumbnails():
+    global _thumb_pruned_at
+    now = time.monotonic()
+    if now - _thumb_pruned_at < _THUMB_PRUNE_INTERVAL:
+        return
+    if not _thumb_prune_lock.acquire(blocking=False):   # 已有一次在跑,跳过
+        return
+    _thumb_pruned_at = now
+
+    def _run():
+        try:
+            n = prune_thumbnails()
+            if n:
+                log.info("缩略图淘汰:删除 %d 个久未访问的缓存", n)
+        finally:
+            _thumb_prune_lock.release()
+
+    threading.Thread(target=_run, daemon=True).start()
+
 
 @app.get("/thumb/{path:path}")
 def get_thumb(path: str):
@@ -78,6 +104,15 @@ def get_thumb(path: str):
         except Exception as e:  # noqa: BLE001
             log.warning("缩略图生成失败 %s: %s", path, e)
             raise HTTPException(404, "thumb failed")
+        _maybe_prune_thumbnails()                             # 有新生成,顺带低频淘汰旧缓存
+    else:
+        # 命中缓存:把 mtime 刷成「最近访问」,供按 mtime 的久未访问淘汰使用;
+        # 同一天内不重复写,避免每次请求都触发元数据写入。
+        try:
+            if time.time() - cache.stat().st_mtime > 86400:
+                os.utime(cache, None)
+        except OSError:
+            pass
     return FileResponse(cache, media_type="image/webp",
                         headers={"Cache-Control": "public, max-age=86400"})
 
