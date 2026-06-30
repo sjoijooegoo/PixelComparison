@@ -45,6 +45,25 @@ def test_auto_compare_ignores_other_platform_and_quality(client):
     assert client.post("/api/batches/cur_q3/auto-compare").json()["matched"] is False
 
 
+def test_auto_compare_prefers_earlier_p4_when_time_equal(client, png_bytes):
+    """复现真实场景:同场景同画质、created_at 完全相同(--time 固定)、P4 不同。
+    应按 P4 版本配对,而不是因时间相同而全部 matched=False。"""
+    same = "2026-06-29T09:17:00"
+    for bid, p4 in (("p100", 100), ("p200", 200), ("p150", 150)):
+        r = client.post("/api/batches", json={
+            "id": bid, "scene_id": "S", "platform": "Windows",
+            "shading_quality": 4, "p4_version": p4, "captured_at": same})
+        assert r.status_code == 201, r.text
+        assert _shot(client, bid, png_bytes).status_code == 201
+
+    # p200 → 应匹配最接近的更早版本 p150(而非更老的 p100),尽管三者 created_at 相同
+    r = client.post("/api/batches/p200/auto-compare")
+    assert r.json()["matched"] is True
+    assert r.json()["ref_batch_id"] == "p150"
+    # p100 是最早版本 → 无更早 → 跳过
+    assert client.post("/api/batches/p100/auto-compare").json()["matched"] is False
+
+
 def test_auto_compare_treats_null_quality_as_extreme(client):
     # 旧数据无画质 -> 视为 4(极致),应能与显式 quality=4 的批次互相匹配
     client.post("/api/batches", json={

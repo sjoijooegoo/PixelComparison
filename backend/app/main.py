@@ -843,34 +843,55 @@ def lookup_comparison(batch_id: str, ref_batch_id: str, db: Session = Depends(ge
 
 @app.post("/api/batches/{batch_id}/auto-compare", status_code=202)
 def auto_compare_batch(batch_id: str, db: Session = Depends(get_db)):
-    """自动对比:挑一个"同场景 + 同平台 + 同画质"、创建时间早于本批次的最新批次作为参照并发起对比。
+    """自动对比:在"同场景 + 同平台 + 同画质"里挑一个**更早的版本**作参照并发起对比。
 
-    供上报脚本在补齐截图后调用。找不到匹配批次时返回 {"matched": false},不报错。
-    (对比本就要求 scene_id 相同,故场景必须一致;画质为空的旧数据按默认「极致」等价匹配。)
+    "更早"优先按 P4 版本号(changelist 单调递增)判断——免疫上报时间相同
+    (如 --time 用了固定值)导致配不上对;P4 相同则回退按上报时间,本批次无
+    P4 版本号时也回退按上报时间。供上报脚本补齐截图后调用,找不到则返回
+    {"matched": false},不报错。(画质为空的旧数据按默认「极致」等价匹配。)
     """
     batch = db.get(Batch, batch_id)
     if not batch:
         raise HTTPException(404, "batch not found")
     bq = batch.shading_quality if batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY
-    stmt = (
-        select(Batch)
-        .where(
-            Batch.id != batch.id,
-            Batch.scene_id == batch.scene_id,
-            Batch.platform == batch.platform,
-            Batch.created_at < batch.created_at,
-        )
-        .order_by(Batch.created_at.desc())
+
+    # 同场景 + 同平台 + 同画质的候选基底(画质为空按默认等价)
+    base = select(Batch).where(
+        Batch.id != batch.id,
+        Batch.scene_id == batch.scene_id,
+        Batch.platform == batch.platform,
     )
     if bq == _DEFAULT_SHADING_QUALITY:
-        stmt = stmt.where(or_(Batch.shading_quality == bq, Batch.shading_quality.is_(None)))
+        base = base.where(or_(Batch.shading_quality == bq, Batch.shading_quality.is_(None)))
     else:
-        stmt = stmt.where(Batch.shading_quality == bq)
-    ref = db.scalars(stmt).first()
+        base = base.where(Batch.shading_quality == bq)
+
+    ref = None
+    if batch.p4_version is not None:
+        # 优先:P4 版本更小(更早的 changelist)中最接近的一个
+        ref = db.scalars(
+            base.where(Batch.p4_version.is_not(None), Batch.p4_version < batch.p4_version)
+                .order_by(Batch.p4_version.desc(), Batch.created_at.desc())
+        ).first()
+        if ref is None:
+            # 同 P4 版本重复上报:回退到同版本里上报时间更早的一条
+            ref = db.scalars(
+                base.where(Batch.p4_version == batch.p4_version,
+                           Batch.created_at < batch.created_at)
+                    .order_by(Batch.created_at.desc())
+            ).first()
+    else:
+        # 本批次未带 P4 版本号:回退按上报时间找更早的
+        ref = db.scalars(
+            base.where(Batch.created_at < batch.created_at)
+                .order_by(Batch.created_at.desc())
+        ).first()
+
     if ref is None:
-        log.info("自动对比 #%s:无同场景/平台/画质的历史批次,跳过", batch.id)
+        log.info("自动对比 #%s:无同场景/平台/画质的更早版本,跳过", batch.id)
         return {"matched": False}
-    log.info("自动对比 #%s -> 参照 #%s", batch.id, ref.id)
+    log.info("自动对比 #%s -> 参照 #%s(本批 P4=%s,参照 P4=%s)",
+             batch.id, ref.id, batch.p4_version, ref.p4_version)
     result = create_comparison(ComparisonIn(batch_id=batch.id, ref_batch_id=ref.id), db)
     return {"matched": True, "ref_batch_id": ref.id, **result}
 
