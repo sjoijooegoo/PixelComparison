@@ -699,41 +699,82 @@ def _evict_old_comparisons(db: Session, keep_id: int | None = None) -> list[int]
     return evicted
 
 
+_COMPARE_MAX_ATTEMPTS = 3   # 计算失败(多为共享盘瞬时 IO 抖动)自动重试次数
+
+
+def _set_task(task_id, **fields):
+    """安全更新任务状态(任务可能已被 _prune_tasks 清理,避免 KeyError)。"""
+    info = _TASKS.get(task_id)
+    if info is not None:
+        info.update(fields)
+
+
 def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, settings):
-    """后台线程:用独立 session 把结果填进已存在的 comparison 行,过程中更新进度。"""
+    """后台线程:把结果填进已存在的 comparison 行,过程中更新进度。
+
+    计算失败(常见于共享盘瞬时 IO 抖动/读原图/写热力图)自动重试至多
+    _COMPARE_MAX_ATTEMPTS 次;重试用尽仍失败,则**删除这条空壳对比**(残留热力图
+    随后由 prune_orphans 清),避免留下前端"有对比却没图"的残行。
+    """
     db = SessionLocal()
+
+    def on_progress(done, total):
+        _set_task(task_id, done=done, total=total)
+
+    ok = False
+    last_err = None
     try:
-        comparison = db.get(Comparison, comparison_id)
-        batch = db.get(Batch, batch_id)
-        ref = db.get(Batch, ref_id)
-        baseline = db.get(Baseline, baseline_id) if baseline_id else None
+        for attempt in range(1, _COMPARE_MAX_ATTEMPTS + 1):
+            try:
+                comparison = db.get(Comparison, comparison_id)
+                batch = db.get(Batch, batch_id)
+                ref = db.get(Batch, ref_id)
+                baseline = db.get(Baseline, baseline_id) if baseline_id else None
+                run_comparison(db, comparison, batch, ref, baseline, settings, on_progress=on_progress)
+                db.commit()
+                ok = True
+                _set_task(task_id, status="done", comparison_id=comparison_id, finished_at=time.monotonic())
+                log.info("对比 #%s 完成,整体差异 %.2f%%", comparison_id, comparison.diff_avg)
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                db.rollback()   # 撤掉本次已写入的部分对比项,下次重试从头算(幂等覆盖)
+                if attempt < _COMPARE_MAX_ATTEMPTS:
+                    log.warning("对比 #%s 第 %d 次计算失败,%.1fs 后重试: %s",
+                                comparison_id, attempt, 0.5 * attempt, e)
+                    time.sleep(0.5 * attempt)
 
-        def on_progress(done, total):
-            _TASKS[task_id]["done"] = done
-            _TASKS[task_id]["total"] = total
-
-        run_comparison(db, comparison, batch, ref, baseline, settings, on_progress=on_progress)
-        db.commit()
-        _TASKS[task_id].update(status="done", comparison_id=comparison_id, finished_at=time.monotonic())
-        log.info("对比 #%s 完成,整体差异 %.2f%%", comparison_id, comparison.diff_avg)
-    except Exception as e:  # noqa: BLE001
-        db.rollback()
-        _TASKS[task_id].update(status="error", error=str(e), finished_at=time.monotonic())
-        log.warning("对比 #%s 失败: %s", comparison_id, e)
+        if not ok:
+            # 重试用尽:删掉空壳对比行,别留"有对比没图"的残行
+            log.warning("对比 #%s 重试 %d 次仍失败,删除空壳对比: %s",
+                        comparison_id, _COMPARE_MAX_ATTEMPTS, last_err)
+            try:
+                c = db.get(Comparison, comparison_id)
+                if c is not None:
+                    db.delete(c)   # 级联删对比项
+                    db.commit()
+            except Exception as e2:  # noqa: BLE001
+                db.rollback()
+                log.warning("删除空壳对比 #%s 失败: %s", comparison_id, e2)
+            _set_task(task_id, status="error", error=str(last_err), finished_at=time.monotonic())
+            for tid in [t for t, i in _TASKS.items() if i.get("comparison_id") == comparison_id and t != task_id]:
+                _TASKS.pop(tid, None)
     finally:
-        # 任务完成、离开 _RUNNING 后再补一次过期淘汰(此刻自己已可被纳入判断,
-        # 但 keep_id=自己保护刚算完最可能正被查看的这条)。
+        # 离开 _RUNNING;成功则 keep_id=自己(不淘汰刚算完、最可能正被查看的这条),
+        # 失败已删则无需保护;再补一次过期淘汰,并清理孤儿热力图(含刚删空壳的残留)。
         evicted: list[int] = []
         with _COMPARE_LOCK:
             _RUNNING.pop(comparison_id, None)
             try:
-                # keep_id=自己:绝不淘汰刚算完(最可能正被查看)的这条,优先淘汰更早的
-                evicted = _evict_old_comparisons(db, keep_id=comparison_id)
+                evicted = _evict_old_comparisons(db, keep_id=comparison_id if ok else None)
             except Exception as e:  # noqa: BLE001
                 db.rollback()
                 log.warning("完成后淘汰对比失败(忽略): %s", e)
-        if evicted:
-            prune_orphans(db)
+        if evicted or not ok:   # 失败删了空壳,或淘汰了旧对比 → 清理孤儿热力图文件
+            try:
+                prune_orphans(db)
+            except Exception:  # noqa: BLE001
+                pass
         db.close()
 
 
