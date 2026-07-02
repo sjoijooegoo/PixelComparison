@@ -8,12 +8,17 @@ DATA_DIR = Path(
     os.environ.get("PIXELCOMP_DATA_DIR")
     or (Path(__file__).resolve().parent.parent / "data")
 )
-IMAGES_DIR = DATA_DIR / "images"
+# db 与 images 可分别覆盖:SQLite 库务必放**本地磁盘**(网络共享盘 SMB/NFS 上
+# SQLite 文件锁不可靠、WAL 易异常,会导致读写不一致甚至损坏);图片是普通文件,
+# 可单独放共享盘。都不设时落在 DATA_DIR 下(行为与旧版一致)。
+DB_PATH = Path(os.environ.get("PIXELCOMP_DB_PATH") or (DATA_DIR / "shotdiff.db"))
+IMAGES_DIR = Path(os.environ.get("PIXELCOMP_IMAGES_DIR") or (DATA_DIR / "images"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
-    f"sqlite:///{DATA_DIR / 'shotdiff.db'}",
+    f"sqlite:///{DB_PATH}",
     connect_args={"check_same_thread": False},
 )
 
