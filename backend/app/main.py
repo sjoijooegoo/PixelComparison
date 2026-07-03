@@ -504,7 +504,7 @@ def scene_grid(
     q: str | None = None,
     db: Session = Depends(get_db),
 ):
-    """批次列表图:同场景所有批次排成矩阵——列=批次(创建时间降序,左新右旧),
+    """批次列表图:同场景所有批次排成矩阵——列=批次(批次号升序,左旧右新;前端默认滚到最右看最新),
     行=检查点(按 scene_name 对齐、frame_index 排序),cells 与 batches 同序,缺图为 null。
 
     支持与批次列表一致的筛选(平台/画质/P4范围/创建时间/批次号)。"""
@@ -535,7 +535,10 @@ def scene_grid(
         bstmt = bstmt.where(func.date(Batch.created_at).in_(created_dates))
     if q:
         bstmt = bstmt.where(Batch.id.contains(q))
-    batches = db.scalars(bstmt.order_by(Batch.created_at.desc())).all()
+    # 批次号升序:左旧右新(与列表视图的降序相反),前端进入时默认滚到最右看最新;
+    # 按数值排、末尾 id 兜底全序,免疫 --time 撞车。
+    batches = db.scalars(bstmt.order_by(
+        cast(Batch.id, Integer).asc(), Batch.created_at.asc(), Batch.id.asc())).all()
     bids = [b.id for b in batches]
     rowmap: dict = {}
     if bids:

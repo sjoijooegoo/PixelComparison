@@ -22,17 +22,26 @@ def test_scene_grid_alignment_and_order(client, png_bytes):
     assert _shot(client, "new", "shot_01", png_bytes, 0).status_code == 201
 
     g = client.get("/api/scenes/S/grid").json()
-    # 列:创建时间降序(左新右旧)
-    assert [b["id"] for b in g["batches"]] == ["new", "old"]
+    # 列:批次号升序(非数字 id 回退按创建时间),左旧右新
+    assert [b["id"] for b in g["batches"]] == ["old", "new"]
     # 行:按 frame_index -> shot_01, shot_02
     assert [r["scene_name"] for r in g["rows"]] == ["shot_01", "shot_02"]
     # shot_01 两批都有
     row1 = g["rows"][0]
     assert row1["cells"][0] and row1["cells"][1]
     assert row1["cells"][0].startswith("/images/")
-    # shot_02 仅 old 有 -> old 在右列(index 1),new(左)那格为 null
+    # shot_02 仅 old 有 -> old 在左列(index 0),new(右)那格为 null
     row2 = g["rows"][1]
-    assert row2["cells"][0] is None and row2["cells"][1]
+    assert row2["cells"][0] and row2["cells"][1] is None
+
+
+def test_scene_grid_columns_numeric_asc_latest_right(client, png_bytes):
+    """数字批次号:列按数值升序,最新(id 最大)在最右;created_at 撞车也稳定。"""
+    for bid in ("2", "100", "10"):
+        _batch(client, bid, "2026-06-29T09:17:00")   # 时间相同,靠 id 数值排
+        assert _shot(client, bid, "s1", png_bytes).status_code == 201
+    g = client.get("/api/scenes/S/grid").json()
+    assert [b["id"] for b in g["batches"]] == ["2", "10", "100"]   # 100(最新)在最右
 
 
 def test_scene_grid_platform_filter(client, png_bytes):

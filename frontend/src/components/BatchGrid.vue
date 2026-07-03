@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore, p4Label } from '../store'
 import { thumbUrl } from '../api'
@@ -214,6 +214,12 @@ function recalc() {
 }
 let ro
 
+// 列表图默认停在最右(最新批次在右);仅切场景/首屏滚一次,自动刷新不打断用户已滚到的位置
+let pendingScrollRight = true
+function scrollToRight() {
+  nextTick(() => { const el = scroll.value; if (el) el.scrollLeft = el.scrollWidth })
+}
+
 onMounted(() => {
   ro = new ResizeObserver(recalc)
   if (panel.value) ro.observe(panel.value)
@@ -221,6 +227,7 @@ onMounted(() => {
   // 用捕获阶段:抢在 Arco 灯箱自身的按键处理之前拿到方向键
   window.addEventListener('keydown', onKey, true)
   store.loadGridHeatmaps()   // keep-alive 返回 / 首屏:按当前选择恢复热力图列
+  if (cols.value.length && pendingScrollRight) { pendingScrollRight = false; scrollToRight() }
 })
 onUnmounted(() => {
   ro?.disconnect()
@@ -228,7 +235,23 @@ onUnmounted(() => {
   window.removeEventListener('mousemove', onPanMove, true)
   window.removeEventListener('mouseup', onPanUp, true)
 })
-watch(cols, recalc)
+watch(cols, () => {
+  recalc()
+  // 数据到位且处于"待滚动"(切场景/首屏)时,定位到最右看最新;自动刷新不会置位,故不打断
+  if (pendingScrollRight && cols.value.length) {
+    pendingScrollRight = false
+    scrollToRight()
+  }
+})
+// 改场景 / 画质 / 创建时间任一(都会改变列集合)→ 重新加载后停到最右看最新;
+// 自动刷新不碰这些筛选字段,故不会打断用户的滚动位置。
+watch(() => [
+  store.filters.scene_id,
+  store.filters.shading_quality,
+  store.filters.created_from,
+  store.filters.created_to,
+  store.filters.created_dates,
+], () => { pendingScrollRight = true }, { deep: true })
 // 选择变化 / 切场景(cols 变)时刷新热力图列(组件级兜底,store 内也会触发)
 watch([currentBatch, baselineBatch, cols], () => store.loadGridHeatmaps())
 
