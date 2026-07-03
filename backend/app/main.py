@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import Integer, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -306,7 +306,10 @@ def list_batches(
     page: int = Query(1, ge=1),
     page_size: int | None = Query(None, ge=1, le=200),
 ):
-    stmt = select(Batch).order_by(Batch.created_at.desc())
+    # 批次号大的排前面(一眼看到最新);id 是字符串,按数值排序,非数字/相同回退按创建时间。
+    # 末尾再按 id 本身兜底,保证是全序(created_at 因 --time 撞车时分页仍不重不漏)。
+    stmt = select(Batch).order_by(
+        cast(Batch.id, Integer).desc(), Batch.created_at.desc(), Batch.id.desc())
     if scene_id:
         stmt = stmt.where(Batch.scene_id == scene_id)
     if platform:
