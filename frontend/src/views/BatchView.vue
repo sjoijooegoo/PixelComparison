@@ -28,10 +28,13 @@ function applyRoute() {
 onMounted(applyRoute)
 watch(() => route.params.sceneId, applyRoute)
 
-// 状态 → URL:在列表图且选了场景时,把场景写进地址栏(可直接复制分享)
+// 状态 → URL:在列表图且选了场景时,把场景写进地址栏(可直接复制分享)。
+// 依赖里带上 route.path:从对比结果切回 /batches(顶栏 push 不带场景)时也能把
+// 场景段补回。startsWith 守卫确保只在批次页内同步,不会在 /comparison 等页把用户拽回来。
 watch(
-  () => [store.batchView, store.filters.scene_id],
+  () => [store.batchView, store.filters.scene_id, route.path],
   () => {
+    if (!route.path.startsWith('/batches')) return
     const want = (store.batchView === 'grid' && store.filters.scene_id)
       ? `/batches/${encodeURIComponent(store.filters.scene_id)}`
       : '/batches'

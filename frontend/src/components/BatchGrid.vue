@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onActivated, onMounted, onUnmounted, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore, p4Label } from '../store'
 import { thumbUrl } from '../api'
@@ -214,10 +214,25 @@ function recalc() {
 }
 let ro
 
-// 列表图默认停在最右(最新批次在右);仅切场景/首屏滚一次,自动刷新不打断用户已滚到的位置
+// 列表图默认停在最右(最新批次在右);仅切场景/首屏/keep-alive 返回时滚,自动刷新不打断
 let pendingScrollRight = true
 function scrollToRight() {
-  nextTick(() => { const el = scroll.value; if (el) el.scrollLeft = el.scrollWidth })
+  // 逐帧把 scrollLeft 追到当前 scrollWidth,直到宽度不再变——覆盖列宽过渡
+  // (.matrix transition .16s)与 keep-alive 返回时布局未稳,避免停在中间。
+  nextTick(() => {
+    let last = -1, tries = 0
+    const step = () => {
+      const el = scroll.value
+      if (!el) return
+      el.scrollLeft = el.scrollWidth
+      if (el.scrollWidth !== last && tries < 20) {
+        last = el.scrollWidth
+        tries += 1
+        requestAnimationFrame(step)
+      }
+    }
+    requestAnimationFrame(step)
+  })
 }
 
 onMounted(() => {
@@ -228,6 +243,10 @@ onMounted(() => {
   window.addEventListener('keydown', onKey, true)
   store.loadGridHeatmaps()   // keep-alive 返回 / 首屏:按当前选择恢复热力图列
   if (cols.value.length && pendingScrollRight) { pendingScrollRight = false; scrollToRight() }
+})
+// keep-alive 返回(如从对比结果切回批次管理)时,列表图也停到最右看最新
+onActivated(() => {
+  if (cols.value.length) scrollToRight()
 })
 onUnmounted(() => {
   ro?.disconnect()
