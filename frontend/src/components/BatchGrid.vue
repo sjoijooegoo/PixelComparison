@@ -154,6 +154,7 @@ function step(dRow, dCol) {
 
 function onKey(e) {
   if (!previewVisible.value) return
+  if (e.key === 'Escape') { previewVisible.value = false; return }   // ESC 退出大图
   const map = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }
   const d = map[e.key]
   if (!d) return
