@@ -9,8 +9,8 @@
 用法:
     python cleanup_batches.py --before 2026-06-01                 # 预览将删除哪些(dry-run)
     python cleanup_batches.py --before 2026-06-01 --yes           # 真正删除
-    python cleanup_batches.py --before 2026-06-01 --base http://10.30.129.32:8000 --yes
-    python cleanup_batches.py --before 2026-06-01 --host 10.30.129.32 --port 8000 --yes
+    python cleanup_batches.py --before 2026-06-01 --base http://10.30.129.32:8020 --yes
+    python cleanup_batches.py --before 2026-06-01 --host 10.30.129.32 --port 8020 --yes
 
 说明:
     --before 2026-06-01 表示删除「2026-06-01 之前(不含当天)」创建的批次,
@@ -89,9 +89,9 @@ def main() -> None:
     ap.add_argument("--before", required=True,
                     help="删除此日期之前(不含当天)创建的批次,格式 YYYY-MM-DD")
     ap.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
-    ap.add_argument("--port", default=os.environ.get("PORT", "8000"))
+    ap.add_argument("--port", default=os.environ.get("PORT", "8020"))
     ap.add_argument("--base", default=os.environ.get("BASE"),
-                    help="后端完整地址,如 http://10.30.129.32:8000;给了则忽略 --host/--port")
+                    help="后端完整地址,如 http://10.30.129.32:8020;给了则忽略 --host/--port")
     ap.add_argument("--yes", action="store_true", help="确认真正删除(否则只预览)")
     args = ap.parse_args()
 

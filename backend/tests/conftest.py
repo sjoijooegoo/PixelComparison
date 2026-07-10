@@ -9,14 +9,17 @@ import pytest
 def client(tmp_path, monkeypatch):
     """A TestClient backed by an isolated temp data dir + fresh SQLite db."""
     monkeypatch.setenv("PIXELCOMP_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PIXELCOMP_BACKUP_ENABLED", "0")
 
     import app.db
+    import app.backup
     import app.models
     import app.service
     import app.settings
     import app.cleanup
     import app.main
     importlib.reload(app.db)
+    importlib.reload(app.backup)
     importlib.reload(app.models)
     importlib.reload(app.service)
     importlib.reload(app.settings)

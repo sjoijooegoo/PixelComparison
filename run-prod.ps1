@@ -35,8 +35,6 @@ $dist     = Join-Path $frontend "dist"
 if ([string]::IsNullOrWhiteSpace($DataDir)) {
   if ($env:PIXELCOMP_DATA_DIR) {
     $DataDir = $env:PIXELCOMP_DATA_DIR
-  } elseif (Test-Path "Y:\") {
-    $DataDir = "Y:\PixelComparison"
   } else {
     $DataDir = Join-Path $backend "data"
   }

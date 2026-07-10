@@ -1,23 +1,32 @@
-# 上报数据包(mock_uploads)
+# 示例上报数据包
 
-模拟采集模块(UE 客户端 / 渲染农场 / CI)向平台上报的数据格式与示例。可用于联调
-上报流程、填充演示数据。格式与真实 UE 客户端产出的
-`…/Saved/PixelComparison/manifest.json` 一致。
+`mock_uploads` 保存可重复生成的演示数据包，用于验证 manifest 解析、批次上报、截图配对、跨平台比较以及新增/缺失检查点。
 
-## 数据包结构
+生产接入请阅读[数据上报接入指南](../docs/上报接入指南.md)。这里的 `upload.py` 是演示工具，不是完整 CI 客户端。
 
-每个批次是一个独立目录,**目录名即批次 ID**:
+## 目录结构
 
+每个数字目录代表一个批次：
+
+```text
+mock_uploads/
+  7/
+    manifest.json
+    Screenshot/
+      01_废弃都市_广场_昼.png
+      ...
+  8/
+    manifest.json
+    Screenshot/
+      ...
 ```
-<批次ID>/
-  manifest.json          批次元信息(pipeline_data + ue_data)+ 截图清单
-  Screenshot/
-    01_废弃都市_广场_昼.png
-    02_废弃都市_街道_夜.png
-    ...
-```
 
-## manifest.json 格式(新版)
+数据包必须包含：
+
+- `manifest.json`：批次元数据和截图清单。
+- `Screenshot/`：manifest 中 `screenshots[].image` 指向的图片。
+
+## manifest 示例
 
 ```json
 {
@@ -25,17 +34,18 @@
   "capture_type": "levelsequence",
   "pipeline_data": {
     "batch_id": "7",
-    "batch_url": "https://devops.woa.com/.../executeDetail",
+    "batch_url": "https://ci.example/pipeline/7",
     "captured_at": "2024-06-01T10:00:00",
     "overwrite": false
   },
   "ue_data": {
-    "levelsequence_path": "/Game/Cinematics/Seq_Lv_Starfall.Seq_Lv_Starfall",
-    "levelsequence_name": "Seq_Lv_Starfall",
     "world_name": "Lv_Starfall",
     "platform": "WindowsEditor",
     "p4_version": "251200",
-    "resolution": { "width": 1920, "height": 1080 }
+    "shading_quality": 5,
+    "resolution": { "width": 1920, "height": 1080 },
+    "levelsequence_name": "Seq_Lv_Starfall",
+    "levelsequence_path": "/Game/Cinematics/Seq_Lv_Starfall.Seq_Lv_Starfall"
   },
   "screenshots": [
     {
@@ -51,64 +61,75 @@
 }
 ```
 
-字段说明 / 与平台字段的映射:
+重要字段：
 
-| manifest 路径 | 平台字段 | 说明 |
-|---|---|---|
-| `pipeline_data.batch_id` | `Batch.id` | 批次号 |
-| `pipeline_data.batch_url` | `Batch.batch_url` | 真实流水线链接(批次ID超链接用它,旧数据回退占位地址) |
-| `pipeline_data.captured_at` | `Batch.created_at` | 采集时间(ISO8601) |
-| `pipeline_data.overwrite`(或顶层 `overwrite`) | — | 可选;`true` 时若批次号已存在则**删旧建新**(连带清旧对比/热力图),否则同号返回 409。也可用 `report.py --overwrite` 强制 |
-| `ue_data.world_name` | `Batch.scene_id` | 场景 ID(UE Level),**同场景才能对比** |
-| `ue_data.platform` | `Batch.platform` | **归一化**:WindowsEditor→Windows、IOSEditor→iOS、AndroidEditor→Android |
-| `ue_data.p4_version` | `Batch.p4_version` | P4 changelist(字符串,后端转 int,越大越新;**可省略**) |
-| `ue_data.shading_quality` | `Batch.shading_quality` | 画质档位 0–5(节能/流畅/均衡/精美/极致/电影),缺省按「极致」 |
-| `ue_data.resolution` | `Batch.resolution` | 存为 `1920x1080` |
-| `ue_data.levelsequence_name/path` | `Batch.levelsequence_name/path` | LevelSequence 身份 |
-| `capture_type` | `Batch.capture_type` | 采集类型,如 `levelsequence` |
-| `screenshots[].name` | `Screenshot.scene_name` | **唯一配对键**,两批对比按它配对;前后版本必须一致 |
-| `screenshots[].image` | 上传的图片文件 | 相对数据包根目录(含 `Screenshot/` 子目录) |
-| `screenshots[].index` | `Screenshot.frame_index` | 帧序 |
-| `screenshots[].camera` | `Screenshot.camera` | 相机位姿(location/rotation),对比详情页展示 |
+| 字段 | 用途 |
+|---|---|
+| `pipeline_data.batch_id` | 批次 ID |
+| `pipeline_data.batch_url` | 流水线链接 |
+| `pipeline_data.captured_at` | 批次创建时间 |
+| `pipeline_data.overwrite` | 同号时是否删旧建新 |
+| `ue_data.world_name` | 场景 ID；同场景才能比较 |
+| `ue_data.platform` | 上报平台，后端负责归一化 |
+| `ue_data.p4_version` | P4 changelist，可省略 |
+| `ue_data.shading_quality` | 画质档位 0–5 |
+| `screenshots[].name` | 检查点配对键 |
+| `screenshots[].image` | 相对数据包目录的图片路径 |
+| `screenshots[].index` | 帧序 |
+| `screenshots[].camera` | 相机位姿 |
 
-## 生成与上报
+## 生成示例包
+
+生成器依赖后端环境中的 Pillow 和 NumPy：
 
 ```powershell
-# 1. 生成数据包(需后端 venv,内含 Pillow/numpy)
 backend\.venv\Scripts\python mock_uploads\generate.py
-
-# 2. 启动后端后,上报到平台
-python mock_uploads\upload.py        # 上报全部批次包
-python mock_uploads\upload.py 7      # 仅上报指定批次(目录名/批次 ID)
 ```
 
-`upload.py` 仅用标准库拼装 multipart,无需安装 requests;它从 `pipeline_data` /
-`ue_data` 拼出建批次请求,并逐张上传截图(带 `camera` / `frame_index`)。
+命令会重建 7–13 号示例包中的 manifest 和截图，不会修改后端数据库。
 
-> 注:种子数据(`app.seed`)占用批次 ID 1–6,故 mock 数据从 7 开始,目录名即批次 ID。
+## 上传示例包
 
-## 示例数据说明
+先启动后端 8020：
 
-内置 7 批,覆盖多种对比场景。差异类型:噪声=警告级(约 1.8%)、大幅楼体位移=失败级(约 6%)。
+```powershell
+python mock_uploads\upload.py
+```
 
-| 批次 | 场景ID | P4 版本 | 平台(上报值) | 检查点 | 说明 |
-|---|---|---|---|---|---|
-| `7`  | Lv_Starfall | 251200 | WindowsEditor | 8 | 干净基线 |
-| `8`  | Lv_Starfall | 251640 | WindowsEditor | 8 | 回归:2 失败 + 2 警告 |
-| `9`  | Lv_Starfall | 251205 | IOSEditor | 8 | 干净基线 |
-| `10` | Lv_Starfall | 251645 | IOSEditor | 8 | 回归:1 失败 + 1 警告 |
-| `11` | Lv_Starfall | 252180 | WindowsEditor | 8 | 删检查点 07、增检查点 09 |
-| `12` | Lv_Nebula | 251800 | AndroidEditor | 4 | 干净基线 |
-| `13` | Lv_Nebula | 252100 | AndroidEditor | 4 | 回归:1 失败 + 1 警告 |
+只上传指定批次：
 
-> 平台列是 manifest 中的上报值(带 `Editor` 后缀);入库后会归一化为 Windows/iOS/Android。
+```powershell
+python mock_uploads\upload.py 7
+python mock_uploads\upload.py 7 8 11
+```
 
-推荐对比组合(对比批次 vs 基线批次):
+指定远程后端：
 
-- `8` vs `7` — Lv_Starfall 回归,通过/警告/失败混合
-- `10` vs `9` — Lv_Starfall(iOS)回归
-- `11` vs `7` — 演示**新增检查点**(09)与**缺失检查点**(07)
-- `13` vs `12` — Lv_Nebula 回归
-- `8` vs `9` — 跨平台同场景(Windows × iOS)也可对比
+```powershell
+$env:BASE = "http://10.30.129.32:8020"
+python mock_uploads\upload.py 7
+```
 
-不同场景ID的批次不能互比(界面会拦截);可用顶部筛选按场景ID、画质、创建时间过滤。
+脚本只依赖 Python 标准库，执行“创建批次 → 逐张上传截图”。批次已存在时继续补传；manifest 中 `overwrite=true` 时会请求覆盖。脚本不会自动发起对比，也没有完整的重试和 CI 退出码设计。
+
+## 示例批次
+
+| 批次 | 场景 | P4 | 平台上报值 | 检查点 | 目的 |
+|---:|---|---:|---|---:|---|
+| 7 | Lv_Starfall | 251200 | WindowsEditor | 8 | Windows 基线 |
+| 8 | Lv_Starfall | 251640 | WindowsEditor | 8 | 失败和警告混合 |
+| 9 | Lv_Starfall | 251205 | IOSEditor | 8 | iOS 基线 |
+| 10 | Lv_Starfall | 251645 | IOSEditor | 8 | iOS 回归 |
+| 11 | Lv_Starfall | 252180 | WindowsEditor | 8 | 新增 09、缺失 07 |
+| 12 | Lv_Nebula | 251800 | AndroidEditor | 4 | Android 基线 |
+| 13 | Lv_Nebula | 252100 | AndroidEditor | 4 | Android 回归 |
+
+推荐组合：
+
+- 8 对 7：同平台常规回归。
+- 10 对 9：iOS 回归。
+- 11 对 7：新增和缺失检查点。
+- 13 对 12：另一个场景的回归。
+- 8 对 9：同场景跨平台比较。
+
+不同场景 ID 的批次不能比较。

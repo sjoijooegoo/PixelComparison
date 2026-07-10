@@ -1,174 +1,289 @@
-# PixelComparison — 游戏截图对比平台
+# PixelComparison
 
-前后端分离的视觉回归对比工具:采集模块上报批次截图,平台对**同一场景(UE Level)** 的任意两个批次做像素级对比。
+PixelComparison 是面向游戏截图的视觉回归平台。采集端按批次上报同一 UE Level 的检查点截图，平台负责跨版本浏览、像素级比较、差异热力图生成和历史结果查询。
 
-📖 完整使用文档见 [docs/使用文档.md](docs/使用文档.md)(界面操作、采集接入、指标含义、API 一览)
+当前项目定位是可信局域网内的小团队工具：单进程 FastAPI 后端、SQLite 元数据、文件系统图片存储，以及 Vue 3 前端。
 
-- **backend/** — FastAPI + SQLite + Pillow/numpy 对比引擎(差异率、SSIM、PSNR、热力图、RGB 直方图;算法阈值可在「项目设置」里配置)
-- **frontend/** — Vue 3 + Vite + Pinia + Arco Design Vue
+## 主要能力
+
+- 管理包含场景、平台、画质、P4 版本和采集时间的截图批次。
+- 以表格或二维列表图浏览同一场景的多个版本。
+- 任意选择两个同场景批次进行异步比较，并复用已有结果。
+- 输出差异率、SSIM、PSNR、通道差异、RGB 直方图和 WebP 热力图。
+- 识别新增、缺失、通过、警告和失败检查点。
+- 支持浏览器拖入数据包手动上报，以及 HTTP API 接入 CI/采集端。
+- 自动生成缩略图并按访问时间淘汰缓存。
+- 每天在线备份 SQLite 数据库，默认保留 30 天。
+
+## 文档导航
+
+- [完整使用文档](docs/使用文档.md)：安装、启动、界面操作、项目设置、数据目录、备份恢复和故障排查。
+- [数据上报接入指南](docs/上报接入指南.md)：manifest 格式、接口字段、异步对比和错误处理。
+- [示例数据包说明](mock_uploads/README.md)：生成和上传演示批次。
+- [测试与维护脚本](scripts/README.md)：单元测试、构建、清理和可选浏览器脚本。
+- [后续工作](TODO.md)：当前明确保留的技术和产品待办。
+
+## 技术栈
+
+| 层 | 实现 |
+|---|---|
+| 前端 | Vue 3、Vite、Pinia、Arco Design Vue |
+| 后端 | FastAPI、SQLAlchemy 2、Uvicorn |
+| 数据库 | SQLite，WAL 模式 |
+| 图片处理 | Pillow、NumPy |
+| 测试 | pytest、Vitest；另有可选 Playwright 脚本 |
 
 ## 快速开始
 
-### 1. 后端
+### 环境要求
+
+- Python 3.10 或更高版本，建议 3.11。
+- Node.js 20 或更高版本。
+- Windows PowerShell；Linux/macOS 也可分别启动前后端。
+
+### 首次安装
+
+后端：
 
 ```powershell
 cd backend
 python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python -m app.seed        # 生成演示截图并真实跑一遍对比入库
-.venv\Scripts\python -m uvicorn app.main:app --port 8000 --reload
+.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+cd ..
 ```
 
-API 文档:http://127.0.0.1:8000/docs
-
-### 2. 前端
+前端：
 
 ```powershell
 cd frontend
-npm install
+npm ci
+cd ..
+```
+
+`requirements-dev.txt` 包含运行依赖和 pytest。仅部署后端时也可以安装 `requirements.txt`。
+
+### Windows 一键开发启动
+
+```powershell
+.\run-dev.ps1
+```
+
+默认启动：
+
+- 前端：http://127.0.0.1:5173
+- 后端：http://127.0.0.1:8020
+- API 文档：http://127.0.0.1:8020/docs
+- 数据目录：`<项目目录>\backend\data`
+
+指定数据目录或后端端口：
+
+```powershell
+.\run-dev.ps1 -DataDir "D:\PixelComparisonData" -BackendPort 8020
+```
+
+启动脚本不会因为存在 `Y:` 等盘符而自动切换数据目录。只有显式传入 `-DataDir` 或设置 `PIXELCOMP_DATA_DIR` 才会改变默认位置。
+
+### 分别启动
+
+终端一：
+
+```powershell
+cd backend
+.\.venv\Scripts\python -m uvicorn app.main:app --host 0.0.0.0 --port 8020 --reload
+```
+
+终端二：
+
+```powershell
+cd frontend
 npm run dev
 ```
 
-打开 http://localhost:5173 (dev server 已配置代理,`/api` 与 `/images` 转发到 8000 端口)。
+Vite 默认把 `/api`、`/images` 和 `/thumb` 代理到 `http://127.0.0.1:8020`。如需使用其他后端地址：
 
-### Linux 部署/开发启动
-
-Linux 上后端数据目录不要写 Windows 的 `Y:\PixelComparison`,要用 Linux 挂载路径,并通过
-`PIXELCOMP_DATA_DIR` 指向数据盘。后端会把 SQLite 数据库、截图、缩略图、热力图、日志都读写到这个目录。
-
-推荐目录结构:
-
-```text
-/agentdrive/v_sycisong/PixelComparison/
-  shotdiff.db
-  images/
-  logs/
+```powershell
+$env:PIXELCOMP_BACKEND_URL = "http://127.0.0.1:9000"
+npm run dev
 ```
 
-后端启动:
+### 生产式单端口启动
+
+Windows：
+
+```powershell
+.\run-prod.ps1
+```
+
+脚本先执行前端构建，再由 FastAPI 在 `8800` 端口同时提供页面、API 和图片。生产模式必须使用单 worker，因为对比任务进度保存在进程内存中。
+
+Linux 示例：
 
 ```bash
-cd /data/workspace/PixelComparison/backend
+cd frontend
+npm ci
+npm run build
 
-# 首次初始化;Python 需 3.10+ / 3.11 更稳
+cd ../backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-
-# 每次启动前设置数据目录
-export PIXELCOMP_DATA_DIR=/agentdrive/v_sycisong/PixelComparison
-
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+export PIXELCOMP_DATA_DIR=/data/pixelcomparison
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8800
 ```
 
-前端启动:
+## 数据目录与配置
 
-```bash
-cd /data/workspace/PixelComparison/frontend
+未设置环境变量时，路径均相对当前仓库动态计算，不写死盘符：
 
-# 建议 Node 20+
-node -v
-npm -v
-
-npm install
-npm run dev
+```text
+backend/data/
+  shotdiff.db
+  images/
+    batches/
+    heatmaps/
+    thumbs/
+  backup/db/
+  logs/
 ```
 
-访问 `http://服务器IP:5173`。前端 dev server 会代理 `/api`、`/images`、`/thumb` 到同机后端
-`127.0.0.1:8000`,因此通常只需要对外开放 `5173` 端口。
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `PIXELCOMP_DATA_DIR` | `<项目目录>/backend/data` | 日志、备份及默认数据库/图片根目录 |
+| `PIXELCOMP_DB_PATH` | `<DATA_DIR>/shotdiff.db` | SQLite 文件；应放本地磁盘 |
+| `PIXELCOMP_IMAGES_DIR` | `<DATA_DIR>/images` | 原图、热力图和缩略图，可单独放大容量磁盘 |
+| `PIXELCOMP_BACKUP_ENABLED` | `1` | 设为 `0`、`false`、`no` 或 `off` 时禁用自动备份 |
+| `PIXELCOMP_BACKUP_RETENTION_DAYS` | `30` | 数据库备份保留天数；`0` 表示永久保留 |
+| `PIXELCOMP_BACKUP_CHECK_INTERVAL_SECONDS` | `3600` | 自动备份检查间隔，最小 60 秒 |
 
-后台启动后端示例:
+不要把正在写入的 SQLite 主库放在 SMB/NFS 网络共享目录。若需要共享存储，建议只把 `PIXELCOMP_IMAGES_DIR` 指向共享盘，数据库仍保留在本地磁盘。
 
-```bash
-nohup bash -c 'export PIXELCOMP_DATA_DIR=/agentdrive/v_sycisong/PixelComparison && cd /data/workspace/PixelComparison/backend && source .venv/bin/activate && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000' > backend.log 2>&1 &
+## 每日数据库备份
+
+后端启动时会检查当天是否已有备份，之后按检查间隔重复检查。当天没有快照时，使用 SQLite 在线备份 API 创建：
+
+```text
+backend/data/backup/db/shotdiff-YYYY-MM-DD.db
 ```
+
+备份先写入唯一临时文件，通过 `PRAGMA quick_check` 后再原子发布；运行中的 WAL 数据也会进入一致快照。同一自然日只保留一个日快照。
+
+默认备份和主库位于同一数据目录，可以防误删和数据库逻辑损坏，但不能防整块磁盘故障。需要灾备时，应再把 `backup/db` 同步到异盘或对象存储。恢复步骤见[使用文档](docs/使用文档.md#9-数据库备份与恢复)。
+
+## 界面入口
+
+| 路径 | 功能 |
+|---|---|
+| `/batches` | 批次筛选、列表、列表图、预览、删除和手动上报 |
+| `/batches/:sceneId` | 直接打开指定场景的列表图 |
+| `/comparison` | 打开最近一次对比 |
+| `/comparison/:id` | 打开指定对比结果 |
+| `/settings` | 对比算法与默认筛选设置 |
+
+列表图按照“左旧右新”排列批次。选择基线和对比批次后，已有结果会直接显示热力图；没有缓存时可在列表图内发起计算，不会跳页。
+
+## 比较规则
+
+- 两个批次必须具有相同 `scene_id`，平台可以不同。
+- 批次内的 `scene_name` 是检查点唯一键，两个版本按该字段配对。
+- 两侧都有截图时计算像素差异；只有当前侧时为 `added`，只有参照侧时为 `missing`。
+- 任一 `fail` 或 `missing` 使整体状态为失败；否则任一 `warn` 或 `added` 使整体状态为警告；其余为通过。
+- 同一批次对忽略方向只保存一条结果，前端可以交换显示方向。
+- 对比记录默认保留 14 天；过期记录在后续对比创建或完成时淘汰。
+
+默认阈值：
+
+| 参数 | 默认值 |
+|---|---:|
+| 像素通道差阈值 | 8 |
+| 警告差异率 | 0.3% |
+| 失败差异率 | 2.0% |
+| 热力图方法 | `enhanced` |
+
+全部算法参数可在项目设置页修改，新设置只影响之后发起或重新计算的对比。
+
+## 上报方式
+
+当前支持：
+
+1. 前端顶栏“手动上报”，拖入包含 `manifest.json` 和截图的目录。
+2. 直接调用批次、截图和自动对比 API。
+3. 使用 `mock_uploads/upload.py` 上传仓库内演示数据。
+
+仓库当前不提供独立的根目录 `report.py` 客户端。生产采集端请依据[上报接入指南](docs/上报接入指南.md)实现 API 调用，或从 `mock_uploads/upload.py` 提取参考逻辑。
 
 ## 测试
 
-- 后端单测 + 并发用例:`cd backend; .\.venv\Scripts\python -m pytest -q`(含 `tests/test_concurrency.py` 多人并发上报/对比/读写)。
-- 前端交互 E2E + 多人并发界面冒烟(需后端+前端在跑):见 [scripts/README.md](scripts/README.md)
-  (`node scripts/e2e/run-all.mjs`、`node scripts/ui-load-smoke.mjs`)。
+后端完整测试：
 
-## 日志
-
-- 开发可用 `.\run-dev.ps1` 一键开**两个控制台**(后端 / 前端),实时看日志。
-- 后端请求(`→/←` + 耗时)与关键业务事件(建/删批次、发起对比、对比完成/失败、自动对比)用中文 INFO 打印,并写入 `backend/data/logs/backend.log`(滚动 5MB×5)。
-- 前端 console / 报错经 `POST /api/client-logs` 落到 `backend/data/logs/frontend.log`,便于事后排查。
-
-## 三个界面(各自独立 URL)
-
-路由:`/batches`(批次管理)、`/comparison`(对比结果)、`/settings`(项目设置);
-`/batches/<场景ID>` 可直达该场景的「列表图」,链接可分享。
-
-- **批次管理** — 顶部横向筛选条(**场景ID**〔可输入搜索〕/ **画质** / **创建时间**)+ 批次列表,两种视图:
-  - **创建时间**支持两种模式:**范围**(默认近七天)与**指定日期**(跳着选多天,标签可删)。
-  - **列表** — 批次表格;选「基线批次」「对比批次」(须同场景ID)后「发起对比」(**异步执行 + 前端轮询进度**,完成跳到对比结果页)。
-  - **列表图** — 选定场景后,把该场景所有批次排成图片矩阵(列=批次按时间新→旧、可临时折叠,行=检查点),一屏对比多版本的同一张图。
-    - 列头直接选基线/对比,**所选列按角色高亮**;选择**按场景记忆**,切场景再切回会恢复。
-    - 最右侧**「差异对比」吸附列**:选好基线/对比后,**命中已有对比缓存即就地显示各检查点差异热力图**(不触发计算);无缓存时表头变「发起对比」按钮,点击就地计算并填充、**不跳转**。
-    - 鼠标在矩阵上**按住拖拽可上下左右平移**,**单击图片放大**(放大后 `← →` 跨批次、`↑ ↓` 跨检查点翻看)。
-  - 顶栏图标:**刷新**、**手动上报**(网页直接拖入 `PixelComparison` 数据包文件夹上报,无需脚本;缺 P4 可手动填)。
-- **对比结果** — 顶部对比对(下拉切换历史,**最多保留 100 条**,超出淘汰最旧;一键**交换基线↔对比**,正反向只占一条历史)+ 检查点列表(按可用高度动态分页)+ 详情区(当前/参照/差异热力图三视图,均可放大;另有滑动对比)+ 右侧指标面板(差异率、SSIM、PSNR、通道差异、RGB 直方图)。同一对批次的结果持久化复用,不重复计算。
-- **项目设置** — 配置对比算法参数:像素差异阈值、差异率红/橙着色阈值、热力图模糊半径与灵敏度(对新发起的对比生效)。
-
-## 结构说明
-
-```
-backend/app/
-  compare.py    # 对比引擎:像素 diff / SSIM / PSNR / 热力图 / 直方图(参数可传入)
-  imagegen.py   # 程序化生成演示截图(variant 0=不变 / 2=噪声 / 3=楼体位移)
-  models.py     # Batch / Screenshot / Baseline / Comparison / ComparisonItem / Setting
-  service.py    # run_comparison(同场景两批次按点位名配对)/ promote_baseline
-  settings.py   # 对比算法可配置参数:默认值 + 持久化读写
-  seed.py       # 种子:基线批次 -> 晋升基线 -> 新批次 -> 真实跑对比入库
-  main.py       # REST API + 静态图片服务
-frontend/src/
-  router.js     # vue-router(history 模式):/batches /comparison /settings
-  store.js      # Pinia:批次/对比/检查点/详情/设置的全部状态与加载逻辑
-  views/        # BatchView(批次管理) / ComparisonView(对比结果)
-  components/   # TopBar / FilterSidebar / BatchTable / BatchGrid(列表图) /
-                # BatchPreview / ManualUpload(手动上报) / ResultSummary /
-                # SceneList / DetailView / MetricsPanel / ProjectSettings / Pager
-```
-> 热力图以 WebP 存储(纯展示派生物,不参与像素对比);截图按上报原样存储(通常为 JPEG)。
-
-## 批次上报与主要接口
-
-```
-POST   /api/batches                      # 建批次;scene_id/platform 必填,id/p4_version/shading_quality 可选;overwrite=true 同号删旧建新
-POST   /api/batches/{id}/screenshots     # multipart: scene_name + file(+camera/frame_index)
-GET    /api/batches/{id}/screenshots     # 该批次截图列表(预览/列表图用)
-DELETE /api/batches/{id}                 # 级联删除批次(连带其对比/对比项/基线/图片)
-DELETE /api/batches?created_before=<日期> # 批量删除该日期之前的批次(级联)
-POST   /api/batches/{id}/auto-compare    # 与"同场景+同平台+同画质"的最新历史批次自动对比
-POST   /api/comparisons                  # 发起对比 {batch_id, ref_batch_id, force?}(异步:返回 task_id)
-GET    /api/comparisons/tasks/{task_id}  # 轮询对比进度/结果
-GET    /api/scenes/{scene_id}/grid       # 列表图矩阵(同场景多批次;支持 created_dates 指定多天筛选)
-GET    /api/comparisons/lookup           # 只读查一对批次(忽略方向)已有对比及各检查点热力图,不触发计算
-GET/PUT /api/settings                    # 读取 / 更新对比算法配置
+```powershell
+cd backend
+.\.venv\Scripts\python -m pytest -q
 ```
 
-- 批次由 CI / 游戏端采集模块上报;`id` 省略时后端按**已有数字批次号自增**生成,`pipeline_data` 整体可省略。
-- 平台侧选两个**同场景ID**的批次发起对比(**可跨平台**);对比**异步执行**,前端轮询 `tasks/{task_id}` 获取进度,完成后持久化复用,`force=true` 强制重算。
-- 未带 `p4_version` 也能上报(前端显示「——」);`shading_quality`(0–5)对应 节能/流畅/均衡/精美/极致/电影,缺省按「极致」。
-- **同号覆盖**:上报体带 `overwrite=true`(脚本 `report.py --overwrite` 或 manifest `overwrite` 字段;网页手动上报勾选「覆盖同号批次」)时,若批次号已存在则**删旧建新**(连带清除旧批次的对比/对比项/基线/热力图);不带则同号返回 409,按现有补传逻辑处理。
+前端单元测试和构建：
 
-上报方式:① 网页「手动上报」拖入数据包文件夹;② 脚本 [`report.py`](report.py)(`python report.py <目录> --host <ip> --port <port>`,调用详解见 [docs/report脚本使用.md](docs/report脚本使用.md));
-数据包格式/示例见 [mock_uploads/](mock_uploads/README.md),接入细节见 [docs/上报接入指南.md](docs/上报接入指南.md)。
+```powershell
+cd frontend
+npm test
+npm run build
+```
 
-## 数据模型
+测试不应指向生产数据目录。pytest fixture 会为每个用例创建独立临时数据库，并禁用自动备份。
 
-- **批次(Batch)** 一次截图采集运行,带 **场景ID**(`scene_id`,UE Level)、**P4 版本**(`p4_version`,changelist,越大越新)、平台;产出一组 **点位截图(Screenshot)**。
-- **基线(Baseline)** 把某个被认可的批次晋升为基线版本(按场景 + 平台隔离,同版本旧基线自动退役)。
-- **对比(Comparison)** 同一场景ID的两个批次互比(可跨平台);同一批次可对比多个参照批次,结果持久化。
-- **对比项(ComparisonItem)** 按 **点位名** 配对的单点位结果;两边都有 -> pass/warn/fail(阈值可配),
-  仅当前有 -> `added`(新增点位),仅参照有 -> `missing`(点位缺失)。
+## 常用维护命令
 
-> 术语:**场景ID** 指批次所属的 UE Level(同场景才能对比);**点位** 指批次内的单张截图/机位。
+只检查孤儿截图、热力图和缩略图：
 
-## 生产化方向
+```powershell
+cd backend
+.\.venv\Scripts\python -m app.cleanup --dry-run
+```
 
-- SQLite → PostgreSQL;本地图片目录 → MinIO/S3(表中只存对象 key,前端走预签名 URL)
-- 同步对比 → Celery + Redis 异步任务队列,WebSocket 推送批次进度
-- `compare.py` 的全局 SSIM → `skimage.metrics.structural_similarity`(windowed),或 OpenCV 加速;对齐后再比以抗平移
-- 基线版本管理、用户体系与权限
+执行清理：
+
+```powershell
+.\.venv\Scripts\python -m app.cleanup
+```
+
+按日期批量删除批次前，先使用维护脚本的预览模式：
+
+```powershell
+python scripts\cleanup_batches.py --before 2026-06-01
+python scripts\cleanup_batches.py --before 2026-06-01 --yes
+```
+
+## 架构概览
+
+```text
+采集端 / 浏览器
+       │
+       ▼
+FastAPI API ── SQLAlchemy ── SQLite
+       │
+       ├── 文件系统：原图 / 缩略图 / 热力图
+       ├── Pillow + NumPy 比较线程
+       └── SQLite 在线日备份
+       │
+       ▼
+Vue 3 + Pinia + Arco Design
+```
+
+关键文件：
+
+| 文件 | 职责 |
+|---|---|
+| `backend/app/main.py` | API、静态文件、任务编排和前端构建产物托管 |
+| `backend/app/compare.py` | 差异率、SSIM、PSNR、直方图和热力图 |
+| `backend/app/service.py` | 检查点配对与对比结果生成 |
+| `backend/app/backup.py` | SQLite 每日在线备份和保留策略 |
+| `backend/app/models.py` | SQLAlchemy 数据模型 |
+| `frontend/src/store.js` | Pinia 状态、API 加载和对比轮询 |
+| `frontend/src/components/BatchGrid.vue` | 多批次二维列表图 |
+
+## 当前边界
+
+- 没有登录、权限和租户隔离，只适合可信内网。
+- 对比任务和进度在单进程内存中，服务重启会中断正在执行的任务。
+- SQLite 适合当前小团队规模；更大并发应迁移 PostgreSQL 和独立任务队列。
+- 当前 SSIM 是全局简化算法，不是滑窗 SSIM。
+- 列表图尚未实现二维虚拟化，大规模行列会产生较多 DOM 和图片请求。

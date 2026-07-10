@@ -3,6 +3,8 @@ import io
 import os
 import time
 
+import pytest
+from fastapi import HTTPException
 from PIL import Image
 
 
@@ -61,6 +63,30 @@ def test_thumb_generate_cache_and_cleanup(client, png_bytes):
         app.cleanup.prune_orphans(s)
     finally:
         s.close()
+
+
+def test_thumb_rejects_paths_outside_source_and_cache_roots(client, png_bytes):
+    import app.db
+    import app.main
+
+    images_root = app.db.IMAGES_DIR.resolve()
+
+    # 相邻目录名与 images 根目录共享字符串前缀,仍不得被当成根目录内文件。
+    sibling = images_root.parent / f"{images_root.name}_private"
+    sibling.mkdir(parents=True)
+    (sibling / "outside.png").write_bytes(png_bytes())
+    with pytest.raises(HTTPException) as exc:
+        app.main.get_thumb(f"../{sibling.name}/outside.png")
+    assert exc.value.status_code == 404
+
+    # 即使源路径最终解析回 images/ 内,缓存目标也不得借由 .. 逃出 thumbs/。
+    source = images_root / "batches" / "safe" / "shot.png"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(png_bytes())
+    escaped_cache_path = f"nested/../../{images_root.name}/batches/safe/shot.png"
+    with pytest.raises(HTTPException) as exc:
+        app.main.get_thumb(escaped_cache_path)
+    assert exc.value.status_code == 404
 
 
 def test_thumb_retention_evicts_stale_and_keeps_fresh(client, png_bytes):

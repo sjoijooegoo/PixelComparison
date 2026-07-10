@@ -76,7 +76,7 @@ function onPick(e) {
   e.target.value = ''   // 允许重复选择同一文件夹
 }
 
-// ---- 解析 manifest,对齐 report.py 的字段映射 ----
+// ---- 解析 manifest,对齐 docs/上报接入指南.md 的字段映射 ----
 async function parsePackage(map) {
   reset()
   try {
@@ -177,7 +177,7 @@ async function uploadShot(batchId, s, attempts = 3) {
   }
 }
 
-// ---- 执行上报,流程对齐 report.py ----
+// ---- 执行上报:建批次 -> 逐张传图 -> 可选自动对比 ----
 async function startUpload() {
   // 数据包未带 P4 时,采用用户手填的版本号(选填)
   if (parsed.body.p4_version == null && manualP4.value != null && manualP4.value !== '') {

@@ -9,7 +9,7 @@
 用法:
     python mock_uploads/upload.py                 # 上报本目录下所有批次包
     python mock_uploads/upload.py 7               # 仅上报指定批次
-    BASE=http://host:8000 python mock_uploads/upload.py
+    BASE=http://host:8020 python mock_uploads/upload.py
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-BASE = os.environ.get("BASE", "http://127.0.0.1:8000")
+BASE = os.environ.get("BASE", "http://127.0.0.1:8020")
 
 
 def post_json(url: str, payload: dict):
@@ -98,6 +98,7 @@ def build_batch_body(manifest: dict) -> dict:
         "levelsequence_path": ue.get("levelsequence_path"),
         "shading_quality": ue.get("shading_quality"),
         "captured_at": pipeline.get("captured_at"),  # 新版可能不带,缺省用入库时间
+        "overwrite": bool(pipeline.get("overwrite", manifest.get("overwrite", False))),
     }
 
 

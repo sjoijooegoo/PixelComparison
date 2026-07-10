@@ -8,7 +8,7 @@
     前端依赖   frontend\node_modules  (没有可执行:  cd frontend ; npm install)
 #>
 param(
-  [int]$BackendPort = 8000,
+  [int]$BackendPort = 8020,
   [int]$FrontendPort = 5173,
   [string]$DataDir = ""
 )
@@ -22,14 +22,13 @@ $venvPy   = Join-Path $backend ".venv\Scripts\python.exe"
 if ([string]::IsNullOrWhiteSpace($DataDir)) {
   if ($env:PIXELCOMP_DATA_DIR) {
     $DataDir = $env:PIXELCOMP_DATA_DIR
-  } elseif (Test-Path "Y:\") {
-    $DataDir = "Y:\PixelComparison"
   } else {
     $DataDir = Join-Path $backend "data"
   }
 }
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 $env:PIXELCOMP_DATA_DIR = $DataDir
+$env:PIXELCOMP_BACKEND_URL = "http://127.0.0.1:$BackendPort"
 
 # 依赖检查
 if (-not (Test-Path $venvPy)) {

@@ -5,6 +5,7 @@ import shutil
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .cleanup import prune_orphans, prune_thumbnails
+from .backup import backup_scheduler
 from .db import IMAGES_DIR, Base, SessionLocal, engine, get_db, migrate_columns
 from .logging_setup import client_log, log, setup_logging
 from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
@@ -32,7 +34,17 @@ setup_logging()
 Base.metadata.create_all(engine)
 migrate_columns()
 
-app = FastAPI(title="ShotDiff API", version="0.3.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    backup_scheduler.start()
+    try:
+        yield
+    finally:
+        backup_scheduler.stop()
+
+
+app = FastAPI(title="ShotDiff API", version="0.3.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     # 局域网/任意来源访问(内网工具,无凭证);如需收紧改回白名单
@@ -88,11 +100,14 @@ def get_thumb(path: str):
     首次访问生成、之后命中缓存;原图缺失或解码失败 → 404(前端回退原图)。"""
     images_root = IMAGES_DIR.resolve()
     orig = (IMAGES_DIR / path).resolve()
-    if not str(orig).startswith(str(images_root)):   # 防目录遍历
+    if not orig.is_relative_to(images_root):         # 按路径段判断,避免相似字符串前缀绕过
         raise HTTPException(404, "not found")
     if THUMB_DIR.resolve() in orig.parents or not orig.is_file():
         raise HTTPException(404, "not found")         # 不对缓存目录自身再缩略
-    cache = (THUMB_DIR / path).with_suffix(".webp")
+    thumb_root = THUMB_DIR.resolve()
+    cache = (THUMB_DIR / path).with_suffix(".webp").resolve()
+    if not cache.is_relative_to(thumb_root):          # 缓存文件也必须留在 thumbs/ 内
+        raise HTTPException(404, "not found")
     if not (cache.is_file() and cache.stat().st_mtime >= orig.stat().st_mtime):
         try:
             img = Image.open(orig).convert("RGB")
@@ -1114,6 +1129,11 @@ class SettingsIn(BaseModel):
     warn_threshold: float | None = None
     heatmap_blur: int | None = None
     heatmap_sensitivity: float | None = None
+    heatmap_method: str | None = None
+    heatmap_norm_scale: float | None = None
+    heatmap_gamma: float | None = None
+    heatmap_density_radius: float | None = None
+    heatmap_density_floor: float | None = None
     default_shading_quality: int | None = None
     default_date_range_days: int | None = None
     filter_shading_qualities: list[int] | None = None

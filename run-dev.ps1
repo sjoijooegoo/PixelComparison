@@ -1,7 +1,7 @@
 <#
   开发启动 PixelComparison:开两个控制台窗口,分别跑后端与前端,实时显示日志。
-    - 后端:uvicorn --reload(8000),日志同时写 backend\data\logs\backend.log
-    - 前端:vite dev(5173),代理 /api、/images 到 8000
+    - 后端:uvicorn --reload(8020),日志同时写 backend\data\logs\backend.log
+    - 前端:vite dev(5173),代理 /api、/images、/thumb 到后端
   日志文件:
     backend\data\logs\backend.log    后端请求与业务日志(+ 前端上报落 frontend.log)
     backend\data\logs\frontend.log   前端 console / 报错(经 /api/client-logs 上报)
@@ -13,6 +13,7 @@
     后端依赖 backend\.venv;前端依赖 frontend\node_modules
 #>
 param(
+  [int]$BackendPort = 8020,
   [string]$DataDir = ""
 )
 
@@ -25,14 +26,13 @@ $venvPy   = Join-Path $backend ".venv\Scripts\python.exe"
 if ([string]::IsNullOrWhiteSpace($DataDir)) {
   if ($env:PIXELCOMP_DATA_DIR) {
     $DataDir = $env:PIXELCOMP_DATA_DIR
-  } elseif (Test-Path "Y:\") {
-    $DataDir = "Y:\PixelComparison"
   } else {
     $DataDir = Join-Path $backend "data"
   }
 }
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 $env:PIXELCOMP_DATA_DIR = $DataDir
+$env:PIXELCOMP_BACKEND_URL = "http://127.0.0.1:$BackendPort"
 
 if (-not (Test-Path $venvPy)) {
   Write-Host "[!] 找不到后端虚拟环境: $venvPy" -ForegroundColor Yellow
@@ -48,7 +48,7 @@ if (-not (Test-Path (Join-Path $frontend "node_modules"))) {
 Start-Process powershell -ArgumentList @(
   "-NoExit", "-Command",
   "Set-Location '$backend'; Write-Host '后端日志(Ctrl+C 停止)' -ForegroundColor Green; " +
-  "& '$venvPy' -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+  "& '$venvPy' -m uvicorn app.main:app --host 0.0.0.0 --port $BackendPort --reload"
 )
 
 # 前端控制台
@@ -60,7 +60,7 @@ Start-Process powershell -ArgumentList @(
 Write-Host ""
 Write-Host "PixelComparison 开发模式已启动(两个控制台窗口)" -ForegroundColor Green
 Write-Host "  前端: http://localhost:5173"
-Write-Host "  后端: http://127.0.0.1:8000  (API 文档 /docs)"
+Write-Host "  后端: http://127.0.0.1:$BackendPort  (API 文档 /docs)"
 Write-Host "  后端数据: $DataDir" -ForegroundColor Cyan
 Write-Host "  日志: $DataDir\logs\backend.log  /  frontend.log" -ForegroundColor Cyan
 Write-Host "  关闭对应控制台窗口即停止服务。" -ForegroundColor DarkGray
