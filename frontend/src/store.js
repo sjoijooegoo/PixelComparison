@@ -3,7 +3,7 @@ import { api } from './api'
 import { router } from './router'
 import { logger } from './logger'
 
-export const PAGE_SIZE = 10   // 默认每页条数;实际由场景列表按可用高度动态覆盖
+export const PAGE_SIZE = 10   // 默认每页条数;实际由对应列表按可用高度动态覆盖
 
 // 本地日期 YYYY-MM-DD(避免 toISOString 的时区偏移)
 function ymd(d) {

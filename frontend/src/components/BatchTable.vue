@@ -5,6 +5,7 @@ import { useStore } from '../store'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
 import BatchGrid from './BatchGrid.vue'
+import { createBatchTableSizer } from './batchTableSizer'
 
 const store = useStore()
 
@@ -23,27 +24,29 @@ function openPreview(record) {
 
 // 按表格区可用高度动态计算每页行数,填满整列
 const tableWrap = ref(null)
-let ro
-function recalc() {
-  const wrap = tableWrap.value
-  if (!wrap) return
-  const thH = wrap.querySelector('.arco-table-th')?.getBoundingClientRect().height || 36
-  const rowH = wrap.querySelector('tbody .arco-table-tr')?.getBoundingClientRect().height || 40
-  const fit = Math.max(3, Math.floor((wrap.clientHeight - thH) / rowH))
-  if (fit !== store.batchPageSize) {
-    store.batchPageSize = fit
-    store.batchPage = 1
-    store.loadBatches()
-  }
+const tableSizer = createBatchTableSizer(store)
+let mounted = false
+
+async function syncTableWrap() {
+  await nextTick()
+  if (mounted) tableSizer.observe(tableWrap.value)
 }
+
+// table-wrap 受 v-if 控制:深链首屏为列表图时,它会在组件 mounted 之后才出现。
+// 监听模板 ref 才能在 grid -> list 时补绑 ResizeObserver,避免长期沿用默认 10 条。
+watch(tableWrap, syncTableWrap, { flush: 'post' })
 onMounted(() => {
-  ro = new ResizeObserver(recalc)
-  if (tableWrap.value) ro.observe(tableWrap.value)
-  recalc()
+  mounted = true
+  syncTableWrap()
 })
-onUnmounted(() => ro?.disconnect())
+onUnmounted(() => {
+  mounted = false
+  tableSizer.disconnect()
+})
 // 数据渲染后(行高才量得准)再校正一次每页行数,避免列表填不满高度
-watch(() => store.batches.length, () => nextTick(recalc))
+watch(() => store.batches.length, () => nextTick(() => {
+  if (mounted && tableWrap.value) tableSizer.recalc()
+}))
 
 const columns = [
   { title: '批次ID', dataIndex: 'id', slotName: 'id', width: 120 },
