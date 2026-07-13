@@ -17,6 +17,7 @@ def client(tmp_path, monkeypatch):
     import app.service
     import app.settings
     import app.cleanup
+    import app.thumbnails
     import app.main
     importlib.reload(app.db)
     importlib.reload(app.backup)
@@ -24,6 +25,7 @@ def client(tmp_path, monkeypatch):
     importlib.reload(app.service)
     importlib.reload(app.settings)
     importlib.reload(app.cleanup)   # app.main 从中导入 prune_orphans,须先于 app.main 重载
+    importlib.reload(app.thumbnails)
     importlib.reload(app.main)
 
     from fastapi.testclient import TestClient

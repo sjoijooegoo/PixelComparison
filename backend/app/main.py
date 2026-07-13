@@ -1,34 +1,34 @@
 import json
 import mimetypes
-import os
 import shutil
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import quote
 
 # Windows 上 .webp 可能未注册,确保静态文件返回正确 Content-Type
 mimetypes.add_type("image/webp", ".webp")
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from PIL import Image
 from pydantic import BaseModel
 from sqlalchemy import Integer, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .cleanup import prune_orphans, prune_thumbnails
+from .cleanup import prune_orphans
 from .backup import backup_scheduler
-from .db import IMAGES_DIR, Base, SessionLocal, engine, get_db, migrate_columns
+from .db import IMAGES_DIR, THUMB_DIR, Base, SessionLocal, engine, get_db, migrate_columns
 from .logging_setup import client_log, log, setup_logging
 from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
 from .service import run_comparison
 from .settings import get_settings, save_settings
+from .thumbnails import ThumbnailService
 
 setup_logging()
 Base.metadata.create_all(engine)
@@ -37,10 +37,12 @@ migrate_columns()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    thumbnail_service.start()
     backup_scheduler.start()
     try:
         yield
     finally:
+        thumbnail_service.stop()
         backup_scheduler.stop()
 
 
@@ -63,73 +65,51 @@ class _CachedStatic(StaticFiles):
 
 app.mount("/images", _CachedStatic(directory=IMAGES_DIR), name="images")
 
-# ---- 缩略图:懒生成 + 磁盘缓存(仅用于小预览;原图/对比/放大仍走 /images) ----
-THUMB_DIR = IMAGES_DIR / "thumbs"
-THUMB_WIDTH = 600          # ≈ 显示宽 300 的 2×,高分屏也清晰
-THUMB_QUALITY = 80
-
-# 缩略图缓存淘汰:生成新缩略图时低频触发一次,清掉久未访问的旧缓存(后台线程,不阻塞请求)
-_THUMB_PRUNE_INTERVAL = 6 * 3600
-_thumb_prune_lock = threading.Lock()
-_thumb_pruned_at = 0.0
+# ---- 缩略图:缓存命中直接返回；未命中立即回退原图并在有界守护线程中生成 ----
+thumbnail_service = ThumbnailService(IMAGES_DIR, THUMB_DIR)
 
 
-def _maybe_prune_thumbnails():
-    global _thumb_pruned_at
-    now = time.monotonic()
-    if now - _thumb_pruned_at < _THUMB_PRUNE_INTERVAL:
-        return
-    if not _thumb_prune_lock.acquire(blocking=False):   # 已有一次在跑,跳过
-        return
-    _thumb_pruned_at = now
-
-    def _run():
-        try:
-            n = prune_thumbnails()
-            if n:
-                log.info("缩略图淘汰:删除 %d 个久未访问的缓存", n)
-        finally:
-            _thumb_prune_lock.release()
-
-    threading.Thread(target=_run, daemon=True).start()
+def _thumb_relative_path(path: str) -> Path:
+    """只接受普通 URL 相对路径，不触碰远程文件系统即可完成校验。"""
+    if not path or "\\" in path or "\x00" in path:
+        raise HTTPException(404, "not found")
+    pure = PurePosixPath(path)
+    if pure.is_absolute() or any(
+        part in ("", ".", "..") or ":" in part for part in pure.parts
+    ):
+        raise HTTPException(404, "not found")
+    if pure.parts[0] == "thumbs":
+        raise HTTPException(404, "not found")
+    return Path(*pure.parts)
 
 
 @app.get("/thumb/{path:path}")
-def get_thumb(path: str):
-    """把 /images/<path> 的原图缩成小图(WebP)并缓存到 thumbs/<path>.webp;
-    首次访问生成、之后命中缓存;原图缺失或解码失败 → 404(前端回退原图)。"""
-    images_root = IMAGES_DIR.resolve()
-    orig = (IMAGES_DIR / path).resolve()
-    if not orig.is_relative_to(images_root):         # 按路径段判断,避免相似字符串前缀绕过
-        raise HTTPException(404, "not found")
-    if THUMB_DIR.resolve() in orig.parents or not orig.is_file():
-        raise HTTPException(404, "not found")         # 不对缓存目录自身再缩略
-    thumb_root = THUMB_DIR.resolve()
-    cache = (THUMB_DIR / path).with_suffix(".webp").resolve()
-    if not cache.is_relative_to(thumb_root):          # 缓存文件也必须留在 thumbs/ 内
-        raise HTTPException(404, "not found")
-    if not (cache.is_file() and cache.stat().st_mtime >= orig.stat().st_mtime):
-        try:
-            img = Image.open(orig).convert("RGB")
-            img.thumbnail((THUMB_WIDTH, THUMB_WIDTH * 10))   # 按宽缩放、保持比例
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp = cache.with_suffix(".webp.tmp")
-            img.save(tmp, format="WEBP", quality=THUMB_QUALITY)
-            tmp.replace(cache)                                # 原子落盘,并发安全
-        except Exception as e:  # noqa: BLE001
-            log.warning("缩略图生成失败 %s: %s", path, e)
-            raise HTTPException(404, "thumb failed")
-        _maybe_prune_thumbnails()                             # 有新生成,顺带低频淘汰旧缓存
-    else:
-        # 命中缓存:把 mtime 刷成「最近访问」,供按 mtime 的久未访问淘汰使用;
-        # 同一天内不重复写,避免每次请求都触发元数据写入。
+async def get_thumb(path: str, request: Request):
+    """本地缓存命中返回 WebP；未命中立即回退原图，绝不等待远程 I/O。"""
+    relative = _thumb_relative_path(path)
+    cache = thumbnail_service.cache_path(relative)
+    if cache.is_file():
         try:
             if time.time() - cache.stat().st_mtime > 86400:
-                os.utime(cache, None)
+                cache.touch()
         except OSError:
             pass
-    return FileResponse(cache, media_type="image/webp",
-                        headers={"Cache-Control": "public, max-age=86400"})
+        return FileResponse(
+            cache,
+            media_type="image/webp",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    thumbnail_service.submit(relative)
+    encoded_path = "/".join(quote(part, safe="") for part in relative.parts)
+    target = f"/images/{encoded_path}"
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+    return RedirectResponse(
+        target,
+        status_code=307,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.middleware("http")

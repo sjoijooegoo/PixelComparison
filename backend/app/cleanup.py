@@ -14,7 +14,7 @@ import time
 
 from sqlalchemy import select
 
-from .db import IMAGES_DIR, SessionLocal
+from .db import IMAGES_DIR, THUMB_DIR, SessionLocal
 from .models import Batch, Comparison, Screenshot
 
 # 缩略图是可重建的派生缓存:超过此天数「未被访问」(mtime)即淘汰,下次看列表图自动重生成
@@ -25,7 +25,7 @@ def find_orphans(db) -> dict[str, list]:
     """返回需要清理的孤儿路径(尚未删除)。"""
     batches_dir = IMAGES_DIR / "batches"
     heat_dir = IMAGES_DIR / "heatmaps"
-    thumb_dir = IMAGES_DIR / "thumbs"
+    thumb_dir = THUMB_DIR
 
     live_batch_ids = set(db.scalars(select(Batch.id)))
     live_comparison_ids = {str(cid) for cid in db.scalars(select(Comparison.id))}
@@ -84,7 +84,7 @@ def prune_thumbnails(days: int = THUMBNAIL_RETENTION_DAYS, dry_run: bool = False
     /thumb 命中缓存时会刷新 mtime,因此这里的「mtime 旧」近似「久未被访问」。
     返回删除的文件数。
     """
-    thumb_dir = IMAGES_DIR / "thumbs"
+    thumb_dir = THUMB_DIR
     if not thumb_dir.is_dir():
         return 0
     cutoff = time.time() - days * 86400

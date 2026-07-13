@@ -141,7 +141,7 @@ backend/data/
   images/
     batches/
     heatmaps/
-    thumbs/
+  thumbs/
   backup/
     YYYY-MM-DD/
       db/
@@ -153,12 +153,15 @@ backend/data/
 |---|---|---|
 | `PIXELCOMP_DATA_DIR` | `<项目目录>/backend/data` | 日志、备份及默认数据库/图片根目录 |
 | `PIXELCOMP_DB_PATH` | `<DATA_DIR>/shotdiff.db` | SQLite 文件；应放本地磁盘 |
-| `PIXELCOMP_IMAGES_DIR` | `<DATA_DIR>/images` | 原图、热力图和缩略图，可单独放大容量磁盘 |
+| `PIXELCOMP_IMAGES_DIR` | `<DATA_DIR>/images` | 原图和热力图，可单独放大容量磁盘或共享盘 |
+| `PIXELCOMP_THUMB_DIR` | `<PIXELCOMP_DB_PATH 所在目录>/thumbs` | 可重建的 WebP 缩略图缓存；建议放本地磁盘 |
+| `PIXELCOMP_THUMB_WORKERS` | `2` | 后台生成缩略图的守护线程数，范围 1～8 |
+| `PIXELCOMP_THUMB_QUEUE_SIZE` | `64` | 等待生成的缩略图任务上限；队列满时不阻塞请求 |
 | `PIXELCOMP_BACKUP_ENABLED` | `1` | 设为 `0`、`false`、`no` 或 `off` 时禁用自动备份 |
 | `PIXELCOMP_BACKUP_RETENTION_DAYS` | `30` | 数据库备份保留天数；`0` 表示永久保留 |
 | `PIXELCOMP_BACKUP_CHECK_INTERVAL_SECONDS` | `3600` | 自动备份检查间隔，最小 60 秒 |
 
-不要把正在写入的 SQLite 主库放在 SMB/NFS 网络共享目录。若需要共享存储，建议只把 `PIXELCOMP_IMAGES_DIR` 指向共享盘，数据库仍保留在本地磁盘。
+不要把正在写入的 SQLite 主库放在 SMB/NFS 网络共享目录。若需要共享存储，建议只把 `PIXELCOMP_IMAGES_DIR` 指向共享盘，数据库和 `PIXELCOMP_THUMB_DIR` 仍保留在本地磁盘。缩略图缓存未命中时，接口会立即回退原图，并把生成任务放入有界守护线程；远程原图召回卡住也不会阻塞 Uvicorn 退出。
 
 ## 每日数据库备份
 
@@ -170,7 +173,7 @@ backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 
 备份先写入唯一临时文件，通过 `PRAGMA quick_check` 后再原子发布；运行中的 WAL 数据也会进入一致快照。同一自然日只保留一个日快照。如果通过 `PIXELCOMP_DB_PATH` 使用自定义数据库文件名，日快照会在当天的 `db/` 目录中保留该文件名。
 
-自动备份只包含 SQLite 数据库，不包含 `PIXELCOMP_IMAGES_DIR` 中的原始截图、热力图和缩略图。数据库只保存图片的相对路径；完整恢复时必须同时保留与快照匹配的 `images/batches` 原图。`images/heatmaps` 可以备份以便立即查看历史对比，`images/thumbs` 是可重建缓存，无需备份。
+自动备份只包含 SQLite 数据库，不包含 `PIXELCOMP_IMAGES_DIR` 中的原始截图、热力图，也不包含 `PIXELCOMP_THUMB_DIR` 中的缩略图。数据库只保存图片的相对路径；完整恢复时必须同时保留与快照匹配的 `images/batches` 原图。`images/heatmaps` 可以备份以便立即查看历史对比，`thumbs` 是可重建缓存，无需备份。
 
 校验快照时应使用 SQLite URI `mode=ro&immutable=1`，避免校验过程创建 `-wal`、`-shm` 等辅助文件。日期目录是保留和删除的完整单元，不要在其中存放人工维护的无关文件；若其他工具产生辅助文件，它们也只会位于对应日期的 `db/` 目录内。
 

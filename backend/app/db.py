@@ -13,9 +13,13 @@ DATA_DIR = Path(
 # 可单独放共享盘。都不设时落在 DATA_DIR 下(行为与旧版一致)。
 DB_PATH = Path(os.environ.get("PIXELCOMP_DB_PATH") or (DATA_DIR / "shotdiff.db"))
 IMAGES_DIR = Path(os.environ.get("PIXELCOMP_IMAGES_DIR") or (DATA_DIR / "images"))
+# 缩略图是可重建缓存，默认跟随 SQLite 放本地磁盘，避免在共享盘/按需召回盘上
+# 一边读取原图一边并发写 WebP，拖垮请求线程。需要时可单独覆盖。
+THUMB_DIR = Path(os.environ.get("PIXELCOMP_THUMB_DIR") or (DB_PATH.parent / "thumbs"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+THUMB_DIR.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
