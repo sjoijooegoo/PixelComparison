@@ -142,7 +142,10 @@ backend/data/
     batches/
     heatmaps/
     thumbs/
-  backup/db/
+  backup/
+    YYYY-MM-DD/
+      db/
+        shotdiff.db
   logs/
 ```
 
@@ -162,12 +165,16 @@ backend/data/
 后端启动时会检查当天是否已有备份，之后按检查间隔重复检查。当天没有快照时，使用 SQLite 在线备份 API 创建：
 
 ```text
-backend/data/backup/db/shotdiff-YYYY-MM-DD.db
+backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 ```
 
-备份先写入唯一临时文件，通过 `PRAGMA quick_check` 后再原子发布；运行中的 WAL 数据也会进入一致快照。同一自然日只保留一个日快照。
+备份先写入唯一临时文件，通过 `PRAGMA quick_check` 后再原子发布；运行中的 WAL 数据也会进入一致快照。同一自然日只保留一个日快照。如果通过 `PIXELCOMP_DB_PATH` 使用自定义数据库文件名，日快照会在当天的 `db/` 目录中保留该文件名。
 
-默认备份和主库位于同一数据目录，可以防误删和数据库逻辑损坏，但不能防整块磁盘故障。需要灾备时，应再把 `backup/db` 同步到异盘或对象存储。恢复步骤见[使用文档](docs/使用文档.md#9-数据库备份与恢复)。
+自动备份只包含 SQLite 数据库，不包含 `PIXELCOMP_IMAGES_DIR` 中的原始截图、热力图和缩略图。数据库只保存图片的相对路径；完整恢复时必须同时保留与快照匹配的 `images/batches` 原图。`images/heatmaps` 可以备份以便立即查看历史对比，`images/thumbs` 是可重建缓存，无需备份。
+
+校验快照时应使用 SQLite URI `mode=ro&immutable=1`，避免校验过程创建 `-wal`、`-shm` 等辅助文件。日期目录是保留和删除的完整单元，不要在其中存放人工维护的无关文件；若其他工具产生辅助文件，它们也只会位于对应日期的 `db/` 目录内。
+
+默认备份和主库位于同一数据目录，可以防误删和数据库逻辑损坏，但不能防整块磁盘故障。需要灾备时，应把完整的 `backup/` 目录树和原始图片增量备份同步到异盘或对象存储。恢复时先停止后端，再把选定日期的 `db/shotdiff.db` 复制到活动数据库路径，并配合对应的图片目录使用；详细步骤见[使用文档](docs/使用文档.md#9-数据库备份与恢复)。
 
 ## 界面入口
 
