@@ -11,18 +11,23 @@ const store = useStore()
 const route = useRoute()
 const router = useRouter()
 
-// URL → 状态:带场景参数则以列表图展示该场景(日期沿用默认近七天)
-function applyRoute() {
-  const sid = route.params.sceneId
+// URL → 状态:带场景参数则以列表图展示该场景。
+// 首屏数据已由 main.js 在挂载前加载；这里只处理后续路由切换，或初始化失败后的兜底。
+async function applyRoute() {
+  const rawSid = route.params.sceneId
+  const sid = Array.isArray(rawSid) ? rawSid[0] : rawSid
   if (!sid) return                       // 无参数:保持当前状态(默认列表)
+  const wasGrid = store.batchView === 'grid'
+  const sceneChanged = store.filters.scene_id !== sid
   store.batchView = 'grid'
-  if (store.filters.scene_id !== sid) {
+  if (sceneChanged) {
     store.filters.scene_id = sid
     store.batchPage = 1
-    store.loadBatches()
-    store.loadGrid()
-  } else if (!store.grid.batches.length) {
-    store.loadGrid()                      // 同场景已有数据则不重复拉取/重渲染
+    await Promise.all([store.loadBatches(), store.loadGrid()])
+  } else if (!store.initialized) {
+    await store.init(sid)                 // bootstrap 失败后的完整兜底重试
+  } else if (!wasGrid) {
+    await store.loadGrid()                // 同场景从列表切到列表图时只补矩阵
   }
 }
 onMounted(applyRoute)

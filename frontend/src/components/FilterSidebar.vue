@@ -31,8 +31,9 @@ function isDaySelected(date) {
 // 任意筛选项变更即自动应用(静默)
 async function applyNow() {
   store.batchPage = 1
-  await store.loadBatches()
-  if (store.batchView === 'grid') await store.loadGrid()
+  const loads = [store.loadBatches()]
+  if (store.batchView === 'grid') loads.push(store.loadGrid())
+  await Promise.all(loads)
 }
 
 function onDateChange(v) {

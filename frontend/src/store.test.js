@@ -1,8 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 const { apiMock, routerMock, loggerMock } = vi.hoisted(() => ({
   apiMock: {
+    meta: vi.fn(),
+    settings: vi.fn(),
+    batches: vi.fn(),
+    sceneGrid: vi.fn(),
     comparisonLookup: vi.fn(),
     comparisonTask: vi.fn(),
     createComparison: vi.fn(),
@@ -19,8 +23,32 @@ import { p4Label, useStore, visibleQualityOptions } from './store'
 
 beforeEach(() => {
   setActivePinia(createPinia())
-  vi.clearAllMocks()
+  vi.resetAllMocks()
+  const cacheState = globalThis.__PIXELCOMP_GRID_CACHE__
+  cacheState.cache.clear()
+  cacheState.inflight.clear()
+  cacheState.epoch += 1
+  apiMock.meta.mockResolvedValue({ scene_ids: [], platforms: [], baselines: [] })
+  apiMock.settings.mockResolvedValue({
+    default_shading_quality: 5,
+    default_date_range_days: 30,
+    filter_shading_qualities: [5, 4, 3, 2, 1, 0],
+  })
+  apiMock.batches.mockResolvedValue({ items: [], total: 0 })
+  apiMock.sceneGrid.mockResolvedValue({ scene_id: '', batches: [], rows: [] })
 })
+
+afterEach(() => vi.useRealTimers())
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
 
 describe('display helpers', () => {
   it('按项目设置筛选画质并在空集合时回退全部档位', () => {
@@ -33,6 +61,152 @@ describe('display helpers', () => {
     expect(p4Label(null)).toBe('——')
     expect(p4Label('')).toBe('——')
     expect(p4Label(251200)).toBe('P4 251200')
+  })
+})
+
+describe('batch initialization and request ordering', () => {
+  it('深链初始化只使用项目设置下的最终场景筛选', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 6, 13, 12, 0, 0))
+    const store = useStore()
+    apiMock.batches.mockResolvedValue({ items: [{ id: '10' }], total: 10 })
+    apiMock.sceneGrid.mockResolvedValue({
+      scene_id: 'Village_Dimension_Main',
+      batches: [{ id: '10', scene_id: 'Village_Dimension_Main' }],
+      rows: [],
+    })
+
+    await store.init('Village_Dimension_Main')
+
+    expect(store.initialized).toBe(true)
+    expect(store.batchView).toBe('grid')
+    expect(store.filters.scene_id).toBe('Village_Dimension_Main')
+    expect(store.batchTotal).toBe(10)
+    expect(apiMock.batches).toHaveBeenCalledTimes(1)
+    expect(apiMock.batches.mock.calls[0][0]).toMatchObject({
+      scene_id: 'Village_Dimension_Main',
+      shading_quality: 5,
+      created_from: '2026-06-13',
+      created_to: '2026-07-13',
+      page: 1,
+      page_size: 10,
+    })
+    expect(apiMock.sceneGrid).toHaveBeenCalledTimes(1)
+    expect(apiMock.sceneGrid.mock.calls[0]).toEqual([
+      'Village_Dimension_Main',
+      expect.objectContaining({
+        scene_id: 'Village_Dimension_Main',
+        shading_quality: 5,
+        created_from: '2026-06-13',
+        created_to: '2026-07-13',
+      }),
+    ])
+  })
+
+  it('忽略晚到的旧筛选批次响应', async () => {
+    const store = useStore()
+    const oldRequest = deferred()
+    const currentRequest = deferred()
+    apiMock.batches
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockImplementationOnce(() => currentRequest.promise)
+
+    store.filters.scene_id = ''
+    const oldLoad = store.loadBatches()
+    store.filters.scene_id = 'Village_Dimension_Main'
+    const currentLoad = store.loadBatches()
+
+    currentRequest.resolve({ items: [{ id: 'scene-10' }], total: 10 })
+    await currentLoad
+    oldRequest.resolve({ items: [{ id: 'global-120' }], total: 120 })
+    await oldLoad
+
+    expect(apiMock.batches.mock.calls[0][0].scene_id).toBe('')
+    expect(apiMock.batches.mock.calls[1][0].scene_id).toBe('Village_Dimension_Main')
+    expect(store.batches).toEqual([{ id: 'scene-10' }])
+    expect(store.batchTotal).toBe(10)
+  })
+
+  it('动态页大小变化后只接受最新分页响应', async () => {
+    const store = useStore()
+    const page10 = deferred()
+    const page8 = deferred()
+    apiMock.batches
+      .mockImplementationOnce(() => page10.promise)
+      .mockImplementationOnce(() => page8.promise)
+
+    store.batchPageSize = 10
+    const oldLoad = store.loadBatches()
+    store.batchPageSize = 8
+    const currentLoad = store.loadBatches()
+    page8.resolve({ items: [{ id: 'page-8' }], total: 10 })
+    await currentLoad
+    page10.resolve({ items: [{ id: 'page-10' }], total: 120 })
+    await oldLoad
+
+    expect(apiMock.batches.mock.calls.map(([params]) => params.page_size)).toEqual([10, 8])
+    expect(store.batches).toEqual([{ id: 'page-8' }])
+    expect(store.batchTotal).toBe(10)
+  })
+
+  it('空日期选择立即清空并使在途批次响应失效', async () => {
+    const store = useStore()
+    const oldRequest = deferred()
+    apiMock.batches.mockImplementationOnce(() => oldRequest.promise)
+
+    const oldLoad = store.loadBatches()
+    store.filters.dateMode = 'days'
+    store.filters.created_dates = []
+    await store.loadBatches()
+    oldRequest.resolve({ items: [{ id: 'stale' }], total: 120 })
+    await oldLoad
+
+    expect(store.batches).toEqual([])
+    expect(store.batchTotal).toBe(0)
+  })
+
+  it('快速切换场景时忽略晚到的旧列表图响应', async () => {
+    const store = useStore()
+    const sceneA = deferred()
+    const sceneB = deferred()
+    apiMock.sceneGrid
+      .mockImplementationOnce(() => sceneA.promise)
+      .mockImplementationOnce(() => sceneB.promise)
+
+    store.filters.scene_id = 'SceneA'
+    const oldLoad = store.loadGrid()
+    store.filters.scene_id = 'SceneB'
+    const currentLoad = store.loadGrid()
+    sceneB.resolve({ scene_id: 'SceneB', batches: [{ id: 'B' }], rows: [] })
+    await currentLoad
+    sceneA.resolve({ scene_id: 'SceneA', batches: [{ id: 'A' }], rows: [] })
+    await oldLoad
+
+    expect(store.grid.scene_id).toBe('SceneB')
+    expect(store.grid.batches).toEqual([{ id: 'B' }])
+  })
+
+  it('刷新后旧列表图请求不会重新污染缓存', async () => {
+    const store = useStore()
+    const oldRequest = deferred()
+    const freshRequest = deferred()
+    apiMock.sceneGrid
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockImplementationOnce(() => freshRequest.promise)
+    store.filters.scene_id = 'CacheScene'
+    store.batchView = 'grid'
+
+    const oldLoad = store.loadGrid()
+    const refresh = store.refreshBatches()
+    await vi.waitFor(() => expect(apiMock.sceneGrid).toHaveBeenCalledTimes(2))
+    freshRequest.resolve({ scene_id: 'CacheScene', batches: [{ id: 'fresh' }], rows: [] })
+    await refresh
+    oldRequest.resolve({ scene_id: 'CacheScene', batches: [{ id: 'stale' }], rows: [] })
+    await oldLoad
+    await store.loadGrid()
+
+    expect(apiMock.sceneGrid).toHaveBeenCalledTimes(2)
+    expect(store.grid.batches).toEqual([{ id: 'fresh' }])
   })
 })
 

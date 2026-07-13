@@ -1,12 +1,9 @@
 <script setup>
-import { onMounted } from 'vue'
 import { useStore } from './store'
 import TopBar from './components/TopBar.vue'
 import ManualUpload from './components/ManualUpload.vue'
 
 const store = useStore()
-
-onMounted(() => store.init())
 </script>
 
 <template>

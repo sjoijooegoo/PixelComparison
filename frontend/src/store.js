@@ -67,7 +67,9 @@ const GRID_CACHE_FIELDS = [
 const gridCacheState = globalThis.__PIXELCOMP_GRID_CACHE__ ||= {
   cache: new Map(),
   inflight: new Map(),
+  epoch: 0,
 }
+if (!Number.isInteger(gridCacheState.epoch)) gridCacheState.epoch = 0
 const gridCache = gridCacheState.cache
 const gridInflight = gridCacheState.inflight
 
@@ -99,6 +101,13 @@ function rememberGrid(key, data) {
 function clearGridCache() {
   gridCache.clear()
   gridInflight.clear()
+  gridCacheState.epoch += 1
+}
+
+function cloneRequestParams(params) {
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]),
+  )
 }
 
 export const useStore = defineStore('shotdiff', {
@@ -113,6 +122,9 @@ export const useStore = defineStore('shotdiff', {
     batchPageSize: PAGE_SIZE,
     batchView: 'list',                 // list(列表) | grid(列表图:同场景多批次图片矩阵)
     grid: { batches: [], rows: [] },   // 批次列表图数据
+    initialized: false,                // 首屏最终筛选与数据是否已完成加载
+    _batchRequestSeq: 0,               // 只允许最新批次请求写回状态
+    _gridRequestSeq: 0,                // 只允许最新列表图请求写回状态
     gridCollapsed: new Set(),          // 列表图已折叠的批次列(按批次 id;跨刷新/切场景保留)
     gridHeatmaps: null,                // 列表图热力图列:{ current_id, baseline_id, exists, map:{scene_name:url} };只读命中缓存,不触发计算
     uploadVisible: false,              // 手动上报弹窗(由顶栏按钮触发)
@@ -225,15 +237,27 @@ export const useStore = defineStore('shotdiff', {
   },
 
   actions: {
-    async init() {
+    async init(routeSceneId = '') {
+      this.initialized = false
+      const sid = Array.isArray(routeSceneId) ? routeSceneId[0] : routeSceneId
+      // 必须在任何 await 之前固定深链场景；即使初始化接口失败，挂载后的兜底请求
+      // 也不会先发出未带 scene_id 的全局查询。
+      if (sid) {
+        this.filters.scene_id = sid
+        this.batchView = 'grid'
+      } else {
+        this.filters.scene_id = ''
+        this.batchView = 'list'
+      }
       await this.loadMeta()
       await this.loadSettings()
-      // 保留深链/路由已设置的场景(BatchView.onMounted 先于本 init 执行),
-      // 否则默认筛选会清掉 scene_id,导致 /batches/:scene 被重定向回 /batches
-      const sid = this.filters.scene_id
       this.filters = this.defaultFilters()   // 用项目设置里的默认画质/日期范围初始化筛选
       if (sid) this.filters.scene_id = sid
-      await this.loadBatches()
+      this.batchPage = 1
+      const loads = [this.loadBatches()]
+      if (sid) loads.push(this.loadGrid())
+      await Promise.all(loads)
+      this.initialized = true
     },
 
     // 由项目设置算出的整套默认筛选(首次进入 / 点「清空」时套用)
@@ -275,27 +299,44 @@ export const useStore = defineStore('shotdiff', {
     },
 
     async loadBatches() {
+      const requestId = ++this._batchRequestSeq
+      // 批次筛选变化后，任何仍在途的列表图响应也已经过期；配套的 loadGrid
+      // 会取得新的序号。这样清空筛选/空日期时不会短暂回写旧矩阵。
+      ++this._gridRequestSeq
       this.syncRolesForScene()
       if (this.hasEmptyDateSelection) {
         this.batches = []
         this.batchTotal = 0
         return
       }
-      const { items, total } = await api.batches({
+      const params = cloneRequestParams({
         ...this.requestFilters,
         page: this.batchPage,
         page_size: this.batchPageSize,
       })
+      let result
+      try {
+        result = await api.batches(params)
+      } catch (error) {
+        if (requestId !== this._batchRequestSeq) return null
+        throw error
+      }
+      if (requestId !== this._batchRequestSeq) return null
+      const { items, total } = result
       this.batches = items
       this.batchTotal = total
+      return result
     },
 
     // 刷新批次(筛选项 + 列表 + 列表图)
     async refreshBatches() {
+      ++this._batchRequestSeq
+      ++this._gridRequestSeq
       clearGridCache()
       await this.loadMeta()
-      await this.loadBatches()
-      if (this.batchView === 'grid') await this.loadGrid()
+      const loads = [this.loadBatches()]
+      if (this.batchView === 'grid') loads.push(this.loadGrid())
+      await Promise.all(loads)
     },
 
     // 删除单个批次(级联删其对比/对比项/基线/图片/热力图/缩略图);清理本地选择并刷新
@@ -313,6 +354,7 @@ export const useStore = defineStore('shotdiff', {
 
     // 批次列表图:同场景多批次的图片矩阵(需先选场景)
     async loadGrid() {
+      const requestId = ++this._gridRequestSeq
       if (!this.filters.scene_id) { this.grid = emptyGrid(); return }
       if (this.hasEmptyDateSelection) {
         this.grid = emptyGrid()
@@ -321,26 +363,37 @@ export const useStore = defineStore('shotdiff', {
       }
       // 传全部筛选(scene_id 在路径里,多余的 status 等会被后端忽略)
       const sceneId = this.filters.scene_id
-      const filters = this.requestFilters
+      const filters = cloneRequestParams(this.requestFilters)
       const key = gridCacheKey(sceneId, filters)
       if (gridCache.has(key)) {
+        if (requestId !== this._gridRequestSeq) return null
         this.grid = gridCache.get(key)
         this._clearRolesOutsideGrid(sceneId)
         this.loadGridHeatmaps()
         return this.grid
       }
       if (!gridInflight.has(key)) {
+        const requestEpoch = gridCacheState.epoch
         const request = api.sceneGrid(sceneId, filters)
           .then((data) => {
-            rememberGrid(key, data)
+            if (gridCacheState.epoch === requestEpoch) rememberGrid(key, data)
             return data
           })
           .finally(() => {
-            gridInflight.delete(key)
+            // clearGridCache 后同 key 可能已有一条新请求；旧请求不得误删新请求。
+            if (gridInflight.get(key) === request) gridInflight.delete(key)
           })
         gridInflight.set(key, request)
       }
-      const data = await gridInflight.get(key)
+      let data
+      try {
+        data = await gridInflight.get(key)
+      } catch (error) {
+        if (requestId !== this._gridRequestSeq) return null
+        throw error
+      }
+      if (requestId !== this._gridRequestSeq) return null
+      if (gridCacheKey(this.filters.scene_id, this.requestFilters) !== key) return null
       this.grid = data
       this._clearRolesOutsideGrid(sceneId)
       this.loadGridHeatmaps()
