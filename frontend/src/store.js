@@ -112,7 +112,14 @@ function cloneRequestParams(params) {
 
 export const useStore = defineStore('shotdiff', {
   state: () => ({
-    meta: { scene_ids: [], platforms: [], baselines: [] },
+    meta: {
+      scene_ids: [],
+      unlisted_scene_ids: [],
+      scene_catalog_configured: false,
+      show_unlisted_scene_ids: false,
+      platforms: [],
+      baselines: [],
+    },
     filters: { scene_id: '', shading_quality: 5, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' },   // 画质默认「电影」(5)
 
     // 顶部:原始批次列表
@@ -168,6 +175,8 @@ export const useStore = defineStore('shotdiff', {
       default_shading_quality: 5,   // 筛选默认画质;-1 表示「全部画质」
       default_date_range_days: 7,   // 筛选默认日期范围:最近 N 天
       filter_shading_qualities: [5, 4, 3, 2, 1, 0],   // 筛选框画质下拉显示哪几档
+      scene_id_order: null,         // 外部模块下发的权威场景目录；只读展示，不由设置页修改
+      show_unlisted_scene_ids: false, // 是否把目录外、数据库中已有的场景追加到筛选框
     },
   }),
 
@@ -251,11 +260,13 @@ export const useStore = defineStore('shotdiff', {
       }
       await this.loadMeta()
       await this.loadSettings()
+      const acceptedSid = sid && this.meta.scene_ids.includes(sid) ? sid : ''
       this.filters = this.defaultFilters()   // 用项目设置里的默认画质/日期范围初始化筛选
-      if (sid) this.filters.scene_id = sid
+      if (acceptedSid) this.filters.scene_id = acceptedSid
+      this.batchView = acceptedSid ? 'grid' : 'list'
       this.batchPage = 1
       const loads = [this.loadBatches()]
-      if (sid) loads.push(this.loadGrid())
+      if (acceptedSid) loads.push(this.loadGrid())
       await Promise.all(loads)
       this.initialized = true
     },
@@ -275,7 +286,23 @@ export const useStore = defineStore('shotdiff', {
 
     // 筛选器选项(场景/平台/基线):随批次实时去重,刷新时一并更新
     async loadMeta() {
-      this.meta = await api.meta()
+      const next = await api.meta()
+      this.meta = {
+        unlisted_scene_ids: [],
+        scene_catalog_configured: false,
+        show_unlisted_scene_ids: false,
+        ...next,
+      }
+      const currentSceneId = this.filters.scene_id
+      if (currentSceneId && !this.meta.scene_ids.includes(currentSceneId)) {
+        this.filters.scene_id = ''
+        this.batchPage = 1
+        this.batchView = 'list'
+        this.grid = emptyGrid()
+        this.gridHeatmaps = null
+        return currentSceneId
+      }
+      return ''
     },
 
     async loadSettings() {
@@ -333,10 +360,11 @@ export const useStore = defineStore('shotdiff', {
       ++this._batchRequestSeq
       ++this._gridRequestSeq
       clearGridCache()
-      await this.loadMeta()
+      const hiddenSceneId = await this.loadMeta()
       const loads = [this.loadBatches()]
       if (this.batchView === 'grid') loads.push(this.loadGrid())
       await Promise.all(loads)
+      return hiddenSceneId
     },
 
     // 删除单个批次(级联删其对比/对比项/基线/图片/热力图/缩略图);清理本地选择并刷新

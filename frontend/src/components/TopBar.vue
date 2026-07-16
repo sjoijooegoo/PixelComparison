@@ -23,11 +23,13 @@ const showBatchActions = computed(() => isActive('/batches') || isActive('/compa
 
 // 按当前视图刷新对应数据;silent=true 时不弹提示(供定时自动刷新复用)
 async function doRefresh({ silent = false } = {}) {
+  let hiddenSceneId = ''
   if (isActive('/comparison')) {
     await store.loadComparisons()
   } else {
-    await store.refreshBatches()
+    hiddenSceneId = await store.refreshBatches()
   }
+  if (hiddenSceneId) Message.info(`场景 ${hiddenSceneId} 已被目录配置隐藏，筛选已清空`)
   if (!silent) Message.success('已刷新')
 }
 

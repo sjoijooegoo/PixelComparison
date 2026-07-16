@@ -12,6 +12,7 @@ PixelComparison 是面向游戏截图的视觉回归平台。采集端按批次�
 - 输出差异率、SSIM、PSNR、通道差异、RGB 直方图和 WebP 热力图。
 - 识别新增、缺失、通过、警告和失败检查点。
 - 支持浏览器拖入数据包手动上报，以及 HTTP API 接入 CI/采集端。
+- 支持外部模块全量同步前端场景目录，统一控制场景筛选项的顺序和可见性。
 - 自动生成缩略图并按访问时间淘汰缓存。
 - 每天在线备份 SQLite 数据库，默认保留 30 天。
 
@@ -161,7 +162,24 @@ backend/data/
 | `PIXELCOMP_BACKUP_RETENTION_DAYS` | `30` | 数据库备份保留天数；`0` 表示永久保留 |
 | `PIXELCOMP_BACKUP_CHECK_INTERVAL_SECONDS` | `3600` | 自动备份检查间隔，最小 60 秒 |
 
-不要把正在写入的 SQLite 主库放在 SMB/NFS 网络共享目录。若需要共享存储，建议只把 `PIXELCOMP_IMAGES_DIR` 指向共享盘，数据库和 `PIXELCOMP_THUMB_DIR` 仍保留在本地磁盘。缩略图缓存未命中时，接口会立即回退原图，并把生成任务放入有界守护线程；远程原图召回卡住也不会阻塞 Uvicorn 退出。
+不要把正在写入的 SQLite 主库放在 SMB/NFS 网络共享目录。若需要共享存储，建议只把 `PIXELCOMP_IMAGES_DIR` 指向共享盘，数据库和 `PIXELCOMP_THUMB_DIR` 仍保留在本地磁盘。缩略图缓存未命中时，接口会立即回退原图，并把生成任务放入有界守护线程；后台生成线程不会阻止 Uvicorn 退出。直接读取共享盘原图仍受共享存储速度影响。
+
+Linux 上将数据库和缩略图放本地、原图等大文件放远端的完整示例：
+
+```bash
+export PIXELCOMP_DATA_DIR=/agentdrive/v_sycisong/PixelComparison
+export PIXELCOMP_DB_PATH=/data/workspace/PixelComparison/backend/data/shotdiff.db
+export PIXELCOMP_IMAGES_DIR=/agentdrive/v_sycisong/PixelComparison/images
+export PIXELCOMP_THUMB_DIR=/data/workspace/PixelComparison/backend/data/thumbs
+
+mkdir -p "$(dirname "$PIXELCOMP_DB_PATH")" "$PIXELCOMP_IMAGES_DIR" "$PIXELCOMP_THUMB_DIR"
+
+cd /data/workspace/PixelComparison/backend
+python -c "from app.db import DATA_DIR, DB_PATH, IMAGES_DIR, THUMB_DIR; print('DATA_DIR =', DATA_DIR); print('DB_PATH =', DB_PATH); print('IMAGES_DIR =', IMAGES_DIR); print('THUMB_DIR =', THUMB_DIR)"
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8020
+```
+
+`echo "$PIXELCOMP_THUMB_DIR"` 为空只表示没有显式设置；此时实际默认值仍是 `PIXELCOMP_DB_PATH` 所在目录下的 `thumbs`。完整的 Linux 更新、持久化环境变量、端口排查和缩略图维护命令见[使用文档](docs/使用文档.md#14-linux-部署与更新)。
 
 ## 每日数据库备份
 
@@ -220,6 +238,16 @@ backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 3. 使用 `mock_uploads/upload.py` 上传仓库内演示数据。
 
 仓库当前不提供独立的根目录 `report.py` 客户端。生产采集端请依据[上报接入指南](docs/上报接入指南.md)实现 API 调用，或从 `mock_uploads/upload.py` 提取参考逻辑。
+
+外部模块可通过幂等接口全量替换场景筛选目录；列表中的未知场景也会显示，数据库中存在但未列出的场景默认隐藏：
+
+```bash
+curl -X PUT http://127.0.0.1:8020/api/scene-catalog \
+  -H 'Content-Type: application/json' \
+  -d '{"scene_id_order":["Village_Dimension_Main","RottenVale_WP","OtherScene"]}'
+```
+
+项目设置中的“目录外场景”开关可以临时把未列入目录但已有批次的场景追加到下拉框。详细语义见[上报接入指南](docs/上报接入指南.md#11-同步前端场景目录)。
 
 ## 测试
 

@@ -24,6 +24,10 @@ DEFAULT_SETTINGS: dict = {
     "default_date_range_days": 7,  # 筛选默认日期范围:最近 N 天
     # 筛选框画质下拉显示哪几档(value 列表);默认全显,与无配置时一致
     "filter_shading_qualities": [5, 4, 3, 2, 1, 0],
+    # 外部模块下发的权威场景目录；None 表示从未配置，继续显示数据库中的全部场景
+    "scene_id_order": None,
+    # 是否把数据库中存在、但未列入权威目录的场景追加到筛选框
+    "show_unlisted_scene_ids": False,
 }
 
 # 画质合法档位(0=节能 … 5=电影);用于 filter_shading_qualities 规整
@@ -70,6 +74,12 @@ def save_settings(db: Session, patch: dict) -> dict:
             cleaned = sorted({q for q in v if q in VALID_SHADING_QUALITIES}, reverse=True)
             if cleaned:
                 data[k] = cleaned
+            continue
+        if k == "scene_id_order":
+            data[k] = list(v)
+            continue
+        if k == "show_unlisted_scene_ids":
+            data[k] = bool(v)
             continue
         if k in ENUMS:
             if v in ENUMS[k]:

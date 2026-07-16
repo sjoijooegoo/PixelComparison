@@ -25,12 +25,17 @@ const DEFAULTS = {
   default_shading_quality: 5,
   default_date_range_days: 7,
   filter_shading_qualities: [5, 4, 3, 2, 1, 0],
+  show_unlisted_scene_ids: false,
 }
 
 const form = reactive({ ...DEFAULTS })
 const saving = reactive({ v: false })
 
-function sync() { Object.assign(form, store.settings) }
+function sync() {
+  for (const key of Object.keys(DEFAULTS)) {
+    if (key in store.settings) form[key] = store.settings[key]
+  }
+}
 
 onMounted(async () => {
   await store.loadSettings()
@@ -49,7 +54,9 @@ async function save() {
   saving.v = true
   try {
     await store.saveSettings({ ...form })
+    const hiddenSceneId = await store.refreshBatches()
     sync()
+    if (hiddenSceneId) Message.info(`场景 ${hiddenSceneId} 已被目录配置隐藏，筛选已清空`)
     Message.success('已保存;算法配置对新对比生效,筛选默认值在下次进入或点「清空」时套用')
   } catch (e) {
     Message.error(e.message || '保存失败')
@@ -152,6 +159,14 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
               <a-checkbox v-for="o in SHADING_QUALITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</a-checkbox>
             </a-checkbox-group>
             <span class="hint">勾选哪些画质会出现在筛选框的画质下拉里(至少勾一个;不勾任何项保存时回退为全部)</span>
+          </div>
+          <div class="field field-full">
+            <label>目录外场景</label>
+            <a-switch v-model="form.show_unlisted_scene_ids" type="round">
+              <template #checked>显示</template>
+              <template #unchecked>隐藏</template>
+            </a-switch>
+            <span class="hint">开启后，把数据库中存在但外部场景目录未包含的场景追加到下拉菜单，并标记为「未配置」</span>
           </div>
           <div class="field">
             <label>默认画质</label>

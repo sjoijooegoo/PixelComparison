@@ -6,6 +6,7 @@ const store = useStore()
 
 // 画质下拉选项:跟随项目设置「筛选框显示的画质」
 const qualityOptions = computed(() => visibleQualityOptions(store.settings))
+const unlistedSceneIds = computed(() => new Set(store.meta.unlisted_scene_ids || []))
 
 // 创建时间范围:绑定到 filters.created_from/created_to(YYYY-MM-DD)
 const dateRange = computed(() => {
@@ -90,7 +91,12 @@ async function reset() {
       <span class="label">场景ID</span>
       <a-select v-model="store.filters.scene_id" placeholder="全部场景" allow-clear allow-search size="small"
         style="width: 320px" @change="applyNow">
-        <a-option v-for="s in store.meta.scene_ids" :key="s" :value="s">{{ s }}</a-option>
+        <a-option v-for="s in store.meta.scene_ids" :key="s" :value="s">
+          <span class="scene-option">
+            <span>{{ s }}</span>
+            <span v-if="unlistedSceneIds.has(s)" class="unlisted">未配置</span>
+          </span>
+        </a-option>
       </a-select>
     </div>
     <div class="field">
@@ -141,6 +147,8 @@ async function reset() {
 }
 .field { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .field .label { color: var(--color-text-3); font-size: 12px; white-space: nowrap; }
+.scene-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.unlisted { color: var(--color-text-3); font-size: 11px; }
 .days { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 500px; }
 .day-cell {
   width: 100%;

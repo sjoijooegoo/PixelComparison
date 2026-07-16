@@ -17,6 +17,19 @@ async function applyRoute() {
   const rawSid = route.params.sceneId
   const sid = Array.isArray(rawSid) ? rawSid[0] : rawSid
   if (!sid) return                       // 无参数:保持当前状态(默认列表)
+  if (!store.initialized) {
+    await store.init(sid)                 // bootstrap 失败后的完整兜底重试
+    return
+  }
+  if (!store.meta.scene_ids.includes(sid)) {
+    const needsReload = store.filters.scene_id || store.batchView !== 'list'
+    store.filters.scene_id = ''
+    store.batchView = 'list'
+    store.batchPage = 1
+    if (needsReload) await store.refreshBatches()
+    if (route.path !== '/batches') await router.replace('/batches')
+    return
+  }
   const wasGrid = store.batchView === 'grid'
   const sceneChanged = store.filters.scene_id !== sid
   store.batchView = 'grid'
@@ -24,8 +37,6 @@ async function applyRoute() {
     store.filters.scene_id = sid
     store.batchPage = 1
     await Promise.all([store.loadBatches(), store.loadGrid()])
-  } else if (!store.initialized) {
-    await store.init(sid)                 // bootstrap 失败后的完整兜底重试
   } else if (!wasGrid) {
     await store.loadGrid()                // 同场景从列表切到列表图时只补矩阵
   }

@@ -69,6 +69,12 @@ describe('batch initialization and request ordering', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 6, 13, 12, 0, 0))
     const store = useStore()
+    apiMock.meta.mockResolvedValue({
+      scene_ids: ['Village_Dimension_Main'],
+      unlisted_scene_ids: [],
+      platforms: [],
+      baselines: [],
+    })
     apiMock.batches.mockResolvedValue({ items: [{ id: '10' }], total: 10 })
     apiMock.sceneGrid.mockResolvedValue({
       scene_id: 'Village_Dimension_Main',
@@ -101,6 +107,26 @@ describe('batch initialization and request ordering', () => {
         created_to: '2026-07-13',
       }),
     ])
+  })
+
+  it('深链场景不在权威目录时回退到未选择场景的列表', async () => {
+    const store = useStore()
+    apiMock.meta.mockResolvedValue({
+      scene_ids: ['VisibleScene'],
+      unlisted_scene_ids: ['HiddenScene'],
+      scene_catalog_configured: true,
+      platforms: [],
+      baselines: [],
+    })
+
+    await store.init('HiddenScene')
+
+    expect(store.initialized).toBe(true)
+    expect(store.batchView).toBe('list')
+    expect(store.filters.scene_id).toBe('')
+    expect(apiMock.batches).toHaveBeenCalledTimes(1)
+    expect(apiMock.batches.mock.calls[0][0].scene_id).toBe('')
+    expect(apiMock.sceneGrid).not.toHaveBeenCalled()
   })
 
   it('忽略晚到的旧筛选批次响应', async () => {
@@ -195,6 +221,12 @@ describe('batch initialization and request ordering', () => {
       .mockImplementationOnce(() => freshRequest.promise)
     store.filters.scene_id = 'CacheScene'
     store.batchView = 'grid'
+    apiMock.meta.mockResolvedValue({
+      scene_ids: ['CacheScene'],
+      unlisted_scene_ids: [],
+      platforms: [],
+      baselines: [],
+    })
 
     const oldLoad = store.loadGrid()
     const refresh = store.refreshBatches()
@@ -207,6 +239,29 @@ describe('batch initialization and request ordering', () => {
 
     expect(apiMock.sceneGrid).toHaveBeenCalledTimes(2)
     expect(store.grid.batches).toEqual([{ id: 'fresh' }])
+  })
+
+  it('目录刷新隐藏当前场景时清空筛选并返回被隐藏的场景ID', async () => {
+    const store = useStore()
+    store.filters.scene_id = 'HiddenScene'
+    store.batchView = 'grid'
+    store.grid = { scene_id: 'HiddenScene', batches: [{ id: 'old' }], rows: [] }
+    apiMock.meta.mockResolvedValue({
+      scene_ids: ['VisibleScene'],
+      unlisted_scene_ids: ['HiddenScene'],
+      scene_catalog_configured: true,
+      platforms: [],
+      baselines: [],
+    })
+
+    const hiddenSceneId = await store.refreshBatches()
+
+    expect(hiddenSceneId).toBe('HiddenScene')
+    expect(store.filters.scene_id).toBe('')
+    expect(store.batchView).toBe('list')
+    expect(store.grid.batches).toEqual([])
+    expect(apiMock.batches.mock.calls[0][0].scene_id).toBe('')
+    expect(apiMock.sceneGrid).not.toHaveBeenCalled()
   })
 })
 

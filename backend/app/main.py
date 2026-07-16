@@ -16,7 +16,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import Integer, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -1117,6 +1117,29 @@ class SettingsIn(BaseModel):
     default_shading_quality: int | None = None
     default_date_range_days: int | None = None
     filter_shading_qualities: list[int] | None = None
+    show_unlisted_scene_ids: bool | None = None
+
+
+class SceneCatalogIn(BaseModel):
+    """外部模块全量下发的权威场景目录；顺序即筛选框顺序。"""
+
+    scene_id_order: list[str]
+
+    @field_validator("scene_id_order")
+    @classmethod
+    def validate_scene_ids(cls, value: list[str]) -> list[str]:
+        if len(value) > 5000:
+            raise ValueError("场景ID数量不能超过5000")
+        seen: set[str] = set()
+        for scene_id in value:
+            if not scene_id or scene_id != scene_id.strip():
+                raise ValueError("场景ID不能为空或包含首尾空格")
+            if len(scene_id) > 255:
+                raise ValueError("场景ID长度不能超过255")
+            if scene_id in seen:
+                raise ValueError(f"场景ID重复: {scene_id}")
+            seen.add(scene_id)
+        return value
 
 
 @app.get("/api/settings")
@@ -1129,11 +1152,49 @@ def update_settings(body: SettingsIn, db: Session = Depends(get_db)):
     return save_settings(db, body.model_dump(exclude_none=True))
 
 
+@app.get("/api/scene-catalog")
+def read_scene_catalog(db: Session = Depends(get_db)):
+    settings = get_settings(db)
+    order = settings["scene_id_order"]
+    return {
+        "configured": order is not None,
+        "scene_id_order": order,
+    }
+
+
+@app.put("/api/scene-catalog")
+def update_scene_catalog(body: SceneCatalogIn, db: Session = Depends(get_db)):
+    settings = save_settings(db, {"scene_id_order": body.scene_id_order})
+    log.info("场景目录已更新:场景数=%d", len(body.scene_id_order))
+    return {
+        "configured": True,
+        "scene_id_order": settings["scene_id_order"],
+    }
+
+
 @app.get("/api/meta")
 def get_meta(db: Session = Depends(get_db)):
     """筛选器选项。"""
+    settings = get_settings(db)
+    discovered = sorted(
+        set(db.scalars(select(Batch.scene_id).distinct()).all()),
+        key=lambda scene_id: (scene_id.casefold(), scene_id),
+    )
+    configured = settings["scene_id_order"]
+    if configured is None:
+        scene_ids = discovered
+        unlisted: list[str] = []
+    else:
+        configured_set = set(configured)
+        unlisted = [scene_id for scene_id in discovered if scene_id not in configured_set]
+        scene_ids = list(configured)
+        if settings["show_unlisted_scene_ids"]:
+            scene_ids.extend(unlisted)
     return {
-        "scene_ids": db.scalars(select(Batch.scene_id).distinct()).all(),
+        "scene_ids": scene_ids,
+        "unlisted_scene_ids": unlisted,
+        "scene_catalog_configured": configured is not None,
+        "show_unlisted_scene_ids": settings["show_unlisted_scene_ids"],
         "platforms": db.scalars(select(Batch.platform).distinct()).all(),
         "baselines": db.scalars(select(Baseline.version).distinct()).all(),
     }
