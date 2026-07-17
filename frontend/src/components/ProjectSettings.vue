@@ -162,7 +162,7 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
           </div>
           <div class="field field-full">
             <label>目录外场景</label>
-            <a-switch v-model="form.show_unlisted_scene_ids" type="round">
+            <a-switch v-model="form.show_unlisted_scene_ids" type="round" class="compact-switch">
               <template #checked>显示</template>
               <template #unchecked>隐藏</template>
             </a-switch>
@@ -222,6 +222,7 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
 .field { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
 .field-full { grid-column: 1 / -1; }
 .field label { font-size: 13px; color: var(--color-text-2); }
+.field .compact-switch { align-self: flex-start; }
 .field :deep(.arco-input-number) { width: 100%; }
 .field .hint { font-size: 12px; color: var(--color-text-3); line-height: 1.5; }
 
