@@ -100,8 +100,12 @@ function toggle(id) {
 //   ← →  同一检查点的不同批次(跨列)   ↑ ↓  同一批次的不同检查点(跨行)
 //   到边界不循环。跳过空格(无图)与已折叠的列。
 const previewVisible = ref(false)
+const previewScale = ref(1)   // 同一次大图浏览期间共享；关闭后恢复默认
+const previewTranslate = ref([0, 0])
+const previewComponent = ref(null)
 const pr = ref(0)   // 当前行(检查点)下标
 const pc = ref(0)   // 当前列(批次)下标
+let restoringPreviewTransform = false
 
 // 列索引 == cols.length 表示最右侧「差异热力图」虚拟列
 const isHeatCol = (c) => c === cols.value.length
@@ -110,6 +114,37 @@ const previewSrc = computed(() => {
   if (!row) return ''
   if (isHeatCol(pc.value)) return heatUrl(row.scene_name)
   return row.cells[pc.value] || ''
+})
+
+// Arco 未公开受控的 scale/translate 属性，但组件实例提供了其响应式内部状态。
+// 用户滚轮缩放或拖动时同步记录；切换 src 后再写回，避免只改 CSS 导致后续拖动跳位。
+watch(
+  () => {
+    const preview = previewComponent.value
+    return preview ? [preview.scale, ...(preview.translate || [0, 0])] : null
+  },
+  (transform) => {
+    if (!transform || restoringPreviewTransform || !previewVisible.value) return
+    const [scale, x, y] = transform.map(Number)
+    if (Number.isFinite(scale)) previewScale.value = scale
+    if (Number.isFinite(x) && Number.isFinite(y)) previewTranslate.value = [x, y]
+  },
+  { flush: 'sync' },
+)
+
+watch(previewSrc, async (src, previousSrc) => {
+  if (!previewVisible.value || !previousSrc || src === previousSrc) return
+  const scale = previewScale.value
+  const translate = [...previewTranslate.value]
+  restoringPreviewTransform = true
+  await nextTick()   // 等待 Arco 因 src 变化执行 reset()
+  const preview = previewComponent.value
+  if (preview) {
+    preview.scale = scale
+    preview.translate = translate
+  }
+  await nextTick()
+  restoringPreviewTransform = false
 })
 const previewMeta = computed(() => {
   const row = rows.value[pr.value]
@@ -136,7 +171,17 @@ function cellOk(r, c) {
 function openPreview(rowIndex, colIndex) {
   pr.value = rowIndex
   pc.value = colIndex
+  previewScale.value = 1
+  previewTranslate.value = [0, 0]
   previewVisible.value = true
+}
+
+function setPreviewVisible(visible) {
+  previewVisible.value = visible
+  if (!visible) {
+    previewScale.value = 1
+    previewTranslate.value = [0, 0]
+  }
 }
 
 // 朝某方向找下一个可落点;找不到就停在原地(不循环)
@@ -154,7 +199,7 @@ function step(dRow, dCol) {
 
 function onKey(e) {
   if (!previewVisible.value) return
-  if (e.key === 'Escape') { previewVisible.value = false; return }   // ESC 退出大图
+  if (e.key === 'Escape') { setPreviewVisible(false); return }   // ESC 退出大图
   const map = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }
   const d = map[e.key]
   if (!d) return
@@ -378,8 +423,8 @@ const gridStyle = computed(() => ({
         </template>
       </div>
       <!-- 放大后用方向键翻看:← → 跨批次,↑ ↓ 跨检查点(到边界不循环);关闭即卸载,避免残留遮罩/滚轮锁 -->
-      <a-image-preview v-if="previewVisible" :src="previewSrc" :visible="true"
-        @update:visible="previewVisible = $event" />
+      <a-image-preview v-if="previewVisible" ref="previewComponent" :src="previewSrc" :visible="true"
+        :default-scale="previewScale" @update:visible="setPreviewVisible" />
     </div>
 
     <!-- 放大时顶部显示当前图所属检查点 / 批次信息(叠在灯箱之上) -->
