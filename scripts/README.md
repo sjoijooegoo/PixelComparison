@@ -59,7 +59,42 @@ cd backend
 
 不要在上传或对比任务运行时执行人工清理。
 
-## 4. 浏览器交互 E2E
+## 4. 上报前端场景目录
+
+脚本：`scripts/report_scene_catalog.py`
+
+准备 UTF-8 编码的 `scene-catalog.json`：
+
+```json
+{
+  "scene_id_order": [
+    "Village_Dimension_Main",
+    "RottenVale_WP",
+    "OtherScene"
+  ]
+}
+```
+
+数组顺序就是前端“场景 ID”下拉框顺序。该接口采用全量替换语义：未列入数组的数据库场景默认从下拉框隐藏，但不会删除批次；尚无批次的场景也会显示。
+
+默认上报到 `http://21.130.229.92:5173/api/scene-catalog`：
+
+```powershell
+python scripts\report_scene_catalog.py .\scene-catalog.json --dry-run
+python scripts\report_scene_catalog.py .\scene-catalog.json
+```
+
+查看内置格式说明或切换后端：
+
+```powershell
+python scripts\report_scene_catalog.py --help
+python scripts\report_scene_catalog.py --print-example
+python scripts\report_scene_catalog.py .\scene-catalog.json --url http://127.0.0.1:8020/api/scene-catalog
+```
+
+也可设置环境变量 `PIXELCOMP_SCENE_CATALOG_URL` 作为默认接口。脚本只依赖 Python 标准库，会在发送前检查空值、首尾空格、重复项、长度和数量，并在成功后核对后端返回顺序。
+
+## 5. 浏览器交互 E2E
 
 脚本：`scripts/e2e/run-all.mjs`
 
@@ -86,7 +121,7 @@ node scripts/e2e/run-all.mjs http://localhost:5173
 
 注意：该脚本在没有缓存时会发起真实对比，写入 Comparison、ComparisonItem 和热力图，并可能触发 14 天历史淘汰。不要直接指向生产数据。
 
-## 5. 多用户界面冒烟
+## 6. 多用户界面冒烟
 
 脚本：`scripts/ui-load-smoke.mjs`
 
@@ -98,7 +133,7 @@ node scripts/ui-load-smoke.mjs http://localhost:5173 Lv_Starfall 6
 
 该脚本本身只浏览页面，但同样依赖固定 Playwright 路径和已有业务数据。自动刷新等页面行为仍会产生 API 读取流量。
 
-## 6. 后续工程化建议
+## 7. 后续工程化建议
 
 - 把 Playwright 放入项目 devDependencies，移除绝对路径。
 - 为浏览器测试启动临时数据目录和独立后端，运行后销毁。

@@ -249,6 +249,15 @@ curl -X PUT http://127.0.0.1:8020/api/scene-catalog \
 
 项目设置中的“目录外场景”开关可以临时把未列入目录但已有批次的场景追加到下拉框。详细语义见[上报接入指南](docs/上报接入指南.md#11-同步前端场景目录)。
 
+仓库还提供了零第三方依赖的上报脚本，默认目标是 `http://21.130.229.92:5173/api/scene-catalog`；不传 JSON 文件或使用 `--help` 会展示完整数据格式：
+
+```powershell
+python scripts\report_scene_catalog.py .\scene-catalog.json --dry-run
+python scripts\report_scene_catalog.py .\scene-catalog.json
+```
+
+脚本参数、格式约束和自定义接口地址见[脚本说明](scripts/README.md#4-上报前端场景目录)。
+
 ## 测试
 
 后端完整测试：
