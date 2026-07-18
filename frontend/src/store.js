@@ -4,6 +4,7 @@ import { router } from './router'
 import { logger } from './logger'
 
 export const PAGE_SIZE = 10   // 默认每页条数;实际由对应列表按可用高度动态覆盖
+export const MAX_DATE_RANGE_DAYS = 14
 
 // 本地日期 YYYY-MM-DD(避免 toISOString 的时区偏移)
 function ymd(d) {
@@ -11,11 +12,42 @@ function ymd(d) {
   const day = String(d.getDate()).padStart(2, '0')
   return `${d.getFullYear()}-${m}-${day}`
 }
-// 默认创建时间范围:最近 N 天(N 默认 7,可由项目设置覆盖)
+export function normalizeDateRangeDays(days = 7) {
+  const value = Number(days)
+  if (!Number.isFinite(value)) return 7
+  return Math.max(1, Math.min(MAX_DATE_RANGE_DAYS, Math.trunc(value)))
+}
+
+// 连续范围按首尾日期都计入，例如 7月1日～7月14日为14天。
+export function inclusiveDateRangeDays(from, to) {
+  const parse = (value) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '')
+    if (!match) return null
+    const [, year, month, day] = match.map(Number)
+    const time = Date.UTC(year, month - 1, day)
+    const date = new Date(time)
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+      return null
+    }
+    return time
+  }
+  const start = parse(from)
+  const end = parse(to)
+  if (start === null || end === null || end < start) return null
+  return Math.floor((end - start) / 86400000) + 1
+}
+
+export function isDateRangeAllowed(from, to) {
+  const days = inclusiveDateRangeDays(from, to)
+  return days !== null && days <= MAX_DATE_RANGE_DAYS
+}
+
+// 默认创建时间范围:最近 N 个自然日(N 默认 7,可由项目设置覆盖)
 export function defaultDateRange(days = 7) {
+  const count = normalizeDateRangeDays(days)
   const today = new Date()
   const from = new Date(today)
-  from.setDate(today.getDate() - days)
+  from.setDate(today.getDate() - (count - 1))
   return { created_from: ymd(from), created_to: ymd(today) }
 }
 

@@ -50,3 +50,9 @@ def test_default_quality_kept_when_visible(client):
 def test_default_quality_minus_one_always_ok(client):
     s = _put(client, {"default_shading_quality": -1, "filter_shading_qualities": [5, 3]})
     assert s["default_shading_quality"] == -1
+
+
+def test_default_date_range_is_clamped_to_fourteen_days(client):
+    s = _put(client, {"default_date_range_days": 365})
+    assert s["default_date_range_days"] == 14
+    assert client.get("/api/settings").json()["default_date_range_days"] == 14

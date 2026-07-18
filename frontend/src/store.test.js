@@ -19,7 +19,14 @@ vi.mock('./api', () => ({ api: apiMock }))
 vi.mock('./router', () => ({ router: routerMock }))
 vi.mock('./logger', () => ({ logger: loggerMock }))
 
-import { p4Label, useStore, visibleQualityOptions } from './store'
+import {
+  inclusiveDateRangeDays,
+  isDateRangeAllowed,
+  normalizeDateRangeDays,
+  p4Label,
+  useStore,
+  visibleQualityOptions,
+} from './store'
 
 beforeEach(() => {
   setActivePinia(createPinia())
@@ -62,6 +69,14 @@ describe('display helpers', () => {
     expect(p4Label('')).toBe('——')
     expect(p4Label(251200)).toBe('P4 251200')
   })
+
+  it('连续日期范围最多允许14个首尾均计入的自然日', () => {
+    expect(inclusiveDateRangeDays('2026-07-01', '2026-07-14')).toBe(14)
+    expect(inclusiveDateRangeDays('2026-07-01', '2026-07-15')).toBe(15)
+    expect(isDateRangeAllowed('2026-07-01', '2026-07-14')).toBe(true)
+    expect(isDateRangeAllowed('2026-07-01', '2026-07-15')).toBe(false)
+    expect(normalizeDateRangeDays(30)).toBe(14)
+  })
 })
 
 describe('batch initialization and request ordering', () => {
@@ -92,7 +107,7 @@ describe('batch initialization and request ordering', () => {
     expect(apiMock.batches.mock.calls[0][0]).toMatchObject({
       scene_id: 'Village_Dimension_Main',
       shading_quality: 5,
-      created_from: '2026-06-13',
+      created_from: '2026-06-30',
       created_to: '2026-07-13',
       page: 1,
       page_size: 10,
@@ -103,7 +118,7 @@ describe('batch initialization and request ordering', () => {
       expect.objectContaining({
         scene_id: 'Village_Dimension_Main',
         shading_quality: 5,
-        created_from: '2026-06-13',
+        created_from: '2026-06-30',
         created_to: '2026-07-13',
       }),
     ])

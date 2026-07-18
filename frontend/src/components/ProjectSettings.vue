@@ -1,7 +1,12 @@
 <script setup>
 import { reactive, computed, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useStore, SHADING_QUALITY_OPTIONS } from '../store'
+import {
+  MAX_DATE_RANGE_DAYS,
+  SHADING_QUALITY_OPTIONS,
+  normalizeDateRangeDays,
+  useStore,
+} from '../store'
 
 const store = useStore()
 
@@ -33,7 +38,11 @@ const saving = reactive({ v: false })
 
 function sync() {
   for (const key of Object.keys(DEFAULTS)) {
-    if (key in store.settings) form[key] = store.settings[key]
+    if (key in store.settings) {
+      form[key] = key === 'default_date_range_days'
+        ? normalizeDateRangeDays(store.settings[key])
+        : store.settings[key]
+    }
   }
 }
 
@@ -177,8 +186,8 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
           </div>
           <div class="field">
             <label>默认日期范围(最近 N 天)</label>
-            <a-input-number v-model="form.default_date_range_days" :min="1" :max="365" :step="1" size="large" />
-            <span class="hint">进入页面或点「清空」时,创建时间默认为「今天往前 N 天」</span>
+            <a-input-number v-model="form.default_date_range_days" :min="1" :max="MAX_DATE_RANGE_DAYS" :step="1" size="large" />
+            <span class="hint">进入页面或点「清空」时，创建时间使用最近 N 个自然日，最多 {{ MAX_DATE_RANGE_DAYS }} 天</span>
           </div>
         </div>
       </section>

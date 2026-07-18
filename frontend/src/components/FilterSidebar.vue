@@ -1,6 +1,13 @@
 <script setup>
 import { ref, computed } from 'vue'
-import { useStore, defaultDateRange, visibleQualityOptions } from '../store'
+import { Message } from '@arco-design/web-vue'
+import {
+  MAX_DATE_RANGE_DAYS,
+  defaultDateRange,
+  isDateRangeAllowed,
+  useStore,
+  visibleQualityOptions,
+} from '../store'
 
 const store = useStore()
 
@@ -39,6 +46,10 @@ async function applyNow() {
 
 function onDateChange(v) {
   if (v?.[0] && v?.[1]) {
+    if (!isDateRangeAllowed(v[0], v[1])) {
+      Message.warning(`连续范围最多选择 ${MAX_DATE_RANGE_DAYS} 天；如需跨较长时间，请使用「指定日期」`)
+      return
+    }
     store.filters.created_from = v[0]
     store.filters.created_to = v[1]
   } else {
@@ -114,7 +125,7 @@ async function reset() {
       </a-radio-group>
       <template v-if="store.filters.dateMode === 'range'">
         <a-range-picker size="small" style="width: 230px" :allow-clear="false"
-          :model-value="dateRange" @change="onDateChange" />
+          value-format="YYYY-MM-DD" :model-value="dateRange" @change="onDateChange" />
       </template>
       <template v-else>
         <a-date-picker size="small" value-format="YYYY-MM-DD" :model-value="dayPick"

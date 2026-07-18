@@ -50,7 +50,7 @@ RANGES: dict = {
     "heatmap_density_radius": (0.0, 60.0),
     "heatmap_density_floor": (0.0, 0.9),
     "default_shading_quality": (-1, 5),
-    "default_date_range_days": (1, 365),
+    "default_date_range_days": (1, 14),
 }
 
 
@@ -60,6 +60,13 @@ def get_settings(db: Session) -> dict:
     row = db.get(Setting, 1)
     if row and row.payload:
         data.update({k: v for k, v in row.payload.items() if k in DEFAULT_SETTINGS})
+    # 兼容升级前保存的 30/365 天配置；连续日期范围现统一限制为最多14天。
+    try:
+        data["default_date_range_days"] = max(
+            1, min(14, int(data["default_date_range_days"]))
+        )
+    except (TypeError, ValueError):
+        data["default_date_range_days"] = DEFAULT_SETTINGS["default_date_range_days"]
     return data
 
 
