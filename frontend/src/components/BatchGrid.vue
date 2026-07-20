@@ -20,13 +20,15 @@ const rows = computed(() => store.grid.rows.map((row) => ({
   checkpointName: splitCheckpointName(row.scene_name),
 })))
 
-const FIRST_COL = 140         // 首列(检查点编号)固定宽
-const VISIBLE = 8             // 全屏时横向展示的批次列数(据此标定列宽)
+const FIRST_COL = 100         // 首列(检查点编号)固定宽
+const VISIBLE_BATCHES = 7     // 全屏时完整展示的批次列数
+const VISIBLE_IMAGE_COLS = VISIBLE_BATCHES + 1  // 额外预留最右差异热力图列
 const COLLAPSED_W = 18        // 折叠后列宽(细条)
 const MIN_COL = 120           // 列宽下限
 const MAX_COL = 300           // 列宽上限
 const panel = ref(null)
 const scroll = ref(null)      // 滚动容器(用于拖拽平移)
+const matrix = ref(null)      // 实际网格(监听异步数据/列宽动画导致的宽度增长)
 const colW = ref(160)         // 单个批次列宽(按全屏标定,固定;窗口拉伸不变)
 const imgH = computed(() => Math.round(colW.value * 9 / 16))   // 16:9 等比
 
@@ -251,7 +253,7 @@ async function runCompare() {
 
 // 列宽按「全屏时面板可用宽度」标定,使列宽不随当前窗口拉伸而变:
 //   - 窗口非占面板的部分(留白/滚动条)= innerWidth - 面板宽,与窗口大小无关;
-//   - 全屏面板宽 ≈ 屏幕可用宽 - 该占用 → 据此 7 等分,全屏正好 7 列、其余尺寸下保持不变。
+//   - 全屏面板宽 ≈ 屏幕可用宽 - 该占用 → 据此 8 等分,全屏正好容纳 7 个批次列 + 1 个热力图列。
 //   网页缩放(Ctrl±)由浏览器自身缩放固定的 CSS 像素列宽,图片随之放大/缩小;
 //   MIN_COL/MAX_COL 给出最大最小约束。
 function recalc() {
@@ -260,17 +262,37 @@ function recalc() {
   const chrome = Math.max(0, window.innerWidth - el.clientWidth)   // 面板以外占用(与窗口宽无关)
   const fullPanelW = (window.screen?.availWidth || window.innerWidth) - chrome
   const avail = fullPanelW - 24 - FIRST_COL - 8
-  colW.value = Math.min(MAX_COL, Math.max(MIN_COL, Math.floor(avail / VISIBLE)))
+  const nextColW = Math.min(MAX_COL, Math.max(MIN_COL, Math.floor(avail / VISIBLE_IMAGE_COLS)))
+  if (nextColW === colW.value) return
+  colW.value = nextColW
 }
 let ro
 
 // 列表图默认停在最右(最新批次在右);仅切场景/首屏/keep-alive 返回时滚,自动刷新不打断
 let pendingScrollRight = true
+const autoPinRight = ref(true)
+
+function stopAutoPin() {
+  autoPinRight.value = false
+}
+
+function onGridScroll() {
+  const el = scroll.value
+  if (!autoPinRight.value || !el) return
+  const max = el.scrollWidth - el.clientWidth
+  if (max - el.scrollLeft <= 1) return
+  requestAnimationFrame(() => {
+    if (autoPinRight.value && scroll.value) scroll.value.scrollLeft = scroll.value.scrollWidth
+  })
+}
+
 function scrollToRight() {
   // 逐帧把 scrollLeft 追到当前 scrollWidth,直到宽度不再变——覆盖列宽过渡
   // (.matrix transition .16s)与 keep-alive 返回时布局未稳,避免停在中间。
   nextTick(() => {
     let last = -1, tries = 0
+    const initial = scroll.value
+    if (initial) initial.scrollLeft = initial.scrollWidth
     const step = () => {
       const el = scroll.value
       if (!el) return
@@ -286,16 +308,27 @@ function scrollToRight() {
 }
 
 onMounted(() => {
-  ro = new ResizeObserver(recalc)
+  ro = new ResizeObserver(() => {
+    recalc()
+    // 全屏刷新时面板、列数据和列宽动画可能分批稳定；矩阵每次增宽都继续追到最右。
+    if (autoPinRight.value) scrollToRight()
+  })
   if (panel.value) ro.observe(panel.value)
+  if (matrix.value) ro.observe(matrix.value)
   recalc()
   // 用捕获阶段:抢在 Arco 灯箱自身的按键处理之前拿到方向键
   window.addEventListener('keydown', onKey, true)
   store.loadGridHeatmaps()   // keep-alive 返回 / 首屏:按当前选择恢复热力图列
   if (cols.value.length && pendingScrollRight) { pendingScrollRight = false; scrollToRight() }
 })
+watch(matrix, (next, previous) => {
+  if (!ro) return
+  if (previous) ro.unobserve(previous)
+  if (next) ro.observe(next)
+})
 // keep-alive 返回(如从对比结果切回批次管理)时,列表图也停到最右看最新
 onActivated(() => {
+  autoPinRight.value = true
   if (cols.value.length) scrollToRight()
 })
 onUnmounted(() => {
@@ -320,7 +353,10 @@ watch(() => [
   store.filters.created_from,
   store.filters.created_to,
   store.filters.created_dates,
-], () => { pendingScrollRight = true }, { deep: true })
+], () => {
+  pendingScrollRight = true
+  autoPinRight.value = true
+}, { deep: true })
 // 选择变化 / 切场景(cols 变)时刷新热力图列(组件级兜底,store 内也会触发)
 watch([currentBatch, baselineBatch, cols], () => store.loadGridHeatmaps())
 
@@ -335,8 +371,10 @@ const gridStyle = computed(() => ({
   <div class="grid-panel" ref="panel">
     <a-empty v-if="!store.filters.scene_id" description="请先在上方筛选条选择一个场景" style="margin-top: 60px" />
     <a-empty v-else-if="!cols.length" description="该场景下暂无批次" style="margin-top: 60px" />
-    <div v-else class="grid-scroll" :class="{ grabbing }" ref="scroll" @mousedown="onPanDown">
-      <div class="matrix" :style="gridStyle">
+    <div v-else class="grid-scroll" :class="{ grabbing, 'auto-positioning': autoPinRight }" ref="scroll"
+      @scroll.passive="onGridScroll" @pointerdown.passive="stopAutoPin" @wheel.passive="stopAutoPin"
+      @mousedown="onPanDown">
+      <div class="matrix" ref="matrix" :style="gridStyle">
         <!-- 表头行:左上角 + 每个批次 -->
         <div class="cell head corner">
           <span class="corner-batch">批次</span>
@@ -406,7 +444,7 @@ const gridStyle = computed(() => ({
 
         <!-- 数据行:首列检查点编号 + 各批次缩略图(原生 img,轻量) -->
         <template v-for="(r, rowIndex) in rows" :key="r.scene_name">
-          <div class="cell rowhead" :title="r.scene_name" :style="{ height: imgH + 'px' }">
+          <div class="cell rowhead" :title="r.scene_name">
             <span v-if="r.checkpointName.index" class="rowhead-index mono">{{ r.checkpointName.index }}</span>
             <span v-else class="rowhead-name">{{ r.checkpointName.name }}</span>
           </div>
@@ -474,6 +512,7 @@ const gridStyle = computed(() => ({
 /* 拖拽平移进行中:统一抓手光标(覆盖图片的 zoom-in),并禁止选中 */
 .grid-scroll.grabbing { cursor: grabbing; user-select: none; }
 .grid-scroll.grabbing * { cursor: grabbing !important; }
+.grid-scroll.auto-positioning .matrix { transition: none; }
 /* 表头行 + 检查点名首列不可拖,光标恢复默认(内部按钮自带 pointer 不受影响) */
 .head, .rowhead { cursor: default; }
 .matrix { display: grid; width: max-content; transition: grid-template-columns .16s ease; }
@@ -531,8 +570,8 @@ const gridStyle = computed(() => ({
     transparent calc(50% + .5px));
 }
 .corner-batch, .corner-checkpoint { position: absolute; z-index: 1; line-height: 1; }
-.corner-batch { top: 20px; right: 18px; }
-.corner-checkpoint { bottom: 20px; left: 18px; }
+.corner-batch { top: 18px; right: 18px; }
+.corner-checkpoint { bottom: 18px; left: 18px; }
 
 /* 折叠/展开按钮 */
 .collapse-btn {
