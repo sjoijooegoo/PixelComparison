@@ -3,6 +3,7 @@ import { ref, computed, nextTick, onActivated, onMounted, onUnmounted, watch } f
 import { Message } from '@arco-design/web-vue'
 import { useStore, p4Label } from '../store'
 import { thumbUrl } from '../api'
+import { splitCheckpointName } from './checkpointName'
 
 // 缩略图加载失败时回退原图(只回退一次,防循环)
 function onThumbErr(e, orig) {
@@ -14,9 +15,12 @@ function onThumbErr(e, orig) {
 
 const store = useStore()
 const cols = computed(() => store.grid.batches)
-const rows = computed(() => store.grid.rows)
+const rows = computed(() => store.grid.rows.map((row) => ({
+  ...row,
+  checkpointName: splitCheckpointName(row.scene_name),
+})))
 
-const FIRST_COL = 140         // 首列(检查点名)固定宽
+const FIRST_COL = 140         // 首列(检查点编号)固定宽
 const VISIBLE = 8             // 全屏时横向展示的批次列数(据此标定列宽)
 const COLLAPSED_W = 18        // 折叠后列宽(细条)
 const MIN_COL = 120           // 列宽下限
@@ -334,7 +338,10 @@ const gridStyle = computed(() => ({
     <div v-else class="grid-scroll" :class="{ grabbing }" ref="scroll" @mousedown="onPanDown">
       <div class="matrix" :style="gridStyle">
         <!-- 表头行:左上角 + 每个批次 -->
-        <div class="cell head corner">检查点 \ 批次</div>
+        <div class="cell head corner">
+          <span class="corner-batch">批次</span>
+          <span class="corner-checkpoint">检查点</span>
+        </div>
         <div v-for="b in cols" :key="b.id" class="cell head"
           :class="{ collapsed: isCollapsed(b.id), 'role-base': roleOf(b.id) === 'baseline', 'role-cur': roleOf(b.id) === 'current' }">
           <button v-if="isCollapsed(b.id)" class="expand" :title="'展开 #' + b.id" @click="toggle(b.id)">
@@ -397,9 +404,12 @@ const gridStyle = computed(() => ({
           </div>
         </div>
 
-        <!-- 数据行:首列检查点名 + 各批次缩略图(原生 img,轻量) -->
+        <!-- 数据行:首列检查点编号 + 各批次缩略图(原生 img,轻量) -->
         <template v-for="(r, rowIndex) in rows" :key="r.scene_name">
-          <div class="cell rowhead" :title="r.scene_name" :style="{ height: imgH + 'px' }">{{ r.scene_name }}</div>
+          <div class="cell rowhead" :title="r.scene_name" :style="{ height: imgH + 'px' }">
+            <span v-if="r.checkpointName.index" class="rowhead-index mono">{{ r.checkpointName.index }}</span>
+            <span v-else class="rowhead-name">{{ r.checkpointName.name }}</span>
+          </div>
           <div v-for="(url, i) in r.cells" :key="cols[i].id" class="cell imgcell"
             :class="{ collapsed: isCollapsed(cols[i].id) }">
             <template v-if="!isCollapsed(cols[i].id)">
@@ -494,18 +504,35 @@ const gridStyle = computed(() => ({
 .rowhead {
   position: sticky; left: 0; z-index: 2;
   background: var(--color-bg-2); padding: 8px 10px;
-  display: flex; align-items: center;
+  display: flex; align-items: center; justify-content: center; text-align: center;
   font-size: 12px; color: var(--color-text-2);
-  overflow: hidden; word-break: break-all;   /* 长检查点名换行,不溢出列 */
+  overflow: hidden;
+}
+.rowhead-name {
+  display: block; max-width: 100%; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis; line-height: 1.35;
+}
+.rowhead-index {
+  display: block; font-size: 13px; line-height: 1.2; letter-spacing: .4px;
+  color: var(--color-text-3); font-weight: 400;
 }
 /* 左上角:吸顶吸左,层级最高 */
 .corner {
   position: sticky; top: 0; left: 0; z-index: 4;
   min-height: 84px; box-sizing: border-box;
-  display: flex; align-items: center;
-  background: var(--color-bg-3); padding: 6px 8px;
-  font-size: 11px; color: var(--color-text-3);
+  display: block; background: var(--color-bg-3); padding: 0;
+  font-size: 12px; color: var(--color-text-3);
 }
+.corner::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to bottom left,
+    transparent calc(50% - .5px),
+    var(--color-border-2) 50%,
+    transparent calc(50% + .5px));
+}
+.corner-batch, .corner-checkpoint { position: absolute; z-index: 1; line-height: 1; }
+.corner-batch { top: 20px; right: 18px; }
+.corner-checkpoint { bottom: 20px; left: 18px; }
 
 /* 折叠/展开按钮 */
 .collapse-btn {
