@@ -96,9 +96,56 @@ function onPanUp() {
 
 // 折叠的批次列(放在 store,按批次 id;跨刷新/改筛选/切场景保留)
 const isCollapsed = (id) => store.gridCollapsed.has(id)
-function toggle(id) {
+let columnAnchorRun = 0
+// 折叠时按可视图片区就近选择左右锚点；展开复用同一批次记录，避免方向翻转。
+const columnAnchorSides = new Map()
+
+function chooseColumnAnchor(head) {
+  const el = scroll.value
+  if (!el) return 'right'
+  const columnRect = head.getBoundingClientRect()
+  const viewportRect = el.getBoundingClientRect()
+  const visibleLeft = viewportRect.left + FIRST_COL
+  const visibleRight = viewportRect.right - colW.value
+  const center = (columnRect.left + columnRect.right) / 2
+  return Math.abs(center - visibleLeft) <= Math.abs(visibleRight - center) ? 'left' : 'right'
+}
+
+function keepColumnAnchored(head, side, anchorPosition) {
+  const run = ++columnAnchorRun
+  nextTick(() => {
+    let frames = 0
+    const step = () => {
+      const el = scroll.value
+      if (run !== columnAnchorRun || !el || !head.isConnected) return
+      const rect = head.getBoundingClientRect()
+      const delta = rect[side] - anchorPosition
+      if (Math.abs(delta) > 0.01) el.scrollLeft += delta
+      frames += 1
+      if (frames < 20) requestAnimationFrame(step)
+    }
+    requestAnimationFrame(step)
+  })
+}
+
+function toggle(id, event) {
+  stopAutoPin()
+  const head = event?.currentTarget?.closest('.head')
   const s = store.gridCollapsed
-  s.has(id) ? s.delete(id) : s.add(id)
+  const expanding = s.has(id)
+  const side = expanding
+    ? columnAnchorSides.get(id) || (head ? chooseColumnAnchor(head) : 'right')
+    : (head ? chooseColumnAnchor(head) : 'right')
+  const anchorPosition = head?.getBoundingClientRect()[side]
+
+  if (expanding) {
+    s.delete(id)
+    columnAnchorSides.delete(id)
+  } else {
+    s.add(id)
+    columnAnchorSides.set(id, side)
+  }
+  if (head && Number.isFinite(anchorPosition)) keepColumnAnchored(head, side, anchorPosition)
 }
 
 // 受控预览:点击缩略图后在整个矩阵里用方向键二维翻看
@@ -332,12 +379,18 @@ onActivated(() => {
   if (cols.value.length) scrollToRight()
 })
 onUnmounted(() => {
+  columnAnchorRun += 1
+  columnAnchorSides.clear()
   ro?.disconnect()
   window.removeEventListener('keydown', onKey, true)
   window.removeEventListener('mousemove', onPanMove, true)
   window.removeEventListener('mouseup', onPanUp, true)
 })
 watch(cols, () => {
+  const visibleIds = new Set(cols.value.map((batch) => batch.id))
+  for (const id of columnAnchorSides.keys()) {
+    if (!visibleIds.has(id)) columnAnchorSides.delete(id)
+  }
   recalc()
   // 数据到位且处于"待滚动"(切场景/首屏)时,定位到最右看最新;自动刷新不会置位,故不打断
   if (pendingScrollRight && cols.value.length) {
@@ -382,12 +435,12 @@ const gridStyle = computed(() => ({
         </div>
         <div v-for="b in cols" :key="b.id" class="cell head"
           :class="{ collapsed: isCollapsed(b.id), 'role-base': roleOf(b.id) === 'baseline', 'role-cur': roleOf(b.id) === 'current' }">
-          <button v-if="isCollapsed(b.id)" class="expand" :title="'展开 #' + b.id" @click="toggle(b.id)">
+          <button v-if="isCollapsed(b.id)" class="expand" :title="'展开 #' + b.id" @click="toggle(b.id, $event)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
               stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg>
           </button>
           <template v-else>
-            <button class="collapse-btn" title="折叠此列" @click="toggle(b.id)">
+            <button class="collapse-btn" title="折叠此列" @click="toggle(b.id, $event)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /></svg>
             </button>
