@@ -11,7 +11,16 @@ const store = useStore()
 
 // 视图切换:list(列表) / grid(列表图);切到 grid 时按当前场景拉矩阵
 function onViewChange() {
-  if (store.batchView === 'grid') store.loadGrid()
+  if (store.batchView === 'grid') store.loadGrid().catch(() => {})
+}
+
+function retryBatches() {
+  store.loadBatches().catch(() => {})
+}
+
+function changePage(page) {
+  store.batchPage = page
+  store.loadBatches().catch(() => {})
 }
 
 // 批次图片预览弹窗
@@ -149,9 +158,14 @@ async function onDelete(record) {
     </div>
 
     <div v-if="store.batchView === 'list'" class="table-wrap" ref="tableWrap">
+      <div v-if="store.batchError" class="load-error">
+        <span>{{ store.batchError }}</span>
+        <a-button size="mini" type="primary" @click="retryBatches">重新加载</a-button>
+      </div>
       <a-table
         :columns="columns" :data="store.batches"
         :pagination="false"
+        :loading="store.batchLoading"
         size="medium" row-key="id">
         <template #id="{ record }">
           <a class="batch-link mono" :href="batchLink(record)" target="_blank" rel="noopener noreferrer">#{{ record.id }}</a>
@@ -198,7 +212,7 @@ async function onDelete(record) {
     <div v-if="store.batchView === 'list'" class="foot">
       <Pager
         :total="store.batchTotal" :page-size="store.batchPageSize" :current="store.batchPage"
-        @change="(p) => { store.batchPage = p; store.loadBatches() }" />
+        @change="changePage" />
     </div>
 
     <!-- 列表图:同场景多批次图片矩阵 -->
@@ -247,6 +261,11 @@ async function onDelete(record) {
 /* 表格区:去掉外层容器整体边框,只保留表格自身随数据变化的行/表头边框 */
 .table-wrap {
   flex: 1; min-height: 0; overflow: auto; margin: 0 16px;
+}
+.load-error {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin-bottom: 8px; padding: 8px 12px; border-radius: 6px;
+  color: rgb(var(--red-6)); background: var(--color-fill-2); font-size: 12px;
 }
 .foot { display: flex; justify-content: flex-end; padding: 10px 16px; }
 </style>

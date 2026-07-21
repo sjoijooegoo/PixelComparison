@@ -56,3 +56,42 @@ def test_scene_grid_platform_filter(client, png_bytes):
 def test_scene_grid_unknown_scene_empty(client):
     g = client.get("/api/scenes/nope/grid").json()
     assert g["batches"] == [] and g["rows"] == []
+
+
+def test_scene_grid_builds_versioned_urls_without_touching_image_files(
+    client, png_bytes, monkeypatch,
+):
+    """列表图只查本地数据库，不能为生成 URL 逐张访问远程图片目录。"""
+    _batch(client, "1", "2026-07-21T10:00:00")
+    assert _shot(client, "1", "s1", png_bytes).status_code == 201
+
+    import app.main as main
+
+    class NoFilesystemAccess:
+        def __truediv__(self, _path):
+            raise AssertionError("scene grid must not touch image files")
+
+    monkeypatch.setattr(main, "IMAGES_DIR", NoFilesystemAccess())
+    response = client.get("/api/scenes/S/grid")
+
+    assert response.status_code == 200
+    url = response.json()["rows"][0]["cells"][0]
+    assert url.startswith("/images/batches/1/s1.png?v=")
+
+
+def test_overwrite_changes_screenshot_cache_version(client, png_bytes):
+    """同号覆盖即使文件路径不变，也必须生成新的图片 URL。"""
+    _batch(client, "1", "2026-07-21T10:00:00")
+    assert _shot(client, "1", "s1", png_bytes).status_code == 201
+    before = client.get("/api/scenes/S/grid").json()["rows"][0]["cells"][0]
+
+    replaced = client.post("/api/batches", json={
+        "id": "1", "scene_id": "S", "p4_version": 2, "platform": "Windows",
+        "captured_at": "2026-07-21T10:00:00", "overwrite": True,
+    })
+    assert replaced.status_code == 201, replaced.text
+    assert _shot(client, "1", "s1", png_bytes).status_code == 201
+    after = client.get("/api/scenes/S/grid").json()["rows"][0]["cells"][0]
+
+    assert before.split("?", 1)[0] == after.split("?", 1)[0]
+    assert before != after

@@ -14,7 +14,7 @@ mimetypes.add_type("image/webp", ".webp")
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 from sqlalchemy import Integer, and_, cast, delete, func, or_, select
@@ -55,7 +55,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 class _CachedStatic(StaticFiles):
-    """给静态图片加长缓存头(原图内容不变;覆盖同号批次时 mtime/ETag 会变)。
+    """给静态图片加长缓存头(覆盖/重算时接口生成的 cache_version 会变化)。
     二次查看(放大/详情)直接命中浏览器缓存,不重复下载。"""
     async def get_response(self, path, scope):
         resp = await super().get_response(path, scope)
@@ -84,8 +84,12 @@ def _thumb_relative_path(path: str) -> Path:
 
 
 @app.get("/thumb/{path:path}")
-async def get_thumb(path: str, request: Request):
-    """本地缓存命中返回 WebP；未命中立即回退原图，绝不等待远程 I/O。"""
+async def get_thumb(path: str, request: Request, strict: bool = Query(False)):
+    """本地缓存命中返回 WebP；未命中异步生成。
+
+    默认兼容旧调用方并 307 回退原图；strict=true 只返回 202，供批次画廊保证
+    用户点击灯箱前绝不读取原图。两种模式都不会等待远程 I/O。
+    """
     relative = _thumb_relative_path(path)
     cache = thumbnail_service.cache_path(relative)
     if cache.is_file():
@@ -101,6 +105,11 @@ async def get_thumb(path: str, request: Request):
         )
 
     thumbnail_service.submit(relative)
+    if strict:
+        return Response(
+            status_code=202,
+            headers={"Cache-Control": "no-store", "Retry-After": "1"},
+        )
     encoded_path = "/".join(quote(part, safe="") for part in relative.parts)
     target = f"/images/{encoded_path}"
     if request.url.query:
@@ -194,20 +203,20 @@ def batch_dto(b: Batch, db: Session) -> dict:
     }
 
 
-def _versioned_url(path: str) -> str:
-    """/images/<path> 带缓存破坏参数(文件 mtime)。
-    /images 是 24h 强缓存,而覆盖同号批次/重算热力图会原地重写文件但 URL(路径)不变;
-    不带版本号浏览器/CDN 会一直显示旧图。用 mtime 做版本:文件重写 → mtime 变 → URL 变 → refetch;
-    未变 → URL 稳定 → 命中缓存。/images 与 /thumb 都按路径匹配,忽略 ?v=。"""
-    try:
-        mtime = int((IMAGES_DIR / path).stat().st_mtime)
-        return f"/images/{path}?v={mtime}"
-    except OSError:
-        return f"/images/{path}"
+def _versioned_url(path: str, version: str | int | None) -> str:
+    """用数据库版本生成强缓存 URL，热路径绝不访问可能位于共享盘的图片文件。"""
+    return f"/images/{path}?v={version}" if version is not None else f"/images/{path}"
 
 
-def _heatmap_url(heatmap_path: str | None) -> str | None:
-    return _versioned_url(heatmap_path) if heatmap_path else None
+def _screenshot_url(shot: Screenshot) -> str:
+    # 旧库新增列为空时用稳定行 id；新上传使用随机 cache_version，覆盖后必定变化。
+    return _versioned_url(shot.path, shot.cache_version or shot.id)
+
+
+def _heatmap_url(item: ComparisonItem) -> str | None:
+    if not item.heatmap_path:
+        return None
+    return _versioned_url(item.heatmap_path, item.cache_version or item.id)
 
 
 def comparison_dto(c: Comparison, db: Session) -> dict:
@@ -254,9 +263,9 @@ def item_dto(it: ComparisonItem, with_metrics: bool = False) -> dict:
         "name": it.scene_name,
         "status": it.status,
         "diff_pct": round(it.diff_pct, 2) if it.diff_pct is not None else None,
-        "current_url": _versioned_url(it.current_shot.path) if it.current_shot else None,
-        "baseline_url": _versioned_url(it.baseline_shot.path) if it.baseline_shot else None,
-        "heatmap_url": _heatmap_url(it.heatmap_path),
+        "current_url": _screenshot_url(it.current_shot) if it.current_shot else None,
+        "baseline_url": _screenshot_url(it.baseline_shot) if it.baseline_shot else None,
+        "heatmap_url": _heatmap_url(it),
     }
     d["thumb_url"] = d["current_url"] or d["baseline_url"]
     # 相机位姿:优先取当前批截图,缺则取参照批
@@ -460,11 +469,15 @@ def upload_screenshot(
         db.rollback()
         log.info("截图并发同名,跳过 batch=%s scene=%s", batch_id, scene_name)
         raise HTTPException(409, f"scene {scene_name} already uploaded")
+    # 图片和数据库记录都已提交后再异步预热缩略图。这里只入有界队列，
+    # 不等待远程原图读取或 WebP 编码；队列满/服务退出时返回 False 也不影响上传，
+    # 后续 /thumb 首次访问仍会按原有机制回退原图并重试生成。
+    thumbnail_service.submit(Path(path))
     log.info(
         "截图上报成功 batch=%s scene=%s file=%s bytes=%s path=%s",
         batch_id, scene_name, filename, len(data), path,
     )
-    return {"id": shot.id, "scene_name": scene_name, "url": _versioned_url(shot.path)}
+    return {"id": shot.id, "scene_name": scene_name, "url": _screenshot_url(shot)}
 
 
 @app.get("/api/batches/{batch_id}/screenshots")
@@ -480,7 +493,7 @@ def list_screenshots(batch_id: str, db: Session = Depends(get_db)):
     return {
         "total": len(shots),
         "items": [
-            {"scene_name": s.scene_name, "url": _versioned_url(s.path), "frame_index": s.frame_index}
+            {"scene_name": s.scene_name, "url": _screenshot_url(s), "frame_index": s.frame_index}
             for s in shots
         ],
     }
@@ -542,7 +555,7 @@ def scene_grid(
                 s.scene_name,
                 {"scene_name": s.scene_name, "frame_index": s.frame_index, "by_batch": {}},
             )
-            r["by_batch"][s.batch_id] = _versioned_url(s.path)
+            r["by_batch"][s.batch_id] = _screenshot_url(s)
             if s.frame_index is not None and (r["frame_index"] is None or s.frame_index < r["frame_index"]):
                 r["frame_index"] = s.frame_index
     rows = sorted(
@@ -595,6 +608,9 @@ def _cascade_delete_batches(db: Session, batches: list[Batch]) -> int:
             _TASKS.pop(tid, None)
     # 连带删除这些批次的缩略图缓存(覆盖 overwrite 也走这里,旧缩略图随之清掉)
     for bid in bids:
+        # 先使同批次已排队/运行的任务失效。invalidate 与缩略图最终发布共用锁，
+        # 因而 rmtree 之后旧任务不会重新写回；覆盖后同路径新上传会自动合并重跑。
+        thumbnail_service.invalidate_prefix(Path("batches") / bid)
         shutil.rmtree(THUMB_DIR / "batches" / bid, ignore_errors=True)
     return len(comp_ids)
 
@@ -878,7 +894,7 @@ def lookup_comparison(batch_id: str, ref_batch_id: str, db: Session = Depends(ge
     items = db.scalars(
         select(ComparisonItem).where(ComparisonItem.comparison_id == existing.id)
     ).all()
-    heatmaps = {it.scene_name: _heatmap_url(it.heatmap_path)
+    heatmaps = {it.scene_name: _heatmap_url(it)
                 for it in items if it.heatmap_path}
     return {"exists": True, "comparison": comparison_dto(existing, db), "heatmaps": heatmaps}
 

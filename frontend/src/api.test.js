@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { api, thumbUrl } from './api'
+import { API_TIMEOUT_MS, api, thumbUrl } from './api'
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 function jsonResponse(body) {
@@ -47,10 +48,61 @@ describe('api request encoding', () => {
 
     await api.saveSettings(patch)
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/settings', {
+    expect(fetchMock).toHaveBeenCalledWith('/api/settings', expect.objectContaining({
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
-    })
+      signal: expect.any(AbortSignal),
+    }))
+  })
+
+  it('接口超过统一时限后中止请求并返回可重试的中文错误', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn((_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pending = api.meta().catch((error) => error)
+    await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS)
+
+    const error = await pending
+    expect(error).toMatchObject({ code: 'TIMEOUT', retryable: true })
+    expect(error.message).toContain('请求超时')
+  })
+
+  it('收到响应头后正文读取卡住仍受统一超时控制', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn((_url, options) => Promise.resolve({
+      ok: true,
+      json: () => new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('body aborted'), { name: 'AbortError' }))
+        })
+      }),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pending = api.meta().catch((error) => error)
+    await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS)
+
+    await expect(pending).resolves.toMatchObject({ code: 'TIMEOUT', retryable: true })
+  })
+
+  it('调用方取消请求时返回取消标记而不是超时错误', async () => {
+    const fetchMock = vi.fn((_url, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+      })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+
+    const pending = api.item(7, { signal: controller.signal }).catch((error) => error)
+    controller.abort()
+
+    await expect(pending).resolves.toMatchObject({ code: 'ABORTED', cancelled: true })
   })
 })

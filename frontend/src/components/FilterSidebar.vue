@@ -41,7 +41,11 @@ async function applyNow() {
   store.batchPage = 1
   const loads = [store.loadBatches()]
   if (store.batchView === 'grid') loads.push(store.loadGrid())
-  await Promise.all(loads)
+  try {
+    await Promise.all(loads)
+  } catch (error) {
+    Message.error(error?.message || '筛选数据加载失败，请重试')
+  }
 }
 
 function onDateChange(v) {

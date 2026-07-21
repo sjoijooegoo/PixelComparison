@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onActivated, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStore, p4Label } from '../store'
 import { thumbUrl } from '../api'
@@ -96,6 +96,7 @@ function onPanUp() {
 
 // 折叠的批次列(放在 store,按批次 id;跨刷新/改筛选/切场景保留)
 const isCollapsed = (id) => store.gridCollapsed.has(id)
+const retryGrid = () => store.loadGrid().catch(() => {})
 let columnAnchorRun = 0
 // 折叠时按可视图片区就近选择左右锚点；展开复用同一批次记录，避免方向翻转。
 const columnAnchorSides = new Map()
@@ -376,9 +377,12 @@ watch(matrix, (next, previous) => {
 // keep-alive 返回(如从对比结果切回批次管理)时,列表图也停到最右看最新
 onActivated(() => {
   autoPinRight.value = true
+  store.loadGridHeatmaps()
   if (cols.value.length) scrollToRight()
 })
+onDeactivated(() => store.cancelGridHeatmapRequest())
 onUnmounted(() => {
+  store.cancelGridHeatmapRequest()
   columnAnchorRun += 1
   columnAnchorSides.clear()
   ro?.disconnect()
@@ -423,6 +427,14 @@ const gridStyle = computed(() => ({
 <template>
   <div class="grid-panel" ref="panel">
     <a-empty v-if="!store.filters.scene_id" description="请先在上方筛选条选择一个场景" style="margin-top: 60px" />
+    <div v-else-if="store.gridError" class="grid-state">
+      <div class="grid-state-title">列表图加载失败</div>
+      <div class="grid-state-message">{{ store.gridError }}</div>
+      <a-button type="primary" size="small" @click="retryGrid">重新加载</a-button>
+    </div>
+    <div v-else-if="store.gridLoading && !cols.length" class="grid-state">
+      <a-spin :size="28" tip="正在加载列表图…" />
+    </div>
     <a-empty v-else-if="!cols.length" description="该场景下暂无批次" style="margin-top: 60px" />
     <div v-else class="grid-scroll" :class="{ grabbing, 'auto-positioning': autoPinRight }" ref="scroll"
       @scroll.passive="onGridScroll" @pointerdown.passive="stopAutoPin" @wheel.passive="stopAutoPin"
@@ -461,7 +473,10 @@ const gridStyle = computed(() => ({
         <!-- 末列表头:差异热力图(吸附右侧),展示已选基线/对比批次信息 -->
         <div class="cell head heat-head">
           <div class="heat-title" :class="{ 'is-btn': bothSelected && heatNoCache }">
-            <a-button v-if="bothSelected && heatNoCache" type="primary" size="mini" long
+            <a-spin v-if="bothSelected && store.gridHeatmapLoading" :size="16" />
+            <a-button v-else-if="bothSelected && store.gridHeatmapError" size="mini" long
+              @click="store.loadGridHeatmaps()">查询失败，重试</a-button>
+            <a-button v-else-if="bothSelected && heatNoCache" type="primary" size="mini" long
               :loading="store.running" :disabled="!store.canCompare || store.running" @click="runCompare">
               {{ store.running && store.progress.total ? `对比中 ${store.progress.done}/${store.progress.total}` : '发起对比' }}
             </a-button>
@@ -561,6 +576,12 @@ const gridStyle = computed(() => ({
 
 <style scoped>
 .grid-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; }
+.grid-state {
+  flex: 1; min-height: 160px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 9px;
+}
+.grid-state-title { color: var(--color-text-1); font-size: 14px; font-weight: 600; }
+.grid-state-message { max-width: 520px; color: var(--color-text-3); font-size: 12px; text-align: center; }
 .grid-scroll { flex: 1; min-height: 0; overflow: auto; border: 1px solid var(--color-border-2); border-radius: 8px; cursor: default; }
 /* 拖拽平移进行中:统一抓手光标(覆盖图片的 zoom-in),并禁止选中 */
 .grid-scroll.grabbing { cursor: grabbing; user-select: none; }

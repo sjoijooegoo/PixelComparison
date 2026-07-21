@@ -29,8 +29,8 @@ def _run(client, cur, ref):
     raise AssertionError("comparison did not finish")
 
 
-def test_image_url_cache_busted_by_mtime(client, png_bytes):
-    """图片 URL 带 ?v=mtime;文件重写(覆盖同号批次)后 mtime 变 → URL 变 → 击穿浏览器/CDN 缓存。"""
+def test_image_url_version_does_not_depend_on_file_mtime(client, png_bytes):
+    """图片 URL 版本来自数据库；触碰远程文件 mtime 不应改变接口结果。"""
     import os
     import app.db
     assert _batch(client, "cb1").status_code == 201
@@ -39,13 +39,12 @@ def test_image_url_cache_busted_by_mtime(client, png_bytes):
     url1 = r.json()["url"]
     assert "/images/batches/cb1/shot_01.png?v=" in url1, url1
 
-    # 直接改文件 mtime(模拟覆盖重写),服务出的 URL 必须反映新版本
+    # 直接改文件 mtime，接口 URL 仍保持稳定；正常覆盖会创建新的数据库缓存版本。
     p = app.db.IMAGES_DIR / "batches" / "cb1" / "shot_01.png"
     future = int(p.stat().st_mtime) + 1000
     os.utime(p, (future, future))
     url2 = client.get("/api/batches/cb1/screenshots").json()["items"][0]["url"]
-    assert url2.endswith(f"?v={future}"), url2
-    assert url2 != url1
+    assert url2 == url1
 
 
 def test_overwrite_replaces_batch_and_cascades(client, png_bytes):

@@ -27,7 +27,10 @@ onMounted(() => {
   if (listEl.value) ro.observe(listEl.value)
   recalcPageSize()
 })
-onUnmounted(() => ro?.disconnect())
+onUnmounted(() => {
+  clearTimeout(searchTimer)
+  ro?.disconnect()
+})
 
 // 差异率按数值分级着色,阈值取自项目设置
 function diffClass(s) {
@@ -46,6 +49,10 @@ function onSearch(val) {
     store.page = 1
     store.loadScenes()
   }, 300)
+}
+
+function retryScenes() {
+  store.loadScenes()
 }
 </script>
 
@@ -74,8 +81,12 @@ function onSearch(val) {
 
     <a-spin :loading="store.loading" class="list-wrap">
       <div class="list" ref="listEl">
+        <div v-if="store.sceneError" class="load-error">
+          <span>{{ store.sceneError }}</span>
+          <a-button type="primary" size="mini" @click="retryScenes">重新加载</a-button>
+        </div>
         <div v-for="s in store.orientedScenes" :key="s.id" class="item"
-          :class="{ selected: s.id === store.detail?.id }"
+          :class="{ selected: s.id === store.selectedSceneItemId }"
           @click="store.selectScene(s.id)">
           <img :src="thumbUrl(s.thumb_url)" loading="lazy" alt=""
             @error="(e) => { if (!e.target.dataset.fb) { e.target.dataset.fb = '1'; e.target.src = s.thumb_url } }">
@@ -104,6 +115,11 @@ function onSearch(val) {
 .cols { display: flex; padding: 4px 12px; font-size: 12px; border-bottom: 1px solid var(--color-border-2); }
 .list-wrap { flex: 1; min-height: 0; }
 .list { height: 100%; overflow-y: auto; }
+.load-error {
+  min-height: 96px; padding: 14px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px;
+  color: rgb(var(--red-6)); font-size: 12px; text-align: center;
+}
 .item {
   display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer;
   border-bottom: 1px solid var(--color-border-1);

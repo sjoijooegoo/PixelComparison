@@ -6,6 +6,10 @@ const store = useStore()
 const detail = computed(() => store.orientedDetail)   // 按当前换向(flip)取向
 const paired = computed(() => !!(detail.value?.current_url && detail.value?.baseline_url))
 
+function retryDetail() {
+  if (store.selectedSceneItemId != null) store.selectScene(store.selectedSceneItemId)
+}
+
 // 相机位姿(新版上报带):location(x,y,z) + rotation(pitch,yaw,roll)
 const n1 = (v) => {
   if (typeof v !== 'number') return v
@@ -59,7 +63,14 @@ onUnmounted(() => {
 
 <template>
   <section class="detail">
-    <template v-if="detail">
+    <div v-if="store.detailLoading && !detail" class="detail-state">
+      <a-spin :size="28" tip="正在加载检查点详情…" />
+    </div>
+    <div v-else-if="store.detailError && !detail" class="detail-state">
+      <div class="detail-error">{{ store.detailError }}</div>
+      <a-button type="primary" size="small" @click="retryDetail">重新加载</a-button>
+    </div>
+    <template v-else-if="detail">
       <div class="head">
         <div class="title-wrap">
           <h3>{{ detail.name }}</h3>
@@ -141,6 +152,11 @@ onUnmounted(() => {
 <style scoped>
 /* 详情区纵向填充,内容尽量一屏显示,不滚动 */
 .detail { flex: 1; min-width: 0; padding: 12px 16px; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+.detail-state {
+  flex: 1; min-height: 160px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px;
+}
+.detail-error { max-width: 520px; color: rgb(var(--red-6)); font-size: 12px; text-align: center; }
 /* 检查点切换:浮动右下角 */
 .scene-nav {
   position: absolute; right: 18px; bottom: 14px; z-index: 5;

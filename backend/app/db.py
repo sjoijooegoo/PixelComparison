@@ -65,6 +65,10 @@ _NEW_COLUMNS = {
     "screenshots": {
         "frame_index": "INTEGER",
         "camera": "JSON",
+        "cache_version": "VARCHAR",
+    },
+    "comparison_items": {
+        "cache_version": "VARCHAR",
     },
 }
 

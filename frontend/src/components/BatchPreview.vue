@@ -1,8 +1,9 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { api } from '../api'
+import { api, isRequestCancelled } from '../api'
 import { p4Label } from '../store'
+import { batchPreviewImage } from './batchPreviewImages'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -12,27 +13,111 @@ const emit = defineEmits(['update:visible'])
 
 const loading = ref(false)
 const shots = ref([])
+const previewVisible = ref(false)
+const previewCurrent = ref(0)
+const thumbnailRetryNonce = ref({})
+const thumbnailFailed = ref(new Set())
+const thumbnailAttempts = new Map()
+const thumbnailTimers = new Set()
+let shotsRequestId = 0
+let shotsController = null
+const previewShots = computed(() => shots.value.map((shot) => ({
+  ...shot,
+  ...batchPreviewImage(shot.url),
+})))
+const originalUrls = computed(() => previewShots.value.map((shot) => shot.originalUrl))
 
-// 弹窗打开时按批次拉全部截图
-watch(
-  () => props.visible,
-  async (open) => {
-    if (!open || !props.batch) return
-    loading.value = true
+function clearThumbnailTimers() {
+  for (const timer of thumbnailTimers) clearTimeout(timer)
+  thumbnailTimers.clear()
+  thumbnailAttempts.clear()
+  thumbnailRetryNonce.value = {}
+  thumbnailFailed.value = new Set()
+}
+
+// 同时监听批次 ID；关闭、切批次或卸载会 abort，序号再阻止已经到达的旧响应回写。
+watch(() => [props.visible, props.batch?.id], async ([open, batchId]) => {
+  const requestId = ++shotsRequestId
+  shotsController?.abort()
+  shotsController = null
+  previewVisible.value = false
+  clearThumbnailTimers()
+  if (!open || !batchId) {
+    loading.value = false
     shots.value = []
-    try {
-      const { items } = await api.batchScreenshots(props.batch.id)
-      shots.value = items
-    } catch (e) {
-      Message.error(e.message || '加载截图失败')
-    } finally {
-      loading.value = false
+    return
+  }
+
+  const controller = new AbortController()
+  shotsController = controller
+  loading.value = true
+  shots.value = []
+  try {
+    const { items } = await api.batchScreenshots(batchId, { signal: controller.signal })
+    if (requestId !== shotsRequestId || props.batch?.id !== batchId || !props.visible) return
+    shots.value = items
+  } catch (error) {
+    if (!isRequestCancelled(error) && requestId === shotsRequestId) {
+      Message.error(error.message || '加载截图失败')
     }
-  },
-)
+  } finally {
+    if (requestId === shotsRequestId) {
+      loading.value = false
+      if (shotsController === controller) shotsController = null
+    }
+  }
+})
+
+onUnmounted(() => {
+  ++shotsRequestId
+  shotsController?.abort()
+  clearThumbnailTimers()
+})
 
 function close() {
+  previewVisible.value = false
   emit('update:visible', false)
+}
+
+function openOriginal(index) {
+  previewCurrent.value = index
+  previewVisible.value = true
+}
+
+function thumbnailSrc(shot) {
+  const nonce = thumbnailRetryNonce.value[shot.scene_name]
+  return nonce ? `${shot.thumbnailUrl}&retry=${nonce}` : shot.thumbnailUrl
+}
+
+// 严格模式未命中时只重试 /thumb；多次失败后给用户显式重试入口，不永久黑屏。
+function retryThumbnail(shot) {
+  const attempt = (thumbnailAttempts.get(shot.scene_name) || 0) + 1
+  thumbnailAttempts.set(shot.scene_name, attempt)
+  if (attempt > 15) {
+    thumbnailFailed.value = new Set([...thumbnailFailed.value, shot.scene_name])
+    return
+  }
+  const delay = Math.min(250 * attempt, 1200)
+  const timer = setTimeout(() => {
+    thumbnailTimers.delete(timer)
+    if (!props.visible) return
+    thumbnailRetryNonce.value = {
+      ...thumbnailRetryNonce.value,
+      [shot.scene_name]: Date.now(),
+    }
+  }, delay)
+  thumbnailTimers.add(timer)
+}
+
+function retryThumbnailNow(shot) {
+  thumbnailAttempts.set(shot.scene_name, 0)
+  const failed = new Set(thumbnailFailed.value)
+  failed.delete(shot.scene_name)
+  thumbnailFailed.value = failed
+  thumbnailRetryNonce.value = {
+    ...thumbnailRetryNonce.value,
+    [shot.scene_name]: Date.now(),
+  }
 }
 </script>
 
@@ -51,11 +136,15 @@ function close() {
     </template>
 
     <a-spin :loading="loading" style="display:block; min-height: 120px">
-      <a-image-preview-group v-if="shots.length" infinite>
+      <a-image-preview-group v-if="shots.length" infinite
+        v-model:visible="previewVisible" v-model:current="previewCurrent"
+        :src-list="originalUrls">
         <div class="grid">
-          <div v-for="s in shots" :key="s.scene_name" class="cell">
-            <a-image :src="s.url" :alt="s.scene_name" loading="lazy"
-              width="100%" height="100%" fit="cover" show-loader />
+          <div v-for="(s, index) in previewShots" :key="s.scene_name" class="cell">
+            <img :src="thumbnailSrc(s)" :alt="s.scene_name" loading="lazy" decoding="async"
+              @error="retryThumbnail(s)" @click="openOriginal(index)">
+            <button v-if="thumbnailFailed.has(s.scene_name)" class="thumb-retry"
+              @click.stop="retryThumbnailNow(s)">缩略图生成较慢，重试</button>
             <div class="name" :title="s.scene_name">{{ s.scene_name }}</div>
           </div>
         </div>
@@ -74,13 +163,22 @@ function close() {
   gap: 12px;
 }
 .cell {
+  position: relative;
   border: 1px solid var(--color-border-2);
   border-radius: 8px;
   overflow: hidden;
   background: #0d1117;
 }
-.cell :deep(.arco-image) { display: block; width: 100%; height: 120px; }
-.cell :deep(.arco-image-img) { cursor: zoom-in; }
+.cell > img {
+  display: block; width: 100%; height: 120px; object-fit: cover;
+  cursor: zoom-in; background: #0d1117;
+}
+.thumb-retry {
+  position: absolute; left: 50%; top: 60px; transform: translate(-50%, -50%);
+  padding: 5px 9px; border: 1px solid var(--color-border-3); border-radius: 6px;
+  color: var(--color-text-2); background: rgba(20, 20, 20, .88); cursor: pointer;
+  font: inherit; font-size: 11px; white-space: nowrap;
+}
 .name {
   padding: 5px 8px;
   font-size: 11px;

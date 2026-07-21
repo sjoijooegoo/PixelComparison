@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, watch } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useStore } from '../store'
 import ResultSummary from '../components/ResultSummary.vue'
@@ -22,10 +22,13 @@ async function sync() {
     if (!store.comparisons.length) await store.loadComparisons()
     if (!store.selectedComparison && store.comparisons.length) {
       await store.openComparison(store.comparisons[0])
+    } else {
+      await store.resumeComparisonData()
     }
   }
 }
 onMounted(sync)
+onUnmounted(() => store.cancelComparisonDataRequests())
 watch(() => route.params.id, sync)   // 同组件内仅 id 变化(如从一条跳另一条)也重新加载
 </script>
 

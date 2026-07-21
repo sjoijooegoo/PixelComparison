@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { api } from './api'
+import { api, isRequestCancelled } from './api'
 import { router } from './router'
 import { logger } from './logger'
 
@@ -104,6 +104,64 @@ const gridCacheState = globalThis.__PIXELCOMP_GRID_CACHE__ ||= {
 if (!Number.isInteger(gridCacheState.epoch)) gridCacheState.epoch = 0
 const gridCache = gridCacheState.cache
 const gridInflight = gridCacheState.inflight
+const initPromises = new WeakMap()
+const requestRuntimes = new WeakMap()
+const REQUEST_SEQUENCE_FIELDS = {
+  scenes: '_sceneRequestSeq',
+  detail: '_detailRequestSeq',
+  heatmaps: '_heatmapRequestSeq',
+}
+
+function requestRuntime(store, channel) {
+  let runtime = requestRuntimes.get(store)
+  if (!runtime) {
+    runtime = { scenes: { active: null }, detail: { active: null }, heatmaps: { active: null } }
+    requestRuntimes.set(store, runtime)
+  }
+  return runtime[channel]
+}
+
+// 每类资源只保留一个有效请求：相同 key 复用 inflight Promise；不同 key 立即取消旧请求。
+// requestId 是最终写状态前的第二道保护，兼容服务端已经返回、abort 来不及阻止的情况。
+function runLatestRequest(store, channel, key, execute) {
+  const runtime = requestRuntime(store, channel)
+  if (runtime.active?.key === key) return runtime.active.promise
+
+  runtime.active?.controller.abort()
+  const sequenceField = REQUEST_SEQUENCE_FIELDS[channel]
+  const requestId = ++store[sequenceField]
+  const controller = new AbortController()
+  const isLatest = () => store[sequenceField] === requestId
+  const operation = Promise.resolve(execute({
+    signal: controller.signal,
+    requestId,
+    isLatest,
+  }))
+  const active = { key, requestId, controller, promise: null }
+  active.promise = operation.then(
+    (value) => {
+      if (runtime.active?.requestId === requestId) runtime.active = null
+      return value
+    },
+    (error) => {
+      if (runtime.active?.requestId === requestId) runtime.active = null
+      throw error
+    },
+  )
+  runtime.active = active
+  return active.promise
+}
+
+function cancelLatestRequest(store, channel) {
+  const runtime = requestRuntime(store, channel)
+  runtime.active?.controller.abort()
+  runtime.active = null
+  ++store[REQUEST_SEQUENCE_FIELDS[channel]]
+}
+
+function hasActiveRequest(store, channel) {
+  return !!requestRuntime(store, channel).active
+}
 
 function emptyGrid() {
   return { batches: [], rows: [] }
@@ -162,10 +220,21 @@ export const useStore = defineStore('shotdiff', {
     batchView: 'list',                 // list(列表) | grid(列表图:同场景多批次图片矩阵)
     grid: { batches: [], rows: [] },   // 批次列表图数据
     initialized: false,                // 首屏最终筛选与数据是否已完成加载
+    initializing: false,               // 首屏后台加载中；应用外壳已挂载并展示骨架
+    initError: '',                     // 首屏失败原因；页面提供原地重试
+    batchLoading: false,
+    batchError: '',
+    gridLoading: false,
+    gridError: '',
     _batchRequestSeq: 0,               // 只允许最新批次请求写回状态
     _gridRequestSeq: 0,                // 只允许最新列表图请求写回状态
+    _sceneRequestSeq: 0,               // 对比检查点列表最新请求序号
+    _detailRequestSeq: 0,              // 检查点详情最新请求序号
+    _heatmapRequestSeq: 0,             // 列表图热力图 lookup 最新请求序号
     gridCollapsed: new Set(),          // 列表图已折叠的批次列(按批次 id;跨刷新/切场景保留)
     gridHeatmaps: null,                // 列表图热力图列:{ current_id, baseline_id, exists, map:{scene_name:url} };只读命中缓存,不触发计算
+    gridHeatmapLoading: false,
+    gridHeatmapError: '',
     uploadVisible: false,              // 手动上报弹窗(由顶栏按钮触发)
     // 对比的两侧选择(角色);currentBatch/baselineBatch 是「当前场景」的激活镜像
     currentBatch: null,   // 对比批次(待检查)
@@ -187,8 +256,13 @@ export const useStore = defineStore('shotdiff', {
     sceneTotal: 0,
     counts: { all: 0, fail: 0, warn: 0, pass: 0, added: 0, missing: 0 },
     sceneSort: 'name',   // name(场景名) | diff(差异率降序)
+    sceneError: '',
 
     detail: null,        // /api/items/{id} 响应
+    selectedSceneItemId: null,
+    detailLoading: false,
+    detailError: '',
+    comparisonDataStale: false,        // 请求中离开结果页后，重新进入需恢复列表/详情
     viewMode: 'tri',     // tri(三视图) | slide(滑动对比)
     loading: false,
 
@@ -279,7 +353,21 @@ export const useStore = defineStore('shotdiff', {
 
   actions: {
     async init(routeSceneId = '') {
+      const active = initPromises.get(this)
+      if (active) return await active
+      const initialization = this._initialize(routeSceneId)
+      initPromises.set(this, initialization)
+      try {
+        return await initialization
+      } finally {
+        if (initPromises.get(this) === initialization) initPromises.delete(this)
+      }
+    },
+
+    async _initialize(routeSceneId = '') {
       this.initialized = false
+      this.initializing = true
+      this.initError = ''
       const sid = Array.isArray(routeSceneId) ? routeSceneId[0] : routeSceneId
       // 必须在任何 await 之前固定深链场景；即使初始化接口失败，挂载后的兜底请求
       // 也不会先发出未带 scene_id 的全局查询。
@@ -290,17 +378,25 @@ export const useStore = defineStore('shotdiff', {
         this.filters.scene_id = ''
         this.batchView = 'list'
       }
-      await this.loadMeta()
-      await this.loadSettings()
-      const acceptedSid = sid && this.meta.scene_ids.includes(sid) ? sid : ''
-      this.filters = this.defaultFilters()   // 用项目设置里的默认画质/日期范围初始化筛选
-      if (acceptedSid) this.filters.scene_id = acceptedSid
-      this.batchView = acceptedSid ? 'grid' : 'list'
-      this.batchPage = 1
-      const loads = [this.loadBatches()]
-      if (acceptedSid) loads.push(this.loadGrid())
-      await Promise.all(loads)
-      this.initialized = true
+      try {
+        // 两个配置接口互不依赖，并行请求少等一个网络往返；批次请求仍要等最终筛选确定。
+        await Promise.all([this.loadMeta(), this.loadSettings()])
+        const acceptedSid = sid && this.meta.scene_ids.includes(sid) ? sid : ''
+        this.filters = this.defaultFilters()   // 用项目设置里的默认画质/日期范围初始化筛选
+        if (acceptedSid) this.filters.scene_id = acceptedSid
+        this.batchView = acceptedSid ? 'grid' : 'list'
+        this.batchPage = 1
+        const loads = [this.loadBatches()]
+        if (acceptedSid) loads.push(this.loadGrid())
+        await Promise.all(loads)
+        this.initialized = true
+      } catch (error) {
+        this.initialized = false
+        this.initError = error?.message || '初始化失败，请重试'
+        throw error
+      } finally {
+        this.initializing = false
+      }
     },
 
     // 由项目设置算出的整套默认筛选(首次进入 / 点「清空」时套用)
@@ -359,6 +455,8 @@ export const useStore = defineStore('shotdiff', {
 
     async loadBatches() {
       const requestId = ++this._batchRequestSeq
+      this.batchLoading = true
+      this.batchError = ''
       // 批次筛选变化后，任何仍在途的列表图响应也已经过期；配套的 loadGrid
       // 会取得新的序号。这样清空筛选/空日期时不会短暂回写旧矩阵。
       ++this._gridRequestSeq
@@ -366,6 +464,7 @@ export const useStore = defineStore('shotdiff', {
       if (this.hasEmptyDateSelection) {
         this.batches = []
         this.batchTotal = 0
+        this.batchLoading = false
         return
       }
       const params = cloneRequestParams({
@@ -378,7 +477,10 @@ export const useStore = defineStore('shotdiff', {
         result = await api.batches(params)
       } catch (error) {
         if (requestId !== this._batchRequestSeq) return null
+        this.batchError = error?.message || '批次列表加载失败'
         throw error
+      } finally {
+        if (requestId === this._batchRequestSeq) this.batchLoading = false
       }
       if (requestId !== this._batchRequestSeq) return null
       const { items, total } = result
@@ -415,49 +517,53 @@ export const useStore = defineStore('shotdiff', {
     // 批次列表图:同场景多批次的图片矩阵(需先选场景)
     async loadGrid() {
       const requestId = ++this._gridRequestSeq
-      if (!this.filters.scene_id) { this.grid = emptyGrid(); return }
-      if (this.hasEmptyDateSelection) {
-        this.grid = emptyGrid()
-        this._clearRolesOutsideGrid(this.filters.scene_id)
-        return
-      }
-      // 传全部筛选(scene_id 在路径里,多余的 status 等会被后端忽略)
-      const sceneId = this.filters.scene_id
-      const filters = cloneRequestParams(this.requestFilters)
-      const key = gridCacheKey(sceneId, filters)
-      if (gridCache.has(key)) {
+      this.gridLoading = true
+      this.gridError = ''
+      try {
+        if (!this.filters.scene_id) { this.grid = emptyGrid(); return }
+        if (this.hasEmptyDateSelection) {
+          this.grid = emptyGrid()
+          this._clearRolesOutsideGrid(this.filters.scene_id)
+          return
+        }
+        // 传全部筛选(scene_id 在路径里,多余的 status 等会被后端忽略)
+        const sceneId = this.filters.scene_id
+        const filters = cloneRequestParams(this.requestFilters)
+        const key = gridCacheKey(sceneId, filters)
+        if (gridCache.has(key)) {
+          if (requestId !== this._gridRequestSeq) return null
+          this.grid = gridCache.get(key)
+          this._clearRolesOutsideGrid(sceneId)
+          this.loadGridHeatmaps()
+          return this.grid
+        }
+        if (!gridInflight.has(key)) {
+          const requestEpoch = gridCacheState.epoch
+          const request = api.sceneGrid(sceneId, filters)
+            .then((data) => {
+              if (gridCacheState.epoch === requestEpoch) rememberGrid(key, data)
+              return data
+            })
+            .finally(() => {
+              // clearGridCache 后同 key 可能已有一条新请求；旧请求不得误删新请求。
+              if (gridInflight.get(key) === request) gridInflight.delete(key)
+            })
+          gridInflight.set(key, request)
+        }
+        const data = await gridInflight.get(key)
         if (requestId !== this._gridRequestSeq) return null
-        this.grid = gridCache.get(key)
+        if (gridCacheKey(this.filters.scene_id, this.requestFilters) !== key) return null
+        this.grid = data
         this._clearRolesOutsideGrid(sceneId)
         this.loadGridHeatmaps()
-        return this.grid
-      }
-      if (!gridInflight.has(key)) {
-        const requestEpoch = gridCacheState.epoch
-        const request = api.sceneGrid(sceneId, filters)
-          .then((data) => {
-            if (gridCacheState.epoch === requestEpoch) rememberGrid(key, data)
-            return data
-          })
-          .finally(() => {
-            // clearGridCache 后同 key 可能已有一条新请求；旧请求不得误删新请求。
-            if (gridInflight.get(key) === request) gridInflight.delete(key)
-          })
-        gridInflight.set(key, request)
-      }
-      let data
-      try {
-        data = await gridInflight.get(key)
+        return data
       } catch (error) {
         if (requestId !== this._gridRequestSeq) return null
+        this.gridError = error?.message || '列表图加载失败'
         throw error
+      } finally {
+        if (requestId === this._gridRequestSeq) this.gridLoading = false
       }
-      if (requestId !== this._gridRequestSeq) return null
-      if (gridCacheKey(this.filters.scene_id, this.requestFilters) !== key) return null
-      this.grid = data
-      this._clearRolesOutsideGrid(sceneId)
-      this.loadGridHeatmaps()
-      return data
     },
 
     // 筛选项变化后,已选基线/对比若不在当前列表图列里,就清掉;
@@ -516,19 +622,43 @@ export const useStore = defineStore('shotdiff', {
       const base = this.baselineBatch
       const inGrid = (b) => b && this.grid.batches.some((x) => x.id === b.id)
       if (!cur || !base || cur.id === base.id || !inGrid(cur) || !inGrid(base)) {
+        cancelLatestRequest(this, 'heatmaps')
         this.gridHeatmaps = null
+        this.gridHeatmapLoading = false
+        this.gridHeatmapError = ''
         return
       }
-      const res = await api.comparisonLookup(cur.id, base.id)
-      // 异步返回后两侧选择可能已变,确认仍是同一对再写入
-      if (this.currentBatch?.id !== cur.id || this.baselineBatch?.id !== base.id) return
-      this.gridHeatmaps = {
-        current_id: cur.id,
-        baseline_id: base.id,
-        exists: !!res.exists,
-        map: res.heatmaps || {},
-        comparison: res.comparison || null,   // 列头「差异对比」点击跳转需要 id/方向
-      }
+      const key = `${cur.id}|${base.id}`
+      return runLatestRequest(this, 'heatmaps', key, async ({ signal, isLatest }) => {
+        this.gridHeatmapLoading = true
+        this.gridHeatmapError = ''
+        try {
+          const res = await api.comparisonLookup(cur.id, base.id, { signal })
+          // 序号 + 当前角色双重校验，旧请求即使在 abort 前已完成也不能回写。
+          if (!isLatest()) return null
+          if (this.currentBatch?.id !== cur.id || this.baselineBatch?.id !== base.id) return null
+          this.gridHeatmaps = {
+            current_id: cur.id,
+            baseline_id: base.id,
+            exists: !!res.exists,
+            map: res.heatmaps || {},
+            comparison: res.comparison || null,   // 列头「差异对比」点击跳转需要 id/方向
+          }
+          return this.gridHeatmaps
+        } catch (error) {
+          if (isRequestCancelled(error) || !isLatest()) return null
+          this.gridHeatmapError = error?.message || '热力图查询失败'
+          this.gridHeatmaps = null
+          return null
+        } finally {
+          if (isLatest()) this.gridHeatmapLoading = false
+        }
+      })
+    },
+
+    cancelGridHeatmapRequest() {
+      cancelLatestRequest(this, 'heatmaps')
+      this.gridHeatmapLoading = false
     },
 
     // 列表图列头「差异对比」点击:跳到该对批次的对比结果页(/comparison/:id)
@@ -624,13 +754,22 @@ export const useStore = defineStore('shotdiff', {
     },
 
     async openComparison(comparison, flip = false) {
+      this.comparisonDataStale = false
       this.selectedComparison = comparison
       this.flip = flip
       this.page = 1
       this.sceneSearch = ''
       this.sceneSort = 'name'
-      await this.loadScenes()
-      if (this.scenes.length) await this.selectScene(this.scenes[0].id)
+      this.scenes = []
+      this.detail = null
+      this.selectedSceneItemId = null
+      cancelLatestRequest(this, 'detail')
+      this.detailLoading = false
+      this.detailError = ''
+      const comparisonId = comparison.id
+      const data = await this.loadScenes()
+      if (!data || this.selectedComparison?.id !== comparisonId) return
+      if (data.items.length) await this.selectScene(data.items[0].id)
       else this.detail = null
     },
 
@@ -641,25 +780,70 @@ export const useStore = defineStore('shotdiff', {
     },
 
     async loadScenes() {
-      if (!this.selectedComparison) return
-      this.loading = true
-      try {
-        const data = await api.scenes(this.selectedComparison.id, {
-          q: this.sceneSearch,
-          sort: this.sceneSort,
-          page: this.page,
-          page_size: this.pageSize,
-        })
-        this.scenes = data.items
-        this.sceneTotal = data.total
-        this.counts = data.counts
-      } finally {
+      if (!this.selectedComparison) {
+        cancelLatestRequest(this, 'scenes')
         this.loading = false
+        return null
       }
+      const comparisonId = this.selectedComparison.id
+      const params = cloneRequestParams({
+        q: this.sceneSearch,
+        sort: this.sceneSort,
+        page: this.page,
+        page_size: this.pageSize,
+      })
+      const key = JSON.stringify({ comparisonId, ...params })
+      return runLatestRequest(this, 'scenes', key, async ({ signal, isLatest }) => {
+        this.loading = true
+        this.sceneError = ''
+        try {
+          const data = await api.scenes(comparisonId, params, { signal })
+          if (!isLatest() || this.selectedComparison?.id !== comparisonId) return null
+          this.scenes = data.items
+          this.sceneTotal = data.total
+          this.counts = data.counts
+          return data
+        } catch (error) {
+          if (isRequestCancelled(error) || !isLatest()) return null
+          this.sceneError = error?.message || '检查点列表加载失败'
+          return null
+        } finally {
+          if (isLatest()) this.loading = false
+        }
+      })
     },
 
     async selectScene(id) {
-      this.detail = await api.item(id)
+      if (id === null || id === undefined || id === '') {
+        cancelLatestRequest(this, 'detail')
+        this.selectedSceneItemId = null
+        this.detail = null
+        this.detailLoading = false
+        this.detailError = ''
+        return null
+      }
+      const key = String(id)
+      const runtime = requestRuntime(this, 'detail')
+      if (runtime.active?.key !== key) {
+        this.selectedSceneItemId = id
+        this.detail = null
+      }
+      return runLatestRequest(this, 'detail', key, async ({ signal, isLatest }) => {
+        this.detailLoading = true
+        this.detailError = ''
+        try {
+          const data = await api.item(id, { signal })
+          if (!isLatest() || String(this.selectedSceneItemId) !== key) return null
+          this.detail = data
+          return data
+        } catch (error) {
+          if (isRequestCancelled(error) || !isLatest()) return null
+          this.detailError = error?.message || '检查点详情加载失败'
+          return null
+        } finally {
+          if (isLatest()) this.detailLoading = false
+        }
+      })
     },
 
     async gotoPrev() {
@@ -667,6 +851,20 @@ export const useStore = defineStore('shotdiff', {
     },
     async gotoNext() {
       if (this.detail?.next_id) await this.selectScene(this.detail.next_id)
+    },
+
+    cancelComparisonDataRequests() {
+      const interrupted = hasActiveRequest(this, 'scenes') || hasActiveRequest(this, 'detail')
+      cancelLatestRequest(this, 'scenes')
+      cancelLatestRequest(this, 'detail')
+      this.loading = false
+      this.detailLoading = false
+      if (interrupted) this.comparisonDataStale = true
+    },
+
+    async resumeComparisonData() {
+      if (!this.comparisonDataStale || !this.selectedComparison) return null
+      return await this.openComparison(this.selectedComparison, this.flip)
     },
   },
 })

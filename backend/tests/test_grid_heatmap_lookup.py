@@ -15,8 +15,10 @@ def _upload(client, bid, name, data):
     assert r.status_code == 201, r.text
 
 
-def _run(client, cur, ref):
-    r = client.post("/api/comparisons", json={"batch_id": cur, "ref_batch_id": ref})
+def _run(client, cur, ref, force=False):
+    r = client.post("/api/comparisons", json={
+        "batch_id": cur, "ref_batch_id": ref, "force": force,
+    })
     assert r.status_code == 202, r.text
     body = r.json()
     if body.get("status") == "done":
@@ -52,3 +54,11 @@ def test_lookup_before_and_after_compare(client, png_bytes):
         assert body["exists"] is True
         assert "shot_01" in body["heatmaps"]
         assert body["heatmaps"]["shot_01"].startswith("/images/")
+
+    before = body["heatmaps"]["shot_01"]
+    _run(client, "A", "B", force=True)
+    after = client.get("/api/comparisons/lookup", params={
+        "batch_id": "A", "ref_batch_id": "B",
+    }).json()["heatmaps"]["shot_01"]
+    assert before.split("?", 1)[0] == after.split("?", 1)[0]
+    assert before != after

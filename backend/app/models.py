@@ -1,9 +1,15 @@
+import uuid
 from datetime import datetime
 
 from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+
+
+def _new_cache_version() -> str:
+    """短随机版本号：文件内容重建后 URL 必须变化，但无需读取文件 mtime。"""
+    return uuid.uuid4().hex[:16]
 
 
 class Batch(Base):
@@ -39,12 +45,17 @@ class Screenshot(Base):
     batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"), index=True)
     scene_name: Mapped[str] = mapped_column(String, index=True)
     path: Mapped[str] = mapped_column(String)  # 相对 IMAGES_DIR
+    # 图片 URL 的缓存破坏标记。旧库迁移后为空时由接口回退到行 id；新上传使用随机值，
+    # 因而覆盖同号批次即使复用了相同路径和 SQLite id，URL 仍会变化。
+    cache_version: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=_new_cache_version,
+    )
     # 新版上报:帧序与相机位姿(location/rotation)
     frame_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     camera: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     batch: Mapped[Batch] = relationship(back_populates="screenshots")
-    # 图片 URL 统一由 main._versioned_url(path) 生成(带 ?v=mtime 缓存破坏);
+    # 图片 URL 统一由数据库 cache_version 生成缓存版本；不读取远程文件 mtime。
     # 不在模型上提供裸 /images/<path> 属性, 防覆盖后浏览器/CDN 服务旧图。
 
 
@@ -114,6 +125,10 @@ class ComparisonItem(Base):
     diff_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     heatmap_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 强制重算会删除并重建明细；随机版本确保同一路径的热力图不会命中旧缓存。
+    cache_version: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=_new_cache_version,
+    )
 
     comparison: Mapped[Comparison] = relationship(back_populates="items")
     current_shot: Mapped[Screenshot | None] = relationship(foreign_keys=[current_shot_id])

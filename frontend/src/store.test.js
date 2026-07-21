@@ -10,12 +10,17 @@ const { apiMock, routerMock, loggerMock } = vi.hoisted(() => ({
     comparisonLookup: vi.fn(),
     comparisonTask: vi.fn(),
     createComparison: vi.fn(),
+    scenes: vi.fn(),
+    item: vi.fn(),
   },
   routerMock: { push: vi.fn(), replace: vi.fn() },
   loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
 
-vi.mock('./api', () => ({ api: apiMock }))
+vi.mock('./api', () => ({
+  api: apiMock,
+  isRequestCancelled: (error) => error?.code === 'ABORTED' || error?.cancelled === true,
+}))
 vi.mock('./router', () => ({ router: routerMock }))
 vi.mock('./logger', () => ({ logger: loggerMock }))
 
@@ -43,6 +48,11 @@ beforeEach(() => {
   })
   apiMock.batches.mockResolvedValue({ items: [], total: 0 })
   apiMock.sceneGrid.mockResolvedValue({ scene_id: '', batches: [], rows: [] })
+  apiMock.scenes.mockResolvedValue({
+    items: [], total: 0,
+    counts: { all: 0, fail: 0, warn: 0, pass: 0, added: 0, missing: 0 },
+  })
+  apiMock.item.mockResolvedValue({ id: 1, name: 'Scene1' })
 })
 
 afterEach(() => vi.useRealTimers())
@@ -122,6 +132,32 @@ describe('batch initialization and request ordering', () => {
         created_to: '2026-07-13',
       }),
     ])
+  })
+
+  it('并发初始化复用同一轮请求，失败后可以重试', async () => {
+    const store = useStore()
+    const meta = deferred()
+    apiMock.meta.mockReturnValueOnce(meta.promise)
+
+    const first = store.init('Village_Dimension_Main')
+    const duplicate = store.init('Village_Dimension_Main')
+    expect(store.initializing).toBe(true)
+    expect(apiMock.meta).toHaveBeenCalledTimes(1)
+    expect(apiMock.settings).toHaveBeenCalledTimes(1)
+
+    meta.reject(new Error('网络不可用'))
+    await expect(first).rejects.toThrow('网络不可用')
+    await expect(duplicate).rejects.toThrow('网络不可用')
+    expect(store.initializing).toBe(false)
+    expect(store.initialized).toBe(false)
+    expect(store.initError).toContain('网络不可用')
+
+    apiMock.meta.mockResolvedValue({ scene_ids: [], platforms: [], baselines: [] })
+    await store.init('')
+
+    expect(apiMock.meta).toHaveBeenCalledTimes(2)
+    expect(store.initialized).toBe(true)
+    expect(store.initError).toBe('')
   })
 
   it('深链场景不在权威目录时回退到未选择场景的列表', async () => {
@@ -204,6 +240,33 @@ describe('batch initialization and request ordering', () => {
 
     expect(store.batches).toEqual([])
     expect(store.batchTotal).toBe(0)
+  })
+
+  it('批次或列表图加载失败时保存错误，重试成功后清除', async () => {
+    const store = useStore()
+    const timeout = Object.assign(new Error('请求超时（30 秒），请重试'), {
+      code: 'TIMEOUT', retryable: true,
+    })
+
+    apiMock.batches.mockRejectedValueOnce(timeout)
+    await expect(store.loadBatches()).rejects.toThrow('请求超时')
+    expect(store.batchLoading).toBe(false)
+    expect(store.batchError).toContain('请求超时')
+
+    apiMock.batches.mockResolvedValueOnce({ items: [{ id: 'ok' }], total: 1 })
+    await store.loadBatches()
+    expect(store.batchError).toBe('')
+    expect(store.batches).toEqual([{ id: 'ok' }])
+
+    store.filters.scene_id = 'SceneA'
+    apiMock.sceneGrid.mockRejectedValueOnce(timeout)
+    await expect(store.loadGrid()).rejects.toThrow('请求超时')
+    expect(store.gridLoading).toBe(false)
+    expect(store.gridError).toContain('请求超时')
+
+    apiMock.sceneGrid.mockResolvedValueOnce({ scene_id: 'SceneA', batches: [], rows: [] })
+    await store.loadGrid()
+    expect(store.gridError).toBe('')
   })
 
   it('快速切换场景时忽略晚到的旧列表图响应', async () => {
@@ -311,6 +374,206 @@ describe('comparison orientation', () => {
     expect(store.baselineBatch).toBeNull()
     expect(store.currentBatch).toEqual(batch)
     expect(store.rolesByScene.SceneA).toEqual({ baseline: null, current: batch })
+  })
+})
+
+describe('comparison data request coordination', () => {
+  it('场景列表相同参数复用请求，参数变化时取消旧请求且只写入最新结果', async () => {
+    const store = useStore()
+    const oldRequest = deferred()
+    const currentRequest = deferred()
+    apiMock.scenes
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockImplementationOnce(() => currentRequest.promise)
+    store.selectedComparison = { id: 42 }
+
+    const oldLoad = store.loadScenes()
+    const duplicate = store.loadScenes()
+    expect(apiMock.scenes).toHaveBeenCalledTimes(1)
+    const oldSignal = apiMock.scenes.mock.calls[0][2].signal
+
+    store.sceneSearch = 'latest'
+    const currentLoad = store.loadScenes()
+    expect(apiMock.scenes).toHaveBeenCalledTimes(2)
+    expect(oldSignal.aborted).toBe(true)
+
+    currentRequest.resolve({
+      items: [{ id: 2, name: 'latest' }], total: 1,
+      counts: { all: 1, fail: 0, warn: 0, pass: 1, added: 0, missing: 0 },
+    })
+    await currentLoad
+    oldRequest.resolve({
+      items: [{ id: 1, name: 'stale' }], total: 99,
+      counts: { all: 99, fail: 99, warn: 0, pass: 0, added: 0, missing: 0 },
+    })
+    await Promise.all([oldLoad, duplicate])
+
+    expect(store.scenes).toEqual([{ id: 2, name: 'latest' }])
+    expect(store.sceneTotal).toBe(1)
+    expect(store.loading).toBe(false)
+  })
+
+  it('详情相同检查点复用请求，快速切换时取消旧请求并阻止旧详情回写', async () => {
+    const store = useStore()
+    const oldRequest = deferred()
+    const currentRequest = deferred()
+    apiMock.item
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockImplementationOnce(() => currentRequest.promise)
+
+    const oldLoad = store.selectScene(1)
+    const duplicate = store.selectScene(1)
+    expect(apiMock.item).toHaveBeenCalledTimes(1)
+    const oldSignal = apiMock.item.mock.calls[0][1].signal
+
+    const currentLoad = store.selectScene(2)
+    expect(apiMock.item).toHaveBeenCalledTimes(2)
+    expect(oldSignal.aborted).toBe(true)
+
+    currentRequest.resolve({ id: 2, name: 'latest' })
+    await currentLoad
+    oldRequest.resolve({ id: 1, name: 'stale' })
+    await Promise.all([oldLoad, duplicate])
+
+    expect(store.selectedSceneItemId).toBe(2)
+    expect(store.detail).toEqual({ id: 2, name: 'latest' })
+    expect(store.detailLoading).toBe(false)
+  })
+
+  it('热力图相同批次对复用查询，换批次后取消旧查询并只保留最新映射', async () => {
+    const store = useStore()
+    const oldRequest = deferred()
+    const currentRequest = deferred()
+    apiMock.comparisonLookup
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockImplementationOnce(() => currentRequest.promise)
+    const baseline = { id: '1', scene_id: 'SceneA' }
+    const oldCurrent = { id: '2', scene_id: 'SceneA' }
+    const current = { id: '3', scene_id: 'SceneA' }
+    store.grid = { batches: [baseline, oldCurrent, current], rows: [] }
+    store.baselineBatch = baseline
+    store.currentBatch = oldCurrent
+
+    const oldLoad = store.loadGridHeatmaps()
+    const duplicate = store.loadGridHeatmaps()
+    expect(apiMock.comparisonLookup).toHaveBeenCalledTimes(1)
+    const oldSignal = apiMock.comparisonLookup.mock.calls[0][2].signal
+
+    store.currentBatch = current
+    const currentLoad = store.loadGridHeatmaps()
+    expect(apiMock.comparisonLookup).toHaveBeenCalledTimes(2)
+    expect(oldSignal.aborted).toBe(true)
+
+    currentRequest.resolve({ exists: true, heatmaps: { shot: '/images/latest.webp' } })
+    await currentLoad
+    oldRequest.resolve({ exists: true, heatmaps: { shot: '/images/stale.webp' } })
+    await Promise.all([oldLoad, duplicate])
+
+    expect(store.gridHeatmaps).toMatchObject({
+      current_id: '3', baseline_id: '1',
+      map: { shot: '/images/latest.webp' },
+    })
+    expect(store.gridHeatmapLoading).toBe(false)
+  })
+
+  it('快速切换对比记录时只为最新场景加载详情', async () => {
+    const store = useStore()
+    const oldScenes = deferred()
+    const currentScenes = deferred()
+    apiMock.scenes
+      .mockImplementationOnce(() => oldScenes.promise)
+      .mockImplementationOnce(() => currentScenes.promise)
+    apiMock.item.mockResolvedValue({ id: 20, name: 'latest-detail' })
+
+    const oldOpen = store.openComparison({ id: 1 })
+    const oldSignal = apiMock.scenes.mock.calls[0][2].signal
+    const currentOpen = store.openComparison({ id: 2 })
+    expect(oldSignal.aborted).toBe(true)
+
+    currentScenes.resolve({
+      items: [{ id: 20, name: 'latest-scene' }], total: 1,
+      counts: { all: 1, fail: 0, warn: 0, pass: 1, added: 0, missing: 0 },
+    })
+    await currentOpen
+    oldScenes.resolve({
+      items: [{ id: 10, name: 'stale-scene' }], total: 1,
+      counts: { all: 1, fail: 1, warn: 0, pass: 0, added: 0, missing: 0 },
+    })
+    await oldOpen
+
+    expect(apiMock.item).toHaveBeenCalledTimes(1)
+    expect(apiMock.item).toHaveBeenCalledWith(20, expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }))
+    expect(store.selectedComparison.id).toBe(2)
+    expect(store.detail).toEqual({ id: 20, name: 'latest-detail' })
+  })
+
+  it('离开页面会取消场景、详情和热力图请求并停止加载状态', async () => {
+    const store = useStore()
+    const sceneRequest = deferred()
+    const detailRequest = deferred()
+    const heatmapRequest = deferred()
+    apiMock.scenes.mockReturnValue(sceneRequest.promise)
+    apiMock.item.mockReturnValue(detailRequest.promise)
+    apiMock.comparisonLookup.mockReturnValue(heatmapRequest.promise)
+    const baseline = { id: '1' }
+    const current = { id: '2' }
+    store.selectedComparison = { id: 42 }
+    store.grid = { batches: [baseline, current], rows: [] }
+    store.baselineBatch = baseline
+    store.currentBatch = current
+
+    const scenes = store.loadScenes()
+    const detail = store.selectScene(7)
+    const heatmaps = store.loadGridHeatmaps()
+    const sceneSignal = apiMock.scenes.mock.calls[0][2].signal
+    const detailSignal = apiMock.item.mock.calls[0][1].signal
+    const heatmapSignal = apiMock.comparisonLookup.mock.calls[0][2].signal
+
+    store.cancelComparisonDataRequests()
+    store.cancelGridHeatmapRequest()
+
+    expect(sceneSignal.aborted).toBe(true)
+    expect(detailSignal.aborted).toBe(true)
+    expect(heatmapSignal.aborted).toBe(true)
+    expect(store.loading).toBe(false)
+    expect(store.detailLoading).toBe(false)
+    expect(store.gridHeatmapLoading).toBe(false)
+    expect(store.comparisonDataStale).toBe(true)
+
+    sceneRequest.resolve({ items: [{ id: 99 }], total: 1, counts: {} })
+    detailRequest.resolve({ id: 99 })
+    heatmapRequest.resolve({ exists: true, heatmaps: { stale: '/images/stale.webp' } })
+    await Promise.all([scenes, detail, heatmaps])
+
+    expect(store.scenes).toEqual([])
+    expect(store.detail).toBeNull()
+    expect(store.gridHeatmaps).toBeNull()
+  })
+
+  it('请求中离开结果页后重新进入会恢复当前对比的列表和详情', async () => {
+    const store = useStore()
+    store.selectedComparison = { id: 42 }
+    store.flip = true
+    store.comparisonDataStale = true
+    apiMock.scenes.mockResolvedValue({
+      items: [{ id: 7, name: 'restored-scene' }], total: 1,
+      counts: { all: 1, fail: 0, warn: 0, pass: 1, added: 0, missing: 0 },
+    })
+    apiMock.item.mockResolvedValue({ id: 7, name: 'restored-detail' })
+
+    await store.resumeComparisonData()
+
+    expect(apiMock.scenes).toHaveBeenCalledWith(42, expect.any(Object), expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }))
+    expect(apiMock.item).toHaveBeenCalledWith(7, expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }))
+    expect(store.comparisonDataStale).toBe(false)
+    expect(store.flip).toBe(true)
+    expect(store.detail).toEqual({ id: 7, name: 'restored-detail' })
   })
 })
 

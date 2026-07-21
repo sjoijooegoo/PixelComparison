@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import io
 import os
 import queue
 import threading
@@ -41,6 +42,11 @@ class ThumbnailService:
         self._queue: queue.Queue[Path | None] = queue.Queue(maxsize=max(1, queue_size))
         self._lock = threading.Lock()
         self._inflight: set[str] = set()
+        # generation 负责使覆盖/删除前启动的任务失效；desired 表示该路径当前仍需要
+        # 一个缩略图。同路径新上传发生在旧任务执行中时无需重复入队，旧任务会丢弃
+        # 结果并在原工作线程内处理最新版本。
+        self._generations: dict[str, int] = {}
+        self._desired: set[str] = set()
         self._threads: list[threading.Thread] = []
         self._accepting = False
         self._last_pruned = 0.0
@@ -76,6 +82,9 @@ class ThumbnailService:
         """
         with self._lock:
             self._accepting = False
+            for key in self._inflight:
+                self._generations[key] = self._generations.get(key, 0) + 1
+            self._desired.clear()
             threads = list(self._threads)
 
         while True:
@@ -85,7 +94,9 @@ class ThumbnailService:
                 break
             if pending is not None:
                 with self._lock:
-                    self._inflight.discard(pending.as_posix())
+                    key = pending.as_posix()
+                    self._inflight.discard(key)
+                    self._generations.pop(key, None)
             self._queue.task_done()
 
         for _thread in threads:
@@ -100,8 +111,17 @@ class ThumbnailService:
         relative_path = Path(relative_path)
         key = relative_path.as_posix()
         with self._lock:
-            if not self._accepting or key in self._inflight:
+            if not self._accepting:
                 return False
+            if key in self._inflight:
+                # 普通重复请求继续去重；若路径刚被 invalidate_prefix 失效，重新标记
+                # desired 即可，正在运行的工作线程会在丢弃旧结果后处理新文件。
+                if key not in self._desired:
+                    self._desired.add(key)
+                    return True
+                return False
+            self._generations[key] = self._generations.get(key, 0) + 1
+            self._desired.add(key)
             self._inflight.add(key)
         try:
             self._queue.put_nowait(relative_path)
@@ -109,7 +129,23 @@ class ThumbnailService:
         except queue.Full:
             with self._lock:
                 self._inflight.discard(key)
+                self._desired.discard(key)
+                self._generations.pop(key, None)
             return False
+
+    def invalidate_prefix(self, relative_prefix: Path) -> None:
+        """使某目录下已排队/运行的任务失效，且与最终缓存发布互斥。
+
+        批次删除或覆盖必须先调用本方法再删除缓存目录。若随后有同路径新上传，
+        submit 会把该路径重新标记为 desired，原工作线程自动转而生成最新版本。
+        """
+        prefix_parts = Path(relative_prefix).parts
+        with self._lock:
+            for key in tuple(self._inflight):
+                if Path(key).parts[:len(prefix_parts)] != prefix_parts:
+                    continue
+                self._generations[key] = self._generations.get(key, 0) + 1
+                self._desired.discard(key)
 
     def cache_path(self, relative_path: Path) -> Path:
         return (self.cache_root / relative_path).with_suffix(".webp")
@@ -120,33 +156,72 @@ class ThumbnailService:
             if item is None:
                 self._queue.task_done()
                 return
+            key = item.as_posix()
             try:
-                self._generate(item)
+                while True:
+                    with self._lock:
+                        if not self._accepting or key not in self._desired:
+                            break
+                        generation = self._generations[key]
+                    completed = self._generate(item, generation)
+                    with self._lock:
+                        if not self._accepting or key not in self._desired:
+                            break
+                        if self._generations.get(key) != generation:
+                            continue
+                        if completed:
+                            self._desired.discard(key)
+                            break
+                        # 原图在编码期间被外部改写但没有经过 invalidate_prefix；
+                        # 保持 desired，在当前工作线程中重新读取最新版本。
             except Exception as error:  # noqa: BLE001
                 log.warning("缩略图后台生成失败 %s: %s", item.as_posix(), error)
             finally:
                 with self._lock:
-                    self._inflight.discard(item.as_posix())
+                    self._inflight.discard(key)
+                    self._desired.discard(key)
+                    self._generations.pop(key, None)
                 self._queue.task_done()
 
-    def _generate(self, relative_path: Path) -> None:
+    def _generate(self, relative_path: Path, generation: int) -> bool:
+        """编码当前原图；仅在任务代次和原图版本都未变化时发布缓存。"""
+        key = relative_path.as_posix()
         original = self.source_root / relative_path
         cache = self.cache_path(relative_path)
-        if cache.is_file() and cache.stat().st_mtime >= original.stat().st_mtime:
-            return
+        source_stat = original.stat()
+        source_version = (source_stat.st_mtime_ns, source_stat.st_size)
+        if cache.is_file() and cache.stat().st_mtime_ns >= source_stat.st_mtime_ns:
+            return True
 
         with Image.open(original) as source:
             image = source.convert("RGB")
         image.thumbnail((THUMB_WIDTH, THUMB_WIDTH * 10))
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        temporary = cache.with_name(f".{cache.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            image.save(temporary, format="WEBP", quality=THUMB_QUALITY)
-            os.replace(temporary, cache)
-        finally:
-            temporary.unlink(missing_ok=True)
+        encoded = io.BytesIO()
+        image.save(encoded, format="WEBP", quality=THUMB_QUALITY)
+
+        # 远程 stat 仍在锁外，避免共享盘卡顿阻塞 submit/invalidate；API 覆盖和删除
+        # 会先改变 generation，外部直接改文件则由前后版本比较识别。
+        current_stat = original.stat()
+        if (current_stat.st_mtime_ns, current_stat.st_size) != source_version:
+            return False
+
+        with self._lock:
+            if (
+                not self._accepting
+                or key not in self._desired
+                or self._generations.get(key) != generation
+            ):
+                return False
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            temporary = cache.with_name(f".{cache.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                temporary.write_bytes(encoded.getvalue())
+                os.replace(temporary, cache)
+            finally:
+                temporary.unlink(missing_ok=True)
 
         now = time.monotonic()
         if now - self._last_pruned >= _PRUNE_INTERVAL_SECONDS:
             self._last_pruned = now
             prune_thumbnails()
+        return True

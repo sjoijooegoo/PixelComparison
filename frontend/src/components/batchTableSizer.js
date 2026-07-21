@@ -17,7 +17,7 @@ export function createBatchTableSizer(store, {
     if (fit == null || fit === store.batchPageSize) return false
     store.batchPageSize = fit
     store.batchPage = 1
-    void store.loadBatches()
+    void store.loadBatches().catch(() => {})
     return true
   }
 
