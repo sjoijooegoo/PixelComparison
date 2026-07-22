@@ -318,6 +318,7 @@ let ro
 
 // 列表图默认停在最右(最新批次在右);仅切场景/首屏/keep-alive 返回时滚,自动刷新不打断
 let pendingScrollRight = true
+let pendingScrollTop = false
 const autoPinRight = ref(true)
 
 function stopAutoPin() {
@@ -352,6 +353,12 @@ function scrollToRight() {
       }
     }
     requestAnimationFrame(step)
+  })
+}
+
+function scrollToTop() {
+  nextTick(() => {
+    if (scroll.value) scroll.value.scrollTop = 0
   })
 }
 
@@ -401,11 +408,24 @@ watch(cols, () => {
     pendingScrollRight = false
     scrollToRight()
   }
+  if (pendingScrollTop && cols.value.length) {
+    pendingScrollTop = false
+    scrollToTop()
+  }
 })
-// 改场景 / 画质 / 创建时间任一(都会改变列集合)→ 重新加载后停到最右看最新;
-// 自动刷新不碰这些筛选字段,故不会打断用户的滚动位置。
+
+// 仅切换场景 ID 时统一回到第一行；立即重置一次，并在新矩阵到位后再次确认，
+// 覆盖旧 DOM 被加载态替换或浏览器因高度变化重新钳制 scrollTop 的情况。
+watch(() => store.filters.scene_id, () => {
+  pendingScrollTop = true
+  pendingScrollRight = true
+  autoPinRight.value = true
+  scrollToTop()
+})
+
+// 画质 / 创建时间变化仍只重新定位到最右看最新，不改变纵向浏览位置；
+// 自动刷新不碰这些筛选字段，也不会打断用户的滚动位置。
 watch(() => [
-  store.filters.scene_id,
   store.filters.shading_quality,
   store.filters.created_from,
   store.filters.created_to,
