@@ -163,12 +163,13 @@ let restoringPreviewTransform = false
 
 // 列索引 == cols.length 表示最右侧「差异热力图」虚拟列
 const isHeatCol = (c) => c === cols.value.length
-const previewSrc = computed(() => {
-  const row = rows.value[pr.value]
+function previewUrlAt(rowIndex, colIndex) {
+  const row = rows.value[rowIndex]
   if (!row) return ''
-  if (isHeatCol(pc.value)) return heatUrl(row.scene_name)
-  return row.cells[pc.value] || ''
-})
+  if (isHeatCol(colIndex)) return heatUrl(row.scene_name)
+  return row.cells[colIndex] || ''
+}
+const previewSrc = computed(() => previewUrlAt(pr.value, pc.value))
 
 // Arco 未公开受控的 scale/translate 属性，但组件实例提供了其响应式内部状态。
 // 用户滚轮缩放或拖动时同步记录；切换 src 后再写回，避免只改 CSS 导致后续拖动跳位。
@@ -216,10 +217,169 @@ const previewMeta = computed(() => {
 function cellOk(r, c) {
   const row = rows.value[r]
   if (!row) return false
-  if (isHeatCol(c)) return heatExists.value && !!heatUrl(row.scene_name)
-  if (!row.cells[c]) return false
+  if (isHeatCol(c)) return heatExists.value && !!previewUrlAt(r, c)
+  if (!previewUrlAt(r, c)) return false
   const b = cols.value[c]
   return !!b && !isCollapsed(b.id)
+}
+
+// 与方向键共用同一寻址规则：跳过空格和折叠列，找到该方向最近的有效图片。
+function findPreviewTarget(rowIndex, colIndex, dRow, dCol) {
+  let r = rowIndex + dRow
+  let c = colIndex + dCol
+  while (r >= 0 && r < rows.value.length && c >= 0 && c <= cols.value.length) {
+    if (cellOk(r, c)) return { rowIndex: r, colIndex: c }
+    r += dRow
+    c += dCol
+  }
+  return null
+}
+
+const PREVIEW_PRELOAD_CONCURRENCY = 2
+const PREVIEW_IMAGE_TIMEOUT_MS = 30_000
+const PREVIEW_PRELOAD_DIRECTIONS = [
+  [0, -1], // 左右优先：同一检查点跨批次对比更常用
+  [0, 1],
+  [-1, 0],
+  [1, 0],
+]
+let currentImageProbe = null
+let currentImageProbeTimer = null
+let currentImageProbeRun = 0
+let previewPreloadQueue = []
+const previewPreloadActive = new Map()
+const previewPreloadSeen = new Set()
+const previewPreloadLoaded = new Set()
+
+function detachPreloadImage(image) {
+  image.onload = null
+  image.onerror = null
+  // Image 没有 AbortController；移除 src 可尽力停止未完成请求，回调序号仍负责最终隔离。
+  try { image.removeAttribute?.('src') } catch { /* 浏览器不支持时仅失效回调 */ }
+}
+
+function cancelCurrentImageProbe() {
+  currentImageProbeRun += 1
+  if (currentImageProbeTimer !== null) {
+    clearTimeout(currentImageProbeTimer)
+    currentImageProbeTimer = null
+  }
+  if (!currentImageProbe) return
+  detachPreloadImage(currentImageProbe)
+  currentImageProbe = null
+}
+
+function stopPreviewPreloading() {
+  cancelCurrentImageProbe()
+  previewPreloadQueue = []
+  for (const task of [...previewPreloadActive.values()]) {
+    detachPreloadImage(task.image)
+    task.finish(false)
+  }
+  previewPreloadActive.clear()
+  previewPreloadSeen.clear()
+  previewPreloadLoaded.clear()
+}
+
+function pumpPreviewPreloads() {
+  while (previewPreloadActive.size < PREVIEW_PRELOAD_CONCURRENCY && previewPreloadQueue.length) {
+    const url = previewPreloadQueue.shift()
+    if (!url || previewPreloadSeen.has(url)) continue
+    const image = new Image()
+    image.decoding = 'async'
+    let resolveDone
+    const task = {
+      image,
+      settled: false,
+      done: new Promise((resolve) => { resolveDone = resolve }),
+      timer: null,
+      finish(loaded) {
+        if (task.settled) return
+        task.settled = true
+        if (task.timer !== null) clearTimeout(task.timer)
+        task.timer = null
+        image.onload = null
+        image.onerror = null
+        if (loaded) previewPreloadLoaded.add(url)
+        if (previewPreloadActive.get(url) === task) previewPreloadActive.delete(url)
+        resolveDone(loaded)
+        pumpPreviewPreloads()
+      },
+    }
+    image.onload = () => task.finish(true)
+    image.onerror = () => task.finish(false) // 后台失败静默跳过；真正打开时仍由灯箱正常请求
+    previewPreloadSeen.add(url)
+    previewPreloadActive.set(url, task)
+    task.timer = setTimeout(() => {
+      detachPreloadImage(image)
+      task.finish(false)
+    }, PREVIEW_IMAGE_TIMEOUT_MS)
+    image.src = url
+  }
+}
+
+function replacePreviewPreloadQueue(urls) {
+  previewPreloadQueue = []
+  const queued = new Set()
+  for (const url of urls) {
+    if (!url || previewPreloadSeen.has(url) || queued.has(url)) continue
+    queued.add(url)
+    previewPreloadQueue.push(url)
+  }
+  pumpPreviewPreloads()
+}
+
+function previewNeighborUrls() {
+  return PREVIEW_PRELOAD_DIRECTIONS.flatMap(([dRow, dCol]) => {
+    const target = findPreviewTarget(pr.value, pc.value, dRow, dCol)
+    return target ? [previewUrlAt(target.rowIndex, target.colIndex)] : []
+  })
+}
+
+// 灯箱和探针请求同一 URL，浏览器会合并网络请求；只有当前图成功后才启动相邻预加载。
+function probeCurrentImage(src) {
+  cancelCurrentImageProbe()
+  previewPreloadQueue = []       // 快速切图时丢弃尚未启动的旧位置预加载
+  if (!src) return
+  const run = currentImageProbeRun
+  const finish = (loaded) => {
+    if (!loaded || run !== currentImageProbeRun || !previewVisible.value || previewSrc.value !== src) return
+    previewPreloadSeen.add(src)
+    previewPreloadLoaded.add(src)
+    replacePreviewPreloadQueue(previewNeighborUrls())
+  }
+
+  // 已由本次灯箱会话加载完成，或正在作为相邻图加载时，直接复用结果，不再创建重复 Image。
+  if (previewPreloadLoaded.has(src)) {
+    Promise.resolve().then(() => finish(true))
+    return
+  }
+  const activeTask = previewPreloadActive.get(src)
+  if (activeTask) {
+    activeTask.done.then(finish)
+    return
+  }
+
+  const image = new Image()
+  image.decoding = 'async'
+  currentImageProbe = image
+  const finishProbe = (loaded) => {
+    if (currentImageProbeTimer !== null) {
+      clearTimeout(currentImageProbeTimer)
+      currentImageProbeTimer = null
+    }
+    if (currentImageProbe === image) currentImageProbe = null
+    image.onload = null
+    image.onerror = null
+    finish(loaded)
+  }
+  image.onload = () => finishProbe(true)
+  image.onerror = () => finishProbe(false)
+  currentImageProbeTimer = setTimeout(() => {
+    detachPreloadImage(image)
+    finishProbe(false)
+  }, PREVIEW_IMAGE_TIMEOUT_MS)
+  image.src = src
 }
 
 function openPreview(rowIndex, colIndex) {
@@ -233,6 +393,7 @@ function openPreview(rowIndex, colIndex) {
 function setPreviewVisible(visible) {
   previewVisible.value = visible
   if (!visible) {
+    stopPreviewPreloading()
     previewScale.value = 1
     previewTranslate.value = [0, 0]
   }
@@ -240,16 +401,19 @@ function setPreviewVisible(visible) {
 
 // 朝某方向找下一个可落点;找不到就停在原地(不循环)
 function step(dRow, dCol) {
-  if (dCol) {
-    for (let c = pc.value + dCol; c >= 0 && c <= cols.value.length; c += dCol) {
-      if (cellOk(pr.value, c)) { pc.value = c; return }
-    }
-  } else if (dRow) {
-    for (let r = pr.value + dRow; r >= 0 && r < rows.value.length; r += dRow) {
-      if (cellOk(r, pc.value)) { pr.value = r; return }
-    }
-  }
+  const target = findPreviewTarget(pr.value, pc.value, dRow, dCol)
+  if (!target) return
+  pr.value = target.rowIndex
+  pc.value = target.colIndex
 }
+
+watch([previewVisible, previewSrc], ([visible, src]) => {
+  if (!visible || !src) {
+    stopPreviewPreloading()
+    return
+  }
+  probeCurrentImage(src)
+}, { flush: 'post' }) // 先让灯箱挂载当前原图，再用同 URL 探针等待其完成
 
 function onKey(e) {
   if (!previewVisible.value) return
@@ -387,9 +551,13 @@ onActivated(() => {
   store.loadGridHeatmaps()
   if (cols.value.length) scrollToRight()
 })
-onDeactivated(() => store.cancelGridHeatmapRequest())
+onDeactivated(() => {
+  store.cancelGridHeatmapRequest()
+  setPreviewVisible(false)
+})
 onUnmounted(() => {
   store.cancelGridHeatmapRequest()
+  stopPreviewPreloading()
   columnAnchorRun += 1
   columnAnchorSides.clear()
   ro?.disconnect()
@@ -417,6 +585,7 @@ watch(cols, () => {
 // 仅切换场景 ID 时统一回到第一行；立即重置一次，并在新矩阵到位后再次确认，
 // 覆盖旧 DOM 被加载态替换或浏览器因高度变化重新钳制 scrollTop 的情况。
 watch(() => store.filters.scene_id, () => {
+  setPreviewVisible(false)
   pendingScrollTop = true
   pendingScrollRight = true
   autoPinRight.value = true

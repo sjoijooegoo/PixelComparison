@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { defineComponent, nextTick } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
@@ -58,35 +58,123 @@ import BatchGrid from './BatchGrid.vue'
 
 const storeMock = storeHolder.current
 const SlotStub = defineComponent({ template: '<div><slot/></div>' })
+let wrapper
+let imageRequests
+
+class ControlledImage {
+  constructor() {
+    this.onload = null
+    this.onerror = null
+    this.decoding = ''
+    this.src = ''
+    this.cancelled = false
+    imageRequests.push(this)
+  }
+
+  resolve() {
+    this.onload?.()
+  }
+
+  reject() {
+    this.onerror?.()
+  }
+
+  removeAttribute(name) {
+    if (name === 'src') {
+      this.src = ''
+      this.cancelled = true
+    }
+  }
+}
+
+function defaultGrid() {
+  return {
+    batches: [{
+      id: '1', created_at: '2026-07-14 12:00:00', p4_version: 1,
+      shading_quality_label: '电影', scene_id: 'SceneA',
+    }],
+    rows: [],
+  }
+}
+
+function previewGrid() {
+  return {
+    batches: ['1', '2', '3'].map((id) => ({
+      id, created_at: '2026-07-14 12:00:00', p4_version: 1,
+      shading_quality_label: '电影', scene_id: 'SceneA',
+    })),
+    rows: [
+      { scene_name: 'Up', cells: ['/images/up-left.png', '/images/up.png', '/images/up-right.png'] },
+      { scene_name: 'Middle', cells: ['/images/left.png', '/images/current.png', '/images/right.png'] },
+      { scene_name: 'Down', cells: ['/images/down-left.png', '/images/down.png', '/images/down-right.png'] },
+    ],
+  }
+}
+
+function mountGrid() {
+  wrapper = mount(BatchGrid, {
+    global: {
+      stubs: {
+        'a-empty': SlotStub,
+        'a-button': SlotStub,
+        'a-spin': SlotStub,
+        'a-image-preview': SlotStub,
+      },
+    },
+  })
+  return wrapper
+}
+
+function mountKeptGrid() {
+  const Host = defineComponent({
+    components: { BatchGrid },
+    setup() {
+      return { show: ref(true) }
+    },
+    template: '<keep-alive><BatchGrid v-if="show" /></keep-alive>',
+  })
+  wrapper = mount(Host, {
+    global: {
+      stubs: {
+        'a-empty': SlotStub,
+        'a-button': SlotStub,
+        'a-spin': SlotStub,
+        'a-image-preview': SlotStub,
+      },
+    },
+  })
+  return wrapper
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
+  imageRequests = []
   storeMock.filters.scene_id = 'SceneA'
   storeMock.filters.shading_quality = 5
+  storeMock.grid = defaultGrid()
+  storeMock.gridCollapsed = new Set()
+  storeMock.gridHeatmaps = null
+  storeMock.baselineBatch = null
+  storeMock.currentBatch = null
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
     unobserve() {}
     disconnect() {}
   })
   vi.stubGlobal('requestAnimationFrame', (callback) => setTimeout(callback, 0))
+  vi.stubGlobal('Image', ControlledImage)
 })
 
 afterEach(() => {
+  wrapper?.unmount()
+  wrapper = null
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
 describe('BatchGrid scene scrolling', () => {
   it('只有场景 ID 变化时将纵向滚动位置重置为顶部', async () => {
-    const wrapper = mount(BatchGrid, {
-      global: {
-        stubs: {
-          'a-empty': SlotStub,
-          'a-button': SlotStub,
-          'a-spin': SlotStub,
-          'a-image-preview': SlotStub,
-        },
-      },
-    })
+    mountGrid()
     const scroller = wrapper.get('.grid-scroll').element
     scroller.scrollTop = 180
 
@@ -98,7 +186,228 @@ describe('BatchGrid scene scrolling', () => {
     await nextTick()
     await nextTick()
     expect(scroller.scrollTop).toBe(0)
+  })
+})
+
+describe('BatchGrid original image preloading', () => {
+  it('当前原图完成后才以最多两个并发按左右上下预加载相邻原图', async () => {
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    expect(imageRequests.map((image) => image.src)).toEqual(['/images/current.png'])
+
+    imageRequests[0].resolve()
+    expect(imageRequests.map((image) => image.src)).toEqual([
+      '/images/current.png',
+      '/images/left.png',
+      '/images/right.png',
+    ])
+
+    imageRequests[1].resolve()
+    expect(imageRequests.at(-1).src).toBe('/images/up.png')
+    imageRequests[2].resolve()
+    expect(imageRequests.at(-1).src).toBe('/images/down.png')
+  })
+
+  it('跳过空格和折叠列，并对四个方向的相同 URL 去重', async () => {
+    const grid = previewGrid()
+    grid.rows[0].cells[1] = ''
+    grid.rows[2].cells[1] = '/images/right.png'
+    storeMock.grid = grid
+    storeMock.gridCollapsed = new Set(['1'])
+    mountGrid()
+
+    const currentThumb = wrapper.findAll('.thumb').find((node) => node.attributes('src') === '/images/current.png')
+    await currentThumb.trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+
+    expect(imageRequests.map((image) => image.src)).toEqual([
+      '/images/current.png',
+      '/images/right.png',
+    ])
+  })
+
+  it('当前原图加载失败时不继续请求相邻原图', async () => {
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    imageRequests[0].reject()
+
+    expect(imageRequests).toHaveLength(1)
+  })
+
+  it('当前原图探针长期无响应时会超时停止，不启动相邻预加载', async () => {
+    vi.useFakeTimers()
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    vi.advanceTimersByTime(30_000)
+
+    expect(imageRequests).toHaveLength(1)
+    expect(imageRequests[0].cancelled).toBe(true)
+  })
+
+  it('相邻原图长期无响应时释放并发槽并继续后续队列', async () => {
+    vi.useFakeTimers()
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+    const hungNeighbors = imageRequests.slice(1)
+    vi.advanceTimersByTime(30_000)
+
+    expect(hungNeighbors.every((image) => image.cancelled)).toBe(true)
+    expect(imageRequests.map((image) => image.src)).toContain('/images/up.png')
+    expect(imageRequests.map((image) => image.src)).toContain('/images/down.png')
+  })
+
+  it('快速切换大图时用新位置的相邻图片替换旧等待队列', async () => {
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }))
+    await nextTick()
+    expect(imageRequests.filter((image) => image.src === '/images/right.png')).toHaveLength(1)
+
+    imageRequests[2].resolve()
+    await Promise.resolve()
+    imageRequests[1].resolve()
+    expect(imageRequests.map((image) => image.src)).toContain('/images/up-right.png')
+    expect(imageRequests.map((image) => image.src)).not.toContain('/images/up.png')
+    expect(imageRequests.map((image) => image.src)).not.toContain('/images/down.png')
+  })
+
+  it('切换场景后取消当前探针和后台相邻图，不再推进队列', async () => {
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+    const activeNeighbors = imageRequests.slice(1)
+
+    storeMock.filters.scene_id = 'SceneB'
+    await nextTick()
+    expect(activeNeighbors.every((image) => image.cancelled)).toBe(true)
+
+    storeMock.grid = previewGrid()
+    await nextTick()
+    expect(imageRequests).toHaveLength(3)
+
+    activeNeighbors.forEach((image) => image.resolve())
+    expect(imageRequests).toHaveLength(3)
+  })
+
+  it('关闭大图后取消后台相邻图，不再推进队列', async () => {
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+    const activeNeighbors = imageRequests.slice(1)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await nextTick()
+    expect(activeNeighbors.every((image) => image.cancelled)).toBe(true)
+
+    activeNeighbors.forEach((image) => image.resolve())
+    expect(imageRequests).toHaveLength(3)
+  })
+
+  it('组件卸载后取消后台相邻图，不再推进队列', async () => {
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+    const activeNeighbors = imageRequests.slice(1)
 
     wrapper.unmount()
+    wrapper = null
+    expect(activeNeighbors.every((image) => image.cancelled)).toBe(true)
+
+    activeNeighbors.forEach((image) => image.resolve())
+    expect(imageRequests).toHaveLength(3)
+  })
+
+  it('keep-alive 离开批次页面时关闭大图并停止后台预加载', async () => {
+    storeMock.grid = previewGrid()
+    mountKeptGrid()
+
+    await wrapper.findAll('.thumb')[4].trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+    const activeNeighbors = imageRequests.slice(1)
+
+    wrapper.vm.show = false
+    await nextTick()
+    expect(activeNeighbors.every((image) => image.cancelled)).toBe(true)
+
+    activeNeighbors.forEach((image) => image.resolve())
+    expect(imageRequests).toHaveLength(3)
+  })
+
+  it('从热力图大图按左右上下规则预加载有效相邻图片', async () => {
+    storeMock.grid = previewGrid()
+    storeMock.baselineBatch = storeMock.grid.batches[0]
+    storeMock.currentBatch = storeMock.grid.batches[1]
+    storeMock.gridHeatmaps = {
+      baseline_id: '1',
+      current_id: '2',
+      exists: true,
+      map: {
+        Up: '/heat/up.png',
+        Middle: '/heat/middle.png',
+        Down: '/heat/down.png',
+      },
+    }
+    mountGrid()
+
+    const heatThumb = wrapper.findAll('.thumb').find((node) => node.attributes('src') === '/heat/middle.png')
+    await heatThumb.trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+
+    expect(imageRequests.map((image) => image.src)).toEqual([
+      '/heat/middle.png',
+      '/images/right.png',
+      '/heat/up.png',
+    ])
+    imageRequests[1].resolve()
+    expect(imageRequests.at(-1).src).toBe('/heat/down.png')
+  })
+
+  it('不存在热力图时不会把虚拟列作为预加载目标', async () => {
+    storeMock.grid = previewGrid()
+    mountGrid()
+
+    const rightThumb = wrapper.findAll('.thumb').find((node) => node.attributes('src') === '/images/right.png')
+    await rightThumb.trigger('click')
+    await nextTick()
+    imageRequests[0].resolve()
+
+    expect(imageRequests.map((image) => image.src)).toEqual([
+      '/images/right.png',
+      '/images/current.png',
+      '/images/up-right.png',
+    ])
+    imageRequests[1].resolve()
+    expect(imageRequests.at(-1).src).toBe('/images/down-right.png')
+    expect(imageRequests.some((image) => image.src.startsWith('/heat/'))).toBe(false)
   })
 })
