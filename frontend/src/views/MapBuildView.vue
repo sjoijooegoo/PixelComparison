@@ -25,6 +25,8 @@ const filters = reactive({
 })
 const selection = reactive({ blockIndex: null, subBlockIndex: null, registryPath: null })
 const metricScope = ref('self')
+const trendRangeMode = ref('recent')
+const customDateRange = ref([])
 const metaLoading = ref(false)
 const overviewLoading = ref(false)
 const trendLoading = ref(false)
@@ -36,6 +38,9 @@ const requests = {
   trend: { sequence: 0, controller: null },
 }
 let unregisterPageRefresh = null
+let routeApplySequence = 0
+const DEFAULT_TREND_DAYS = 30
+const VALID_TREND_DAYS = new Set([7, 14, 30, 60, 90])
 
 function beginRequest(channel) {
   const runtime = requests[channel]
@@ -85,12 +90,99 @@ function routeSceneId() {
   return (Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId) || ''
 }
 
-async function syncSceneRoute() {
+function routeQueryValue(name) {
+  const value = route.query?.[name]
+  return Array.isArray(value) ? value[0] : value
+}
+
+function dateStamp(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null
+  const stamp = Date.parse(`${value}T00:00:00Z`)
+  if (Number.isNaN(stamp) || new Date(stamp).toISOString().slice(0, 10) !== value) return null
+  return stamp
+}
+
+function customRangeDays(range) {
+  if (!Array.isArray(range) || range.length !== 2) return 0
+  const start = dateStamp(range[0])
+  const end = dateStamp(range[1])
+  if (start === null || end === null) return 0
+  return Math.floor((end - start) / 86_400_000) + 1
+}
+
+function parseNonNegativeInteger(value) {
+  if (value === undefined || value === null || value === '') return null
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
+}
+
+function routeAnalysisState() {
+  const requestedDays = Number(routeQueryValue('days'))
+  const blockIndex = parseNonNegativeInteger(routeQueryValue('block'))
+  const requestedRange = [routeQueryValue('start'), routeQueryValue('end')]
+  const requestedRangeDays = customRangeDays(requestedRange)
+  const hasValidCustomRange = requestedRangeDays >= 1 && requestedRangeDays <= 90
+  return {
+    batchId: routeQueryValue('batch') || '',
+    days: VALID_TREND_DAYS.has(requestedDays) ? requestedDays : DEFAULT_TREND_DAYS,
+    trendRangeMode: hasValidCustomRange ? 'custom' : 'recent',
+    customDateRange: hasValidCustomRange ? requestedRange : [],
+    metricScope: routeQueryValue('scope') === 'subtree' ? 'subtree' : 'self',
+    blockIndex,
+    subBlockIndex: blockIndex === null
+      ? null
+      : parseNonNegativeInteger(routeQueryValue('sub')),
+    registryPath: routeQueryValue('registry') || null,
+  }
+}
+
+function applyAnalysisState(state) {
+  filters.batchId = state.batchId
+  filters.days = state.days
+  trendRangeMode.value = state.trendRangeMode
+  customDateRange.value = state.customDateRange
+  metricScope.value = state.metricScope
+  selection.registryPath = state.registryPath
+  selection.blockIndex = state.registryPath === null ? state.blockIndex : null
+  selection.subBlockIndex = state.registryPath === null ? state.subBlockIndex : null
+}
+
+function analysisQuery() {
+  if (!overview.value) return {}
+  const query = {
+    batch: String(filters.batchId),
+    scope: metricScope.value,
+  }
+  if (trendRangeMode.value === 'custom' && customRangeDays(customDateRange.value) > 0) {
+    query.start = customDateRange.value[0]
+    query.end = customDateRange.value[1]
+  } else query.days = String(filters.days)
+  if (selection.registryPath !== null) query.registry = selection.registryPath
+  else if (selection.blockIndex !== null) {
+    query.block = String(selection.blockIndex)
+    if (selection.subBlockIndex !== null) query.sub = String(selection.subBlockIndex)
+  }
+  return query
+}
+
+function sameRouteQuery(left, right) {
+  const normalize = (query) => Object.fromEntries(
+    Object.entries(query || {})
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .map(([key, value]) => [key, String(Array.isArray(value) ? value[0] : value)])
+      .sort(([a], [b]) => a.localeCompare(b)),
+  )
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
+}
+
+async function syncAnalysisRoute() {
   if (!route.path.startsWith('/map-build')) return
   const path = filters.sceneId
     ? `/map-build/${encodeURIComponent(filters.sceneId)}`
     : '/map-build'
-  if (route.path !== path) await router.replace(path)
+  const query = analysisQuery()
+  if (route.path === path && sameRouteQuery(route.query, query)) return
+  await router.replace(Object.keys(query).length ? { path, query } : path)
 }
 
 async function loadMeta(requestedSceneId) {
@@ -139,7 +231,7 @@ function normalizeMetricScope(data) {
 
 async function loadOverview(
   requestedBatchId = filters.batchId,
-  { preserveOnError = false } = {},
+  { preserveOnError = false, onFailure = null } = {},
 ) {
   if (!filters.sceneId) {
     overview.value = null
@@ -165,6 +257,7 @@ async function loadOverview(
     if (isRequestCancelled(cause) || !request.isLatest()) return null
     if (!preserveOnError) overview.value = null
     error.value = cause?.message || '烘培分块数据加载失败'
+    onFailure?.(cause)
     return null
   } finally {
     if (request.isLatest()) overviewLoading.value = false
@@ -186,6 +279,12 @@ async function loadTrend({ preserveOnError = false } = {}) {
       ? 'self'
       : metricScope.value
     const params = { days: filters.days, metric_scope: effectiveMetricScope }
+    if (trendRangeMode.value === 'custom') {
+      if (customRangeDays(customDateRange.value) < 1) return null
+      delete params.days
+      params.start_date = customDateRange.value[0]
+      params.end_date = customDateRange.value[1]
+    }
     if (selection.registryPath !== null) params.registry_path = selection.registryPath
     else if (selection.blockIndex !== null) params.block_index = selection.blockIndex
     if (selection.subBlockIndex !== null) params.sub_block_index = selection.subBlockIndex
@@ -221,25 +320,77 @@ async function loadSelectedScene() {
 
 async function changeScene() {
   await loadSelectedScene()
-  await syncSceneRoute()
+  await syncAnalysisRoute()
 }
 
-async function applyRouteScene() {
+async function applyRouteState() {
   if (!routeReady.value) return
+  const sequence = ++routeApplySequence
   const preferredSceneId = meta.value.scene_ids[0]?.value || ''
   const nextSceneId = keepOrDefault(routeSceneId(), sceneOptions.value, preferredSceneId)
-  if (filters.sceneId !== nextSceneId) {
+  const nextState = routeAnalysisState()
+  const sceneChanged = filters.sceneId !== nextSceneId
+  const batchChanged = String(filters.batchId) !== String(nextState.batchId)
+  const analysisChanged = filters.days !== nextState.days
+    || trendRangeMode.value !== nextState.trendRangeMode
+    || customDateRange.value.join('|') !== nextState.customDateRange.join('|')
+    || metricScope.value !== nextState.metricScope
+    || selection.blockIndex !== nextState.blockIndex
+    || selection.subBlockIndex !== nextState.subBlockIndex
+    || selection.registryPath !== nextState.registryPath
+  if (!sceneChanged && !batchChanged && !analysisChanged) return
+
+  const previousBatchId = overview.value?.batch?.id ?? ''
+  if (sceneChanged) {
     filters.sceneId = nextSceneId
-    await loadSelectedScene()
+    overview.value = null
+    trend.value = { selection: { label: '主分块 · 仅自身' }, points: [] }
   }
-  await syncSceneRoute()
+  applyAnalysisState(nextState)
+  if (!filters.sceneId || !selectedSceneHasData.value) {
+    clearSceneData()
+    await syncAnalysisRoute()
+    return
+  }
+
+  let failed = false
+  if (sceneChanged || batchChanged) {
+    const loaded = await loadOverview(nextState.batchId, {
+      preserveOnError: !sceneChanged,
+      onFailure: () => { failed = true },
+    })
+    if (sequence !== routeApplySequence) return
+    if (failed && !sceneChanged) filters.batchId = previousBatchId
+    if (!loaded) {
+      await syncAnalysisRoute()
+      return
+    }
+  }
+  if (!selectionExists(overview.value)) {
+    selection.blockIndex = null
+    selection.subBlockIndex = null
+    selection.registryPath = null
+  }
+  normalizeMetricScope(overview.value)
+  await loadTrend({ preserveOnError: !sceneChanged })
+  if (sequence !== routeApplySequence) return
+  await syncAnalysisRoute()
 }
 
 async function changeBatch() {
   error.value = ''
+  const requestedBatchId = filters.batchId
+  const previousBatchId = overview.value?.batch?.id ?? ''
   const previousSelectionKey = selectionKey.value
   const previousMetricScope = metricScope.value
-  const loaded = await loadOverview(filters.batchId)
+  let failed = false
+  const loaded = await loadOverview(requestedBatchId, {
+    preserveOnError: true,
+    onFailure: () => { failed = true },
+  })
+  if (failed && String(filters.batchId) === String(requestedBatchId)) {
+    filters.batchId = previousBatchId
+  }
   if (
     loaded
     && (
@@ -249,6 +400,7 @@ async function changeBatch() {
   ) {
     await loadTrend()
   }
+  await syncAnalysisRoute()
 }
 
 async function selectTrendBatch(batch) {
@@ -264,6 +416,7 @@ async function choose(blockIndex = null, subBlockIndex = null) {
   selection.registryPath = null
   error.value = ''
   await loadTrend()
+  await syncAnalysisRoute()
 }
 
 async function chooseAuxiliary(registryPath) {
@@ -272,6 +425,7 @@ async function chooseAuxiliary(registryPath) {
   selection.registryPath = registryPath
   error.value = ''
   await loadTrend()
+  await syncAnalysisRoute()
 }
 
 async function changeMetricScope(scope) {
@@ -279,6 +433,40 @@ async function changeMetricScope(scope) {
   metricScope.value = scope
   error.value = ''
   await loadTrend()
+  await syncAnalysisRoute()
+}
+
+async function changeTrendRangeMode(value) {
+  if (value === 'custom') {
+    trendRangeMode.value = 'custom'
+    error.value = ''
+    if (customRangeDays(customDateRange.value) >= 1) {
+      await loadTrend()
+      await syncAnalysisRoute()
+    }
+    return
+  }
+  trendRangeMode.value = 'recent'
+  filters.days = Number(value)
+  error.value = ''
+  await loadTrend()
+  await syncAnalysisRoute()
+}
+
+async function changeCustomDateRange(range) {
+  const days = customRangeDays(range)
+  if (days < 1) {
+    error.value = '结束日期不能早于开始日期'
+    return
+  }
+  if (days > 90) {
+    error.value = '自定义日期范围最多 90 天'
+    return
+  }
+  customDateRange.value = [...range]
+  error.value = ''
+  await loadTrend()
+  await syncAnalysisRoute()
 }
 
 async function refresh() {
@@ -287,13 +475,14 @@ async function refresh() {
   if (!loaded) return
   if (!filters.sceneId || !selectedSceneHasData.value) {
     clearSceneData()
+    await syncAnalysisRoute()
     return
   }
-  await syncSceneRoute()
-  await Promise.all([
+  const [loadedOverview] = await Promise.all([
     loadOverview(filters.batchId, { preserveOnError: true }),
     loadTrend({ preserveOnError: true }),
   ])
+  if (loadedOverview) await syncAnalysisRoute()
 }
 
 const allCells = computed(() => overview.value?.blocks?.flatMap((block) => block.sub_blocks) || [])
@@ -405,14 +594,29 @@ function batchLabel(batch) {
 
 onMounted(async () => {
   unregisterPageRefresh = registerPageRefresh(refresh)
+  applyAnalysisState(routeAnalysisState())
   const loaded = await loadMeta(routeSceneId())
-  routeReady.value = true
-  await syncSceneRoute()
   if (loaded && filters.sceneId && selectedSceneHasData.value) {
-    await Promise.all([loadOverview(''), loadTrend()])
+    const loadedOverview = await loadOverview(filters.batchId)
+    if (loadedOverview) await loadTrend()
   }
+  routeReady.value = true
+  await syncAnalysisRoute()
 })
-watch(() => route.params.sceneId, applyRouteScene)
+watch(
+  () => [
+    route.params.sceneId,
+    route.query?.batch,
+    route.query?.days,
+    route.query?.start,
+    route.query?.end,
+    route.query?.scope,
+    route.query?.block,
+    route.query?.sub,
+    route.query?.registry,
+  ],
+  applyRouteState,
+)
 onUnmounted(() => {
   unregisterPageRefresh?.()
   Object.values(requests).forEach((request) => request.controller?.abort())
@@ -439,7 +643,8 @@ onUnmounted(() => {
         <div class="filter-field batch-field">
           <span class="label">网格批次</span>
           <a-select v-model="filters.batchId" class="batch-select" :loading="overviewLoading"
-            :disabled="!selectedSceneHasData" size="small" style="width: 520px" @change="changeBatch">
+            :disabled="!selectedSceneHasData" allow-search size="small" style="width: 520px"
+            @change="changeBatch">
             <a-option v-for="batch in overview?.available_batches || []" :key="batch.id" :value="batch.id">
               {{ batchLabel(batch) }}
             </a-option>
@@ -470,6 +675,10 @@ onUnmounted(() => {
 
       <template v-else>
         <div class="atlas-row">
+          <div v-if="overviewLoading && overview" class="overview-loading-veil" aria-live="polite">
+            <a-spin />
+            <span>正在切换批次…</span>
+          </div>
           <section class="atlas-card card" :class="{
             'world-selected': overview && isSelected()
               && (metricScope === 'subtree' || !overview.world?.has_children),
@@ -608,16 +817,18 @@ onUnmounted(() => {
               <span class="selection-pill">{{ trendSelectionLabel(trend.selection?.label) }}</span>
             </div>
             <div class="trend-controls">
-              <span v-if="trend.window?.start_date" class="window-caption">
-                {{ trend.window.start_date }} 至 {{ trend.window.end_date }} · {{ trend.points.length }} 个批次
-              </span>
-              <a-select v-model="filters.days" size="small" class="days-select" @change="loadTrend">
+              <a-select :model-value="trendRangeMode === 'custom' ? 'custom' : filters.days"
+                size="small" class="days-select" @change="changeTrendRangeMode">
                 <a-option :value="7">最近 7 天</a-option>
                 <a-option :value="14">最近 14 天</a-option>
                 <a-option :value="30">最近 30 天</a-option>
                 <a-option :value="60">最近 60 天</a-option>
                 <a-option :value="90">最近 90 天</a-option>
+                <a-option value="custom">自定义</a-option>
               </a-select>
+              <a-range-picker v-if="trendRangeMode === 'custom'" class="custom-range-picker"
+                size="small" value-format="YYYY-MM-DD" :allow-clear="false"
+                :model-value="customDateRange" @change="changeCustomDateRange" />
             </div>
           </header>
           <div class="trend-body" :class="{ loading: trendLoading }">
@@ -650,8 +861,14 @@ onUnmounted(() => {
 .state-sub { color: var(--color-text-4); font-size: 12px; }
 .trend-card, .atlas-card, .detail-panel { overflow: hidden; }
 .atlas-row {
+  position: relative;
   display: grid; grid-template-columns: minmax(0, 3fr) minmax(380px, 2fr);
   align-items: stretch; gap: 10px;
+}
+.overview-loading-veil {
+  position: absolute; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center;
+  gap: 9px; border-radius: 8px; background: color-mix(in srgb, var(--color-bg-1) 55%, transparent);
+  color: var(--color-text-2); font-size: 12px; backdrop-filter: blur(1px);
 }
 .atlas-card {
   min-width: 0; display: flex; flex-direction: column;
@@ -673,9 +890,9 @@ onUnmounted(() => {
 .section-head, .atlas-head { min-height: 50px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border-1); }
 .section-title { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
 .selection-pill { padding: 4px 9px; border-radius: 5px; border: 1px solid var(--color-border-2); color: var(--color-text-3); font-size: 11px; font-weight: 500; }
-.trend-controls { display: flex; align-items: center; gap: 14px; }
-.window-caption { flex-shrink: 0; white-space: nowrap; color: var(--color-text-4); font-size: 11px; }
-.days-select { width: 130px; }
+.trend-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 14px; }
+.trend-controls :deep(.days-select) { width: 130px; }
+.trend-controls :deep(.custom-range-picker) { width: 230px; }
 .trend-body { position: relative; min-height: 300px; padding: 12px 14px 4px 4px; transition: opacity .15s ease; }
 .trend-body.loading > :first-child { opacity: .55; }
 .loading-veil { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
@@ -820,7 +1037,8 @@ onUnmounted(() => {
   .world-head { padding-right: 10px; }
   .section-head { align-items: flex-start; padding: 11px 12px; gap: 8px; }
   .trend-controls { align-items: flex-end; flex-direction: column; }
-  .window-caption { display: none; }
+  .trend-controls :deep(.days-select),
+  .trend-controls :deep(.custom-range-picker) { max-width: 100%; }
   .sub-cell { min-height: 62px; }
 }
 </style>

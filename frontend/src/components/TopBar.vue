@@ -26,6 +26,13 @@ const showDataActions = computed(() => (
 ))
 const supportsAutoRefresh = computed(() => isActive('/batches') || isActive('/comparison'))
 
+function tabTarget(tab) {
+  if (tab.path !== '/map-build' || !isActive('/batches')) return tab.path
+  const rawSceneId = route.params.sceneId
+  const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
+  return sceneId ? `/map-build/${encodeURIComponent(sceneId)}` : tab.path
+}
+
 // 按当前视图刷新对应数据;silent=true 时不弹提示(供定时自动刷新复用)
 async function doRefresh({ silent = false } = {}) {
   let hiddenSceneId = ''
@@ -84,7 +91,7 @@ onUnmounted(() => {
     <nav class="tabs">
       <button v-for="t in tabs" :key="t.path" class="tab"
         :class="{ active: isActive(t.path) }"
-        @click="router.push(t.path)">{{ t.label }}</button>
+        @click="router.push(tabTarget(t))">{{ t.label }}</button>
     </nav>
     <div class="actions">
       <template v-if="showDataActions">

@@ -644,6 +644,47 @@ def test_trend_uses_calendar_days_and_keeps_multiple_batches_on_same_day(client)
     assert [point["batch"]["id"] for point in one_day["points"]] == ["804"]
 
 
+def test_trend_supports_an_inclusive_custom_date_range_up_to_90_days(client):
+    samples = [
+        ("811", "2026-05-31T18:00:00"),
+        ("812", "2026-06-01T09:00:00"),
+        ("813", "2026-06-01T17:00:00"),
+        ("814", "2026-06-30T10:00:00"),
+        ("815", "2026-07-01T09:00:00"),
+    ]
+    for batch_id, created_at in samples:
+        _batch(client, batch_id, created_at)
+        assert _upload(client, batch_id, _payload(int(batch_id) - 810)).status_code == 201
+
+    response = client.get(
+        "/api/map-build/scenes/MapScene/trend",
+        params={"start_date": "2026-06-01", "end_date": "2026-06-30"},
+    )
+
+    assert response.status_code == 200
+    trend = response.json()
+    assert [point["batch"]["id"] for point in trend["points"]] == ["812", "813", "814"]
+    assert trend["window"] == {
+        "days": 30,
+        "start_date": "2026-06-01",
+        "end_date": "2026-06-30",
+        "truncated": False,
+    }
+
+    assert client.get(
+        "/api/map-build/scenes/MapScene/trend",
+        params={"start_date": "2026-06-01"},
+    ).status_code == 400
+    assert client.get(
+        "/api/map-build/scenes/MapScene/trend",
+        params={"start_date": "2026-06-02", "end_date": "2026-06-01"},
+    ).status_code == 400
+    assert client.get(
+        "/api/map-build/scenes/MapScene/trend",
+        params={"start_date": "2026-01-01", "end_date": "2026-04-01"},
+    ).status_code == 400
+
+
 def test_map_build_snapshot_follows_batch_delete_and_overwrite(client):
     _batch(client, "501", "2026-08-01T09:00:00")
     assert _upload(client, "501", _payload()).status_code == 201

@@ -14,7 +14,9 @@ const storeMock = vi.hoisted(() => ({
     unlisted_scene_ids: ['Unlisted_WP'],
   },
 }))
-const routeMock = vi.hoisted(() => ({ path: '/map-build', params: { sceneId: undefined } }))
+const routeMock = vi.hoisted(() => ({
+  path: '/map-build', params: { sceneId: undefined }, query: {},
+}))
 const routerMock = vi.hoisted(() => ({ replace: vi.fn() }))
 
 vi.mock('../api', () => ({
@@ -46,8 +48,9 @@ import { runPageRefresh } from '../pageActions'
 
 function deferred() {
   let resolve
-  const promise = new Promise((done) => { resolve = done })
-  return { promise, resolve }
+  let reject
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 
 const meta = {
@@ -148,12 +151,18 @@ const SelectStub = defineComponent({
   emits: ['update:modelValue', 'change'],
   template: '<div class="select-stub"><slot/></div>',
 })
+const RangePickerStub = defineComponent({
+  props: ['modelValue'],
+  emits: ['change'],
+  template: '<div class="range-picker-stub" />',
+})
 
 function mountView() {
   return mount(MapBuildView, {
     global: {
       stubs: {
         'a-select': SelectStub,
+        'a-range-picker': RangePickerStub,
         'a-option': SlotStub,
         'a-tooltip': SlotStub,
         'a-alert': SlotStub,
@@ -167,6 +176,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   routeMock.path = '/map-build'
   routeMock.params.sceneId = undefined
+  routeMock.query = {}
   routerMock.replace.mockResolvedValue()
   apiMock.mapBuildMeta.mockResolvedValue(meta)
   apiMock.mapBuildOverview.mockResolvedValue(overview)
@@ -174,6 +184,69 @@ beforeEach(() => {
 })
 
 describe('MapBuildView', () => {
+  it('网格批次支持按日期、批次 ID 或 P4 搜索', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('.batch-select').attributes('allow-search')).toBeDefined()
+  })
+
+  it('自定义趋势日期范围最多 90 天并同步到 URL', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    vi.clearAllMocks()
+
+    const rangeSelect = wrapper.findComponent('.days-select')
+    await rangeSelect.vm.$emit('change', 'custom')
+    expect(wrapper.find('.custom-range-picker').exists()).toBe(true)
+
+    const rangePicker = wrapper.findComponent('.custom-range-picker')
+    await rangePicker.vm.$emit('change', ['2026-05-01', '2026-08-01'])
+    await flushPromises()
+    expect(apiMock.mapBuildTrend).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('自定义日期范围最多 90 天')
+
+    await rangePicker.vm.$emit('change', ['2026-06-01', '2026-08-29'])
+    await flushPromises()
+
+    expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
+      start_date: '2026-06-01',
+      end_date: '2026-08-29',
+      metric_scope: 'self',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(routerMock.replace).toHaveBeenLastCalledWith({
+      path: '/map-build/Coral_WP',
+      query: {
+        batch: '2', start: '2026-06-01', end: '2026-08-29', scope: 'self',
+      },
+    })
+  })
+
+  it('刷新自定义日期 URL 后恢复日历范围', async () => {
+    routeMock.path = '/map-build/Coral_WP'
+    routeMock.params.sceneId = 'Coral_WP'
+    routeMock.query = {
+      batch: '1', start: '2026-07-01', end: '2026-08-05', scope: 'self',
+    }
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overview,
+      batch: batch('1', '2026-08-04T10:00'),
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findComponent('.days-select').props('modelValue')).toBe('custom')
+    expect(wrapper.findComponent('.custom-range-picker').props('modelValue')).toEqual([
+      '2026-07-01', '2026-08-05',
+    ])
+    expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
+      start_date: '2026-07-01',
+      end_date: '2026-08-05',
+      metric_scope: 'self',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+  })
+
   it('元数据响应结构异常时显示错误而不是让页面崩溃', async () => {
     apiMock.mapBuildMeta.mockResolvedValueOnce({ scene_ids: null })
 
@@ -277,7 +350,81 @@ describe('MapBuildView', () => {
     expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
       days: 30, metric_scope: 'self',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
-    expect(routerMock.replace).not.toHaveBeenCalled()
+    expect(routerMock.replace).toHaveBeenLastCalledWith({
+      path: '/map-build/Coral_WP',
+      query: { batch: '2', days: '30', scope: 'self' },
+    })
+  })
+
+  it('从 URL 恢复批次、分块、统计口径和趋势天数', async () => {
+    routeMock.path = '/map-build/Coral_WP'
+    routeMock.params.sceneId = 'Coral_WP'
+    routeMock.query = {
+      batch: '1', days: '14', scope: 'subtree', block: '3', sub: '1',
+    }
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overview,
+      batch: batch('1', '2026-08-04T10:00'),
+    })
+    apiMock.mapBuildTrend.mockResolvedValueOnce({
+      ...worldTrend,
+      selection: { label: '分块 3 / 子分块 0x01' },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      batch_id: '1',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
+      days: 14,
+      metric_scope: 'subtree',
+      block_index: 3,
+      sub_block_index: 1,
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(wrapper.findComponent('.batch-select').props('modelValue')).toBe('1')
+    expect(wrapper.get('.detail-head h3').text()).toBe('分块 3 / 0x01（含子级汇总）')
+    expect(wrapper.findComponent('.days-select').props('modelValue')).toBe(14)
+  })
+
+  it('选择分块后把可分享的完整分析状态写入 URL', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    vi.clearAllMocks()
+
+    await wrapper.findAll('.sub-cell')[1].trigger('click')
+    await flushPromises()
+
+    expect(routerMock.replace).toHaveBeenLastCalledWith({
+      path: '/map-build/Coral_WP',
+      query: {
+        batch: '2', days: '30', scope: 'self', block: '3', sub: '1',
+      },
+    })
+  })
+
+  it('批次切换加载时保留旧网格，失败后回滚到上一个成功批次', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const pendingOverview = deferred()
+    apiMock.mapBuildOverview.mockReturnValueOnce(pendingOverview.promise)
+
+    const batchSelect = wrapper.findComponent('.batch-select')
+    await batchSelect.vm.$emit('update:modelValue', '1')
+    batchSelect.vm.$emit('change', '1')
+    await Promise.resolve()
+
+    expect(wrapper.get('.overview-loading-veil').text()).toContain('正在切换批次')
+    expect(wrapper.get('.detail-head h3').text()).toBe('主分块')
+
+    pendingOverview.reject(new Error('temporary failure'))
+    await flushPromises()
+
+    expect(wrapper.find('.overview-loading-veil').exists()).toBe(false)
+    expect(wrapper.findComponent('.batch-select').props('modelValue')).toBe('2')
+    expect(wrapper.get('.detail-head h3').text()).toBe('主分块')
+    expect(wrapper.text()).toContain('temporary failure')
   })
 
 

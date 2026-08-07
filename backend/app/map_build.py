@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import Integer, cast, delete, func, or_, select
@@ -697,8 +697,10 @@ def get_trend(
     registry_path: str | None = None,
     metric_scope: str = "self",
     days: int = 30,
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> dict:
-    """按最近 N 个日历日返回趋势；窗口结束日取场景最新快照日期。"""
+    """按最近 N 个日历日或指定的闭区间日期返回趋势。"""
 
     if sub_block_index is not None and block_index is None:
         raise ValueError("查询子分块时必须提供 block_index")
@@ -710,27 +712,49 @@ def get_trend(
         raise ValueError("metric_scope 必须是 self 或 subtree")
     if not 1 <= days <= 365:
         raise ValueError("days 必须在 1 到 365 之间")
+    if (start_date is None) != (end_date is None):
+        raise ValueError("自定义日期范围必须同时提供 start_date 和 end_date")
+    if start_date is not None and end_date is not None:
+        if end_date < start_date:
+            raise ValueError("end_date 不能早于 start_date")
+        if (end_date - start_date).days + 1 > 90:
+            raise ValueError("自定义日期范围最多 90 天")
 
     base = _base_snapshot_query(scene_id, platform, shading_quality)
-    latest = db.scalars(_snapshot_order(base).limit(1)).first()
     snapshots = []
-    start_date = None
-    end_date = None
+    window_start = start_date
+    window_end = end_date
     truncated = False
-    if latest is not None:
-        end_date = latest.batch.created_at.date()
-        start_date = end_date - timedelta(days=days - 1)
-        cutoff = datetime.combine(start_date, datetime.min.time())
+    if window_start is not None and window_end is not None:
+        cutoff = datetime.combine(window_start, datetime.min.time())
+        cutoff_end = datetime.combine(window_end + timedelta(days=1), datetime.min.time())
         descending = list(
             db.scalars(
-                _snapshot_order(base.where(Batch.created_at >= cutoff)).limit(
-                    MAX_TREND_POINTS + 1
-                )
+                _snapshot_order(base.where(
+                    Batch.created_at >= cutoff,
+                    Batch.created_at < cutoff_end,
+                )).limit(MAX_TREND_POINTS + 1)
             )
         )
         truncated = len(descending) > MAX_TREND_POINTS
         snapshots = descending[:MAX_TREND_POINTS]
         snapshots.reverse()
+    else:
+        latest = db.scalars(_snapshot_order(base).limit(1)).first()
+        if latest is not None:
+            window_end = latest.batch.created_at.date()
+            window_start = window_end - timedelta(days=days - 1)
+            cutoff = datetime.combine(window_start, datetime.min.time())
+            descending = list(
+                db.scalars(
+                    _snapshot_order(base.where(Batch.created_at >= cutoff)).limit(
+                        MAX_TREND_POINTS + 1
+                    )
+                )
+            )
+            truncated = len(descending) > MAX_TREND_POINTS
+            snapshots = descending[:MAX_TREND_POINTS]
+            snapshots.reverse()
     rows_by_batch = _rows_by_batch(db, [snapshot.batch_id for snapshot in snapshots])
 
     points = []
@@ -813,9 +837,13 @@ def get_trend(
         "selection": selection,
         "points": points,
         "window": {
-            "days": days,
-            "start_date": start_date.isoformat() if start_date else None,
-            "end_date": end_date.isoformat() if end_date else None,
+            "days": (
+                (window_end - window_start).days + 1
+                if window_start is not None and window_end is not None
+                else days
+            ),
+            "start_date": window_start.isoformat() if window_start else None,
+            "end_date": window_end.isoformat() if window_end else None,
             "truncated": truncated,
         },
     }

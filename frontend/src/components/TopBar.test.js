@@ -3,7 +3,7 @@ import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const routeMock = vi.hoisted(() => ({ path: '/map-build/Coral_WP' }))
+const routeMock = vi.hoisted(() => ({ path: '/map-build/Coral_WP', params: { sceneId: 'Coral_WP' } }))
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }))
 const storeMock = vi.hoisted(() => ({
   uploadVisible: false,
@@ -42,6 +42,7 @@ function mountTopBar() {
 beforeEach(() => {
   vi.clearAllMocks()
   routeMock.path = '/map-build/Coral_WP'
+  routeMock.params.sceneId = 'Coral_WP'
   storeMock.uploadVisible = false
   storeMock.running = false
   storeMock.refreshBatches.mockResolvedValue('')
@@ -74,6 +75,17 @@ describe('TopBar map-build actions', () => {
     expect(wrapper.find('button[aria-label="刷新"]').exists()).toBe(false)
     expect(wrapper.find('button[aria-label="手动上报"]').exists()).toBe(false)
 
+    wrapper.unmount()
+  })
+
+  it('从批次管理进入烘培数据时继承当前场景', async () => {
+    routeMock.path = '/batches/Volcano_WP'
+    routeMock.params.sceneId = 'Volcano_WP'
+    const wrapper = mountTopBar()
+
+    await wrapper.findAll('.tab').find((tab) => tab.text() === '烘培数据').trigger('click')
+
+    expect(routerMock.push).toHaveBeenCalledWith('/map-build/Volcano_WP')
     wrapper.unmount()
   })
 

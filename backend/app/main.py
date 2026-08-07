@@ -5,7 +5,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Literal
 from urllib.parse import quote
@@ -574,9 +574,11 @@ def map_build_trend(
     registry_path: str | None = Query(None, min_length=1, max_length=4096),
     metric_scope: Literal["self", "subtree"] = "self",
     days: int = Query(30, ge=1, le=365),
+    start_date: date | None = None,
+    end_date: date | None = None,
     db: Session = Depends(get_db),
 ):
-    """所选世界/分块/子分块最近 N 个日历日的体积趋势。"""
+    """所选节点最近 N 日或指定日期范围的体积趋势。"""
     try:
         return get_map_build_trend(
             db,
@@ -588,6 +590,8 @@ def map_build_trend(
             registry_path=registry_path,
             metric_scope=metric_scope,
             days=days,
+            start_date=start_date,
+            end_date=end_date,
         )
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
