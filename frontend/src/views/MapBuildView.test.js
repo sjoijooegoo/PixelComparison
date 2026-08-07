@@ -189,6 +189,35 @@ describe('MapBuildView', () => {
     await flushPromises()
 
     expect(wrapper.get('.batch-select').attributes('allow-search')).toBeDefined()
+    expect(wrapper.get('.batch-select').text()).toContain(
+      '#2 · 2026-08-05 10:00 · P4 2（最新）',
+    )
+    expect(wrapper.get('.batch-select').text()).toContain(
+      '#1 · 2026-08-04 10:00 · P4 1',
+    )
+    expect(wrapper.get('.batch-select').text()).not.toContain('P4 1（最新）')
+  })
+
+  it('重复点击当前分块不重复请求趋势，失败后仍可点击重试', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    vi.clearAllMocks()
+
+    await wrapper.get('.world-head').trigger('click')
+    await flushPromises()
+    expect(apiMock.mapBuildTrend).not.toHaveBeenCalled()
+    expect(routerMock.replace).not.toHaveBeenCalled()
+
+    apiMock.mapBuildTrend.mockRejectedValueOnce(new Error('trend failed'))
+    await wrapper.get('.block-head').trigger('click')
+    await flushPromises()
+    expect(apiMock.mapBuildTrend).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('trend failed')
+
+    apiMock.mapBuildTrend.mockResolvedValueOnce(worldTrend)
+    await wrapper.get('.block-head').trigger('click')
+    await flushPromises()
+    expect(apiMock.mapBuildTrend).toHaveBeenCalledTimes(2)
   })
 
   it('自定义趋势日期范围最多 90 天并同步到 URL', async () => {

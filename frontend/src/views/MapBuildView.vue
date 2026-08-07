@@ -411,6 +411,7 @@ async function selectTrendBatch(batch) {
 }
 
 async function choose(blockIndex = null, subBlockIndex = null) {
+  if (isSelected(blockIndex, subBlockIndex) && !error.value) return
   selection.blockIndex = blockIndex
   selection.subBlockIndex = subBlockIndex
   selection.registryPath = null
@@ -420,6 +421,7 @@ async function choose(blockIndex = null, subBlockIndex = null) {
 }
 
 async function chooseAuxiliary(registryPath) {
+  if (isAuxiliarySelected(registryPath) && !error.value) return
   selection.blockIndex = null
   selection.subBlockIndex = null
   selection.registryPath = registryPath
@@ -587,9 +589,9 @@ function detailBarWidth(value) {
 function formatCount(value) {
   return Number(value || 0).toLocaleString('zh-CN')
 }
-function batchLabel(batch) {
-  const date = batch.created_at?.replace('T', ' ') || '—'
-  return `${date} · #${batch.id} · ${p4Label(batch.p4_version)}`
+function batchLabel(batch, isLatest = false) {
+  const date = batch.created_at?.replace('T', ' ').slice(0, 16) || '—'
+  return `#${batch.id} · ${date} · ${p4Label(batch.p4_version)}${isLatest ? '（最新）' : ''}`
 }
 
 onMounted(async () => {
@@ -645,8 +647,9 @@ onUnmounted(() => {
           <a-select v-model="filters.batchId" class="batch-select" :loading="overviewLoading"
             :disabled="!selectedSceneHasData" allow-search size="small" style="width: 520px"
             @change="changeBatch">
-            <a-option v-for="batch in overview?.available_batches || []" :key="batch.id" :value="batch.id">
-              {{ batchLabel(batch) }}
+            <a-option v-for="(batch, index) in overview?.available_batches || []"
+              :key="batch.id" :value="batch.id">
+              {{ batchLabel(batch, index === 0) }}
             </a-option>
           </a-select>
         </div>
