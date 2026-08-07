@@ -18,7 +18,7 @@ describe('bootstrapApp', () => {
     const app = { mount: vi.fn() }
     const router = {
       isReady: vi.fn().mockResolvedValue(),
-      currentRoute: { value: { params: { sceneId: 'SceneA' } } },
+      currentRoute: { value: { path: '/batches/SceneA', params: { sceneId: 'SceneA' } } },
     }
     const store = { init: vi.fn().mockReturnValue(init.promise) }
     const logger = { error: vi.fn() }
@@ -31,6 +31,21 @@ describe('bootstrapApp', () => {
 
     init.resolve()
     await boot
+  })
+
+  it('烘培数据深链不使用场景参数初始化批次列表', async () => {
+    const app = { mount: vi.fn() }
+    const router = {
+      isReady: vi.fn().mockResolvedValue(),
+      currentRoute: { value: { path: '/map-build/Coral_WP', params: { sceneId: 'Coral_WP' } } },
+    }
+    const store = { init: vi.fn().mockResolvedValue() }
+    const logger = { error: vi.fn() }
+
+    await bootstrapApp({ app, router, store, logger })
+
+    expect(store.init).toHaveBeenCalledWith('')
+    expect(app.mount).toHaveBeenCalledWith('#app')
   })
 
   it('初始化失败仍保留已挂载页面并记录错误', async () => {

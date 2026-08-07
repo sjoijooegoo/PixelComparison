@@ -2,7 +2,11 @@ export async function bootstrapApp({ app, router, store, logger, mountTarget = '
   let routeSceneId = ''
   try {
     await router.isReady()
-    routeSceneId = router.currentRoute.value.params.sceneId
+    const currentRoute = router.currentRoute.value
+    if (currentRoute.path?.startsWith('/batches')) {
+      const rawSceneId = currentRoute.params.sceneId
+      routeSceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId || ''
+    }
   } catch (error) {
     // 路由初始化异常也要挂载外壳，避免用户只看到空白页。
     logger.error('初始路由解析失败', error)

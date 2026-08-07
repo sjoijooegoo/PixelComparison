@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { theme, toggleTheme } from '../theme'
 import { useStore } from '../store'
+import { runPageRefresh } from '../pageActions'
 
 const store = useStore()
 const route = useRoute()
@@ -12,6 +13,7 @@ const router = useRouter()
 const tabs = [
   { path: '/batches', label: '批次管理' },
   { path: '/comparison', label: '对比结果' },
+  { path: '/map-build', label: '烘培数据' },
   { path: '/settings', label: '项目设置' },
 ]
 
@@ -19,12 +21,18 @@ const tabs = [
 const current = computed(() => (route.path === '/' ? '/batches' : route.path))
 // 前缀匹配:/batches/<场景> 时「批次管理」仍高亮
 const isActive = (path) => current.value === path || current.value.startsWith(path + '/')
-const showBatchActions = computed(() => isActive('/batches') || isActive('/comparison'))
+const showDataActions = computed(() => (
+  isActive('/batches') || isActive('/comparison') || isActive('/map-build')
+))
+const supportsAutoRefresh = computed(() => isActive('/batches') || isActive('/comparison'))
 
 // 按当前视图刷新对应数据;silent=true 时不弹提示(供定时自动刷新复用)
 async function doRefresh({ silent = false } = {}) {
   let hiddenSceneId = ''
-  if (isActive('/comparison')) {
+  if (isActive('/map-build')) {
+    const handled = await runPageRefresh({ silent })
+    if (!handled) return
+  } else if (isActive('/comparison')) {
     await store.loadComparisons()
   } else {
     hiddenSceneId = await store.refreshBatches()
@@ -43,7 +51,7 @@ let autoTimer = null
 
 function autoTick() {
   if (document.hidden) return                       // 后台标签页不刷,省请求
-  if (!showBatchActions.value) return               // 仅批次/对比页(设置页不刷)
+  if (!supportsAutoRefresh.value) return             // 仅批次/对比页自动刷
   if (store.uploadVisible || store.running) return  // 上传弹窗 / 对比中,不打断
   // 列表图也刷新:渲染 key 稳定(列=批次id、行=检查点名),Vue 复用 DOM,
   // 已有图片不重载、滚动位置不丢;有新批次时仅在末尾插入新列。
@@ -79,9 +87,9 @@ onUnmounted(() => {
         @click="router.push(t.path)">{{ t.label }}</button>
     </nav>
     <div class="actions">
-      <template v-if="showBatchActions">
+      <template v-if="showDataActions">
         <a-tooltip content="刷新">
-          <button class="icon-btn" @click="refresh">
+          <button class="icon-btn" aria-label="刷新" @click="refresh">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" />
@@ -89,7 +97,7 @@ onUnmounted(() => {
           </button>
         </a-tooltip>
         <a-tooltip content="手动上报">
-          <button class="icon-btn" @click="store.uploadVisible = true">
+          <button class="icon-btn" aria-label="手动上报" @click="store.uploadVisible = true">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 16V4" /><path d="M7 9l5-5 5 5" /><path d="M5 20h14" />

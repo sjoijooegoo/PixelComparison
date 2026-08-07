@@ -2,6 +2,7 @@
 import { ref, reactive } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { api } from '../api'
+import { readMapBuildArtifact } from '../mapBuildManifest'
 import { p4Label } from '../store'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
@@ -17,7 +18,14 @@ const fileInput = ref(null)
 const manualP4 = ref(null)       // 数据包未带 P4 时,用户手填的版本号
 
 // 解析结果
-const parsed = reactive({ body: null, shots: [], missing: [] })
+const parsed = reactive({
+  body: null,
+  shots: [],
+  missing: [],
+  mapBuildData: null,
+  mapBuildFormat: null,
+  mapBuildMissing: '',
+})
 const progress = reactive({ done: 0, total: 0 })
 
 function reset() {
@@ -28,6 +36,9 @@ function reset() {
   parsed.body = null
   parsed.shots = []
   parsed.missing = []
+  parsed.mapBuildData = null
+  parsed.mapBuildFormat = null
+  parsed.mapBuildMissing = ''
   manualP4.value = null
   progress.done = 0
   progress.total = 0
@@ -126,6 +137,11 @@ async function parsePackage(map) {
     }
     if (!parsed.shots.length) { error.value = '数据包内没有可上传的截图'; parsed.body = null; return }
 
+    const mapBuild = await readMapBuildArtifact(manifest, map, manifestDir)
+    parsed.mapBuildData = mapBuild.data
+    parsed.mapBuildFormat = mapBuild.format
+    parsed.mapBuildMissing = mapBuild.missing
+
     // 未带批次号 -> 后端上报时自动生成,无需查重;带了才检测是否已存在
     if (parsed.body.id) {
       try {
@@ -186,14 +202,26 @@ async function startUpload() {
   parsed.body.overwrite = overwrite.value   // 同号覆盖:后端删旧建新
   stage.value = 'uploading'
   progress.done = 0
-  progress.total = parsed.shots.length
+  progress.total = parsed.shots.length + (parsed.mapBuildData ? 1 : 0)
   let batchId = parsed.body.id
   try {
     try {
       const created = await api.createBatch(parsed.body)
       batchId = created.id   // 后端可能自动生成批次号,以返回值为准
+      parsed.body.id = batchId
     } catch (e) {
       if (e.status !== 409) throw e   // 409=已存在(未勾覆盖),沿用原 id 继续补传
+    }
+
+    let mapBuildFailed = false
+    if (parsed.mapBuildData) {
+      try {
+        await api.uploadMapBuildData(batchId, parsed.mapBuildData, parsed.mapBuildFormat)
+      } catch (e) {
+        mapBuildFailed = true
+        console.warn('烘培数据上传失败', e)
+      }
+      progress.done++
     }
 
     let failed = 0
@@ -214,8 +242,16 @@ async function startUpload() {
       } catch { /* 自动对比失败忽略 */ }
     }
 
-    if (failed) Message.warning(`批次 #${batchId} 上报完成,但有 ${failed} 张失败`)
-    else Message.success(`批次 #${batchId} 上报成功(${progress.total} 张)${compMsg}`)
+    if (failed || mapBuildFailed) {
+      const details = [
+        failed ? `${failed} 张截图失败` : '',
+        mapBuildFailed ? '烘培数据失败' : '',
+      ].filter(Boolean).join('、')
+      Message.warning(`批次 #${batchId} 上报完成，但${details}`)
+    } else {
+      const artifact = parsed.mapBuildData ? '，含烘培数据' : ''
+      Message.success(`批次 #${batchId} 上报成功(${parsed.shots.length} 张${artifact})${compMsg}`)
+    }
     emit('done')
     emit('update:visible', false)
     reset()
@@ -265,6 +301,13 @@ async function startUpload() {
         共 <b>{{ parsed.shots.length }}</b> 张截图
         <span v-if="parsed.missing.length" class="miss">(缺失 {{ parsed.missing.length }} 张,将跳过)</span>
       </div>
+      <div v-if="parsed.mapBuildData" class="artifact-ok">
+        <span class="artifact-dot"></span>
+        烘培数据 · {{ parsed.mapBuildData.registries?.length || 0 }} 个 Registry
+      </div>
+      <a-alert v-else-if="parsed.mapBuildMissing" type="warning" style="margin-top:12px">
+        manifest 已声明烘培数据，但未找到 {{ parsed.mapBuildMissing }}，本次将只上报截图。
+      </a-alert>
       <a-alert v-if="idExists" type="warning" style="margin-top:12px">
         批次 <b>#{{ parsed.body.id }}</b> 已存在!默认会把截图补传/合并进该批次(同名截图跳过);
         勾选下方「覆盖」则删除旧数据后重建。
@@ -284,7 +327,7 @@ async function startUpload() {
       <div>正在上报批次 <b>#{{ parsed.body.id }}</b> …</div>
       <a-progress :percent="progress.total ? progress.done / progress.total : 0"
         :status="progress.done === progress.total ? 'success' : 'normal'" style="margin-top:12px" />
-      <div class="count">{{ progress.done }} / {{ progress.total }} 张</div>
+      <div class="count">{{ progress.done }} / {{ progress.total }} 项</div>
     </div>
   </a-modal>
 </template>
@@ -300,6 +343,11 @@ async function startUpload() {
 .drop .sub { font-size: 12px; color: var(--color-text-3); margin-top: 6px; }
 .count { margin-top: 12px; font-size: 13px; }
 .count .miss { color: rgb(var(--orange-6)); margin-left: 6px; }
+.artifact-ok {
+  display: flex; align-items: center; gap: 7px; margin-top: 9px;
+  color: var(--color-text-2); font-size: 12px;
+}
+.artifact-dot { width: 7px; height: 7px; border-radius: 2px; background: rgb(var(--green-6)); }
 .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .uploading { padding: 12px 0; }
 </style>

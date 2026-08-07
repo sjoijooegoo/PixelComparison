@@ -56,6 +56,33 @@ describe('api request encoding', () => {
     }))
   })
 
+  it('编码烘培数据场景路径、筛选参数和上报格式', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ points: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.mapBuildTrend('Scene / 测试', {
+      platform: 'Windows',
+      shading_quality: 5,
+      block_index: 3,
+      sub_block_index: 1,
+      days: 14,
+    })
+    const trendUrl = new URL(fetchMock.mock.calls[0][0], 'http://pixelcomparison.local')
+    expect(trendUrl.pathname).toBe('/api/map-build/scenes/Scene%20%2F%20%E6%B5%8B%E8%AF%95/trend')
+    expect(trendUrl.searchParams.get('block_index')).toBe('3')
+    expect(trendUrl.searchParams.get('sub_block_index')).toBe('1')
+    expect(trendUrl.searchParams.get('days')).toBe('14')
+
+    await api.uploadMapBuildData('batch 7', { worldAggregate: {} }, 'map-build-data/v2')
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      '/api/batches/batch%207/map-build-data?format=map-build-data%2Fv2',
+    )
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ worldAggregate: {} }),
+    }))
+  })
+
   it('接口超过统一时限后中止请求并返回可重试的中文错误', async () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn((_url, options) => new Promise((_resolve, reject) => {

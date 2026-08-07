@@ -2,7 +2,8 @@
 
 对每个批次包:
     1. POST /api/batches                     用 pipeline_data + ue_data 建批次
-    2. POST /api/batches/{id}/screenshots    逐张上传 screenshots(带相机位姿/帧序)
+    2. POST /api/batches/{id}/map-build-data 上传 manifest 声明的烘培数据(可选)
+    3. POST /api/batches/{id}/screenshots    逐张上传 screenshots(带相机位姿/帧序)
 
 仅依赖标准库(自行拼装 multipart),无需安装 requests。
 
@@ -18,6 +19,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -113,6 +115,27 @@ def upload_package(pkg_dir: Path) -> None:
         if status != 409:  # 409=已存在,继续补传截图
             return
         print("  批次已存在,继续上传截图…")
+    elif isinstance(body, dict):
+        # manifest 未指定 id 时由后端生成；后续 artifact/截图必须使用返回值。
+        batch["id"] = body["id"]
+
+    artifact = (manifest.get("artifacts") or {}).get("map_build_data")
+    if artifact:
+        artifact_path = pkg_dir / str(artifact.get("path") or "")
+        if artifact_path.is_file():
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            query = urllib.parse.urlencode({
+                "format": artifact.get("format") or "map-build-data/v2",
+            })
+            code, response = post_json(
+                f"{BASE}/api/batches/{batch['id']}/map-build-data?{query}", payload,
+            )
+            if code in (200, 201):
+                print(f"  烘培数据: {response.get('registry_count', 0)} 个 Registry")
+            else:
+                print(f"  ! 烘培数据: HTTP {code} {response}")
+        else:
+            print(f"  ! manifest 声明的烘培数据文件不存在: {artifact_path}")
 
     shots = manifest["screenshots"]
     ok = 0

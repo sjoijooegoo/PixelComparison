@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 from pathlib import Path
 
@@ -53,6 +55,21 @@ def get_db():
 
 
 # 新增列(随上报 manifest 升级而来);旧库存量数据取 NULL,不重建库。
+_MAP_BUILD_DETAIL_JSON_PATHS = {
+    "lightmap_all_mips_bytes": ("lightmapTextures", "allMipsBytes"),
+    "hue_all_mips_bytes": ("hueTextures", "allMipsBytes"),
+    "shadowmap_all_mips_bytes": ("shadowmapTextures", "allMipsBytes"),
+    "mesh_map_build_data_bytes": ("meshMapBuildDataBytes",),
+    "precomputed_light_volume_bytes": ("precomputedLightVolumeBytes",),
+    "precomputed_reflection_volume_bytes": ("precomputedReflectionVolumeBytes",),
+    "volumetric_lightmap_bytes": ("volumetricLightmapBytes",),
+    "light_build_data_bytes": ("lightBuildDataBytes",),
+    "reflection_capture_bytes": ("reflectionCaptureBytes",),
+    "precomputed_instanced_ilc_bytes": ("precomputedInstancedILCBytes",),
+    "precomputed_instanced_pr_bytes": ("precomputedInstancedPRBytes",),
+    "lightmap_resource_cluster_bytes": ("lightmapResourceClusterBytes",),
+}
+
 _NEW_COLUMNS = {
     "batches": {
         "batch_url": "VARCHAR",
@@ -69,6 +86,9 @@ _NEW_COLUMNS = {
     },
     "comparison_items": {
         "cache_version": "VARCHAR",
+    },
+    "map_build_registries": {
+        name: "BIGINT" for name in _MAP_BUILD_DETAIL_JSON_PATHS
     },
 }
 
@@ -104,6 +124,83 @@ def _relax_p4_nullable() -> None:
         conn.execute(text("DROP TABLE _batches_old"))
 
 
+def _nested_json_value(data: object, path: tuple[str, ...]) -> int:
+    current = data
+    for key in path:
+        if not isinstance(current, dict):
+            return 0
+        current = current.get(key)
+    try:
+        return int(current or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _backfill_map_build_registry_details() -> int:
+    """从保留的原始 JSON 一次性回填旧快照缺失的趋势指标。"""
+
+    columns = tuple(_MAP_BUILD_DETAIL_JSON_PATHS)
+    with engine.begin() as conn:
+        existing = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(map_build_registries)"))
+        }
+        if not set(columns).issubset(existing):
+            return 0
+
+        missing = " OR ".join(f'r."{column}" IS NULL' for column in columns)
+        snapshots = conn.execute(
+            text(
+                "SELECT DISTINCT s.batch_id, s.raw_payload "
+                "FROM map_build_snapshots AS s "
+                "JOIN map_build_registries AS r ON r.batch_id = s.batch_id "
+                f"WHERE {missing}"
+            )
+        ).all()
+        if not snapshots:
+            return 0
+
+        assignments = ", ".join(f'"{column}" = :{column}' for column in columns)
+        update_stmt = text(
+            f"UPDATE map_build_registries SET {assignments} "
+            "WHERE batch_id = :batch_id AND path = :path"
+        )
+        updated = 0
+        logger = logging.getLogger("pixelcomp")
+        for batch_id, raw_payload in snapshots:
+            try:
+                payload = (
+                    json.loads(raw_payload)
+                    if isinstance(raw_payload, (str, bytes, bytearray))
+                    else raw_payload
+                )
+                registries = payload.get("registries", []) or []
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.warning("跳过无法解析的烘培数据回填 batch=%s: %s", batch_id, exc)
+                continue
+
+            values = []
+            for registry in registries:
+                if not isinstance(registry, dict) or not registry.get("path"):
+                    continue
+                own = registry.get("self") or {}
+                breakdown = own.get("breakdown", {}) if isinstance(own, dict) else {}
+                values.append(
+                    {
+                        "batch_id": batch_id,
+                        "path": registry["path"],
+                        **{
+                            column: _nested_json_value(breakdown, json_path)
+                            for column, json_path in _MAP_BUILD_DETAIL_JSON_PATHS.items()
+                        },
+                    }
+                )
+            if values:
+                result = conn.execute(update_stmt, values)
+                updated += max(result.rowcount or 0, 0)
+        return updated
+
+
 def migrate_columns() -> None:
     """轻量迁移:缺失的新列用 ALTER TABLE ADD COLUMN 补上(SQLite 支持)。"""
     with engine.begin() as conn:
@@ -118,6 +215,11 @@ def migrate_columns() -> None:
                     conn.execute(
                         text(f'ALTER TABLE {table} ADD COLUMN "{name}" {sqltype}')
                     )
+    backfilled = _backfill_map_build_registry_details()
+    if backfilled:
+        logging.getLogger("pixelcomp").info(
+            "已回填烘培趋势静态指标: %s 条 registry", backfilled
+        )
     _relax_p4_nullable()
     # 同一对(batch, ref)至多一条对比;防并发重复(应用层加锁兜底)
     try:

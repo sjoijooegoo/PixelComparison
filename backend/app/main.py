@@ -7,6 +7,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
+from typing import Literal
 from urllib.parse import quote
 
 # Windows 上 .webp 可能未注册,确保静态文件返回正确 Content-Type
@@ -25,6 +26,14 @@ from .cleanup import prune_orphans
 from .backup import backup_scheduler
 from .db import IMAGES_DIR, THUMB_DIR, Base, SessionLocal, engine, get_db, migrate_columns
 from .logging_setup import client_log, log, setup_logging
+from .map_build import (
+    FORMAT_VERSION as MAP_BUILD_FORMAT_VERSION,
+    MapBuildDataIn,
+    get_overview as get_map_build_overview,
+    get_trend as get_map_build_trend,
+    list_meta as list_map_build_meta,
+    store_snapshot as store_map_build_snapshot,
+)
 from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
 from .service import run_comparison
 from .settings import get_settings, save_settings
@@ -46,7 +55,7 @@ async def lifespan(_app: FastAPI):
         backup_scheduler.stop()
 
 
-app = FastAPI(title="ShotDiff API", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="ShotDiff API", version="0.4.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     # 局域网/任意来源访问(内网工具,无凭证);如需收紧改回白名单
@@ -497,6 +506,91 @@ def list_screenshots(batch_id: str, db: Session = Depends(get_db)):
             for s in shots
         ],
     }
+
+
+# ---------------------------------------------------------------- 场景烘培数据
+
+@app.post("/api/batches/{batch_id}/map-build-data", status_code=201)
+def upload_map_build_data(
+    batch_id: str,
+    body: MapBuildDataIn,
+    format: str = Query(MAP_BUILD_FORMAT_VERSION, min_length=1, max_length=64),
+    db: Session = Depends(get_db),
+):
+    """上报批次随附的 map_build_data；重复上报会原子替换同批快照。"""
+    batch = db.get(Batch, batch_id)
+    if batch is None:
+        raise HTTPException(404, "batch not found")
+    result = store_map_build_snapshot(db, batch, body, format)
+    log.info(
+        "烘培数据上报成功 batch=%s scene=%s registries=%d updated=%s",
+        batch_id,
+        batch.scene_id,
+        result["registry_count"],
+        result["updated"],
+    )
+    return result
+
+
+@app.get("/api/map-build/meta")
+def map_build_meta(db: Session = Depends(get_db)):
+    """烘培页面可用的场景元数据。"""
+    settings = get_settings(db)
+    return list_map_build_meta(
+        db,
+        scene_id_order=settings["scene_id_order"],
+        show_unlisted_scene_ids=settings["show_unlisted_scene_ids"],
+    )
+
+
+@app.get("/api/map-build/scenes/{scene_id}/overview")
+def map_build_overview(
+    scene_id: str,
+    platform: str | None = None,
+    shading_quality: int | None = None,
+    batch_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """最新或指定批次的独立分块网格。"""
+    result = get_map_build_overview(
+        db,
+        scene_id,
+        platform=platform,
+        shading_quality=shading_quality,
+        batch_id=batch_id,
+    )
+    if result is None:
+        raise HTTPException(404, "当前筛选没有烘培数据")
+    return result
+
+
+@app.get("/api/map-build/scenes/{scene_id}/trend")
+def map_build_trend(
+    scene_id: str,
+    platform: str | None = None,
+    shading_quality: int | None = None,
+    block_index: int | None = Query(None, ge=0, le=65535),
+    sub_block_index: int | None = Query(None, ge=0, le=65535),
+    registry_path: str | None = Query(None, min_length=1, max_length=4096),
+    metric_scope: Literal["self", "subtree"] = "self",
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+):
+    """所选世界/分块/子分块最近 N 个日历日的体积趋势。"""
+    try:
+        return get_map_build_trend(
+            db,
+            scene_id,
+            platform=platform,
+            shading_quality=shading_quality,
+            block_index=block_index,
+            sub_block_index=sub_block_index,
+            registry_path=registry_path,
+            metric_scope=metric_scope,
+            days=days,
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
 
 
 @app.get("/api/scenes/{scene_id}/grid")

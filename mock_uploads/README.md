@@ -15,6 +15,9 @@ mock_uploads/
     Screenshot/
       01_废弃都市_广场_昼.png
       ...
+    Artifacts/                 # 可选
+      MapBuildData/
+        map_build_data.json
   8/
     manifest.json
     Screenshot/
@@ -25,6 +28,7 @@ mock_uploads/
 
 - `manifest.json`：批次元数据和截图清单。
 - `Screenshot/`：manifest 中 `screenshots[].image` 指向的图片。
+- `Artifacts/MapBuildData/map_build_data.json`：manifest 声明时上传的一批一份烘培快照。
 
 ## manifest 示例
 
@@ -57,7 +61,14 @@ mock_uploads/
         "rotation": { "pitch": -28.6, "yaw": 3.7, "roll": 0.0 }
       }
     }
-  ]
+  ],
+  "artifacts": {
+    "map_build_data": {
+      "path": "Artifacts/MapBuildData/map_build_data.json",
+      "format": "map-build-data/v2",
+      "status": "complete"
+    }
+  }
 }
 ```
 
@@ -77,6 +88,7 @@ mock_uploads/
 | `screenshots[].image` | 相对数据包目录的图片路径 |
 | `screenshots[].index` | 帧序 |
 | `screenshots[].camera` | 相机位姿 |
+| `artifacts.map_build_data` | 可选烘培数据文件路径、格式和采集状态 |
 
 ## 生成示例包
 
@@ -110,7 +122,7 @@ $env:BASE = "http://10.30.129.32:8020"
 python mock_uploads\upload.py 7
 ```
 
-脚本只依赖 Python 标准库，执行“创建批次 → 逐张上传截图”。批次已存在时继续补传；manifest 中 `overwrite=true` 时会请求覆盖。脚本不会自动发起对比，也没有完整的重试和 CI 退出码设计。
+脚本只依赖 Python 标准库，执行“创建批次 → 上传可选烘培数据 → 逐张上传截图”。批次已存在时继续补传；烘培数据重复发送会原子替换；manifest 中 `overwrite=true` 时会请求覆盖。脚本不会自动发起对比，也没有完整的重试和 CI 退出码设计。
 
 ## 示例批次
 

@@ -2,11 +2,13 @@
 import { useStore } from './store'
 import TopBar from './components/TopBar.vue'
 import ManualUpload from './components/ManualUpload.vue'
+import { runPageRefresh } from './pageActions'
 
 const store = useStore()
 
 function refreshAfterUpload() {
   store.refreshBatches().catch(() => {})
+  runPageRefresh().catch(() => {})
 }
 </script>
 

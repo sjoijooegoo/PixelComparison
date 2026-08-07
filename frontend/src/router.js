@@ -6,6 +6,7 @@ const routes = [
   { path: '/batches/:sceneId?', component: () => import('./views/BatchView.vue') },
   { path: '/comparison', component: () => import('./views/ComparisonView.vue') },
   { path: '/comparison/:id', component: () => import('./views/ComparisonView.vue') },
+  { path: '/map-build/:sceneId?', component: () => import('./views/MapBuildView.vue') },
   { path: '/settings', component: () => import('./components/ProjectSettings.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/batches' },
 ]
