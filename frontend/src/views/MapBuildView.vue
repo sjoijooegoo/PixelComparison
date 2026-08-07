@@ -490,9 +490,11 @@ async function refresh() {
 const allCells = computed(() => overview.value?.blocks?.flatMap((block) => block.sub_blocks) || [])
 const maximumCellMipBytes = computed(() => Math.max(
   0,
-  ...allCells.value.map((cell) => Number(
-    cell.self_metrics?.all_mips_bytes ?? cell.metrics?.all_mips_bytes ?? 0,
-  )),
+  ...allCells.value
+    .map((cell) => Number(
+      cell.self_metrics?.all_mips_bytes ?? cell.metrics?.all_mips_bytes ?? 0,
+    ))
+    .filter(Number.isFinite),
 ))
 const selectionKey = computed(() => (
   selection.registryPath !== null
@@ -958,7 +960,7 @@ onUnmounted(() => {
 .block-values { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-family: "Bahnschrift", "Segoe UI", sans-serif; }
 .block-values small { color: var(--color-text-4); font: 9px/1.1 "Segoe UI", sans-serif; }
 .block-values b { font-size: 12px; }
-.sub-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--color-border-2); }
+.sub-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; background: transparent; }
 .atlas-card-footer {
   min-height: 12px; margin-top: auto; padding: 0 12px 10px; display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px;
@@ -986,17 +988,18 @@ onUnmounted(() => {
 .auxiliary-block span b { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .auxiliary-block > b { flex: 0 0 auto; color: var(--color-text-1); font: 600 12px "Bahnschrift", "Segoe UI", sans-serif; }
 .sub-cell {
-  position: relative; min-height: 72px; padding: 10px 7px 8px; display: flex; flex-direction: column;
+  box-sizing: border-box; position: relative; min-height: 72px; padding: 10px 7px 8px; display: flex; flex-direction: column;
   align-items: center; justify-content: center; border: 0; color: rgba(255, 255, 255, .94);
   font-family: "Bahnschrift", "Segoe UI", sans-serif; cursor: pointer; isolation: isolate;
   transition: filter .12s ease, box-shadow .12s ease, transform .12s ease;
 }
-.sub-cell::after { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(0,0,0,.11)); }
-.sub-cell:hover { filter: brightness(1.12); z-index: 1; }
+.sub-cell:not(:nth-child(4n)) { border-right: 1px solid rgba(0,0,0,.26); }
+.sub-cell:nth-child(-n+12) { border-bottom: 1px solid rgba(0,0,0,.26); }
+.sub-cell:hover { filter: brightness(1.07); z-index: 1; }
 .sub-cell:active { transform: scale(.985); }
 .sub-cell.selected { z-index: 2; box-shadow: inset 0 0 0 2px #91bdff, inset 0 0 0 4px rgba(14, 24, 38, .58), 0 0 0 1px #91bdff; }
 .sub-cell span { font-size: 11px; opacity: .78; }
-.sub-cell b { margin-top: 3px; font-size: 12px; font-weight: 600; text-shadow: 0 1px 2px rgba(0, 0, 0, .35); }
+.sub-cell b { margin-top: 3px; font-size: 12px; font-weight: 600; }
 .detail-panel { min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--color-bg-2) 94%, var(--color-fill-1)); }
 .detail-head { padding: 15px 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border-2); }
 .detail-title { min-width: 0; }

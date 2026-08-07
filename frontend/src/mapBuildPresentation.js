@@ -82,13 +82,39 @@ function mix(from, to, amount) {
   return `rgb(${rgb.join(', ')})`
 }
 
-/** 冷蓝代表常规分块，高占用逐渐过渡到烘培橙；平方根缩放避免小值全挤在同一颜色。 */
+const ATLAS_COLOR_STOPS = [
+  { at: 0, color: '#122433' },
+  { at: 0.018071, color: '#122433' },
+  { at: 0.0475, color: '#112332' },
+  { at: 0.051571, color: '#162838' },
+  { at: 0.071, color: '#1d3040' },
+  { at: 0.154286, color: '#263947' },
+  { at: 0.249286, color: '#30424e' },
+  { at: 0.328571, color: '#5c594c' },
+  { at: 0.485714, color: '#6a5e47' },
+  { at: 0.592857, color: '#976d3d' },
+  { at: 0.682143, color: '#b4672e' },
+  { at: 0.898571, color: '#cd4818' },
+  { at: 1, color: '#ce4a19' },
+]
+
+/**
+ * 色标取自最终预览中避开文字、阴影和边框后的单元格底色中位数。
+ * 使用全局 value / maximum 线性插值，保证不同分块共享同一统计口径。
+ */
 export function atlasColor(value, maximum) {
   const max = Number(maximum)
-  if (!max || value === null || value === undefined) return 'rgb(37, 65, 91)'
-  const ratio = Math.max(0, Math.min(1, Math.sqrt(Number(value) / max)))
-  if (ratio <= 0.68) return mix('#204d79', '#3c7188', ratio / 0.68)
-  return mix('#3c7188', '#dc8d2f', (ratio - 0.68) / 0.32)
+  const numericValue = Number(value)
+  if (!Number.isFinite(max) || max <= 0 || value === null || value === undefined
+    || !Number.isFinite(numericValue)) {
+    return 'rgb(18, 36, 51)'
+  }
+  const ratio = Math.max(0, Math.min(1, Math.max(0, numericValue) / max))
+  const upperIndex = ATLAS_COLOR_STOPS.findIndex((stop) => ratio <= stop.at)
+  if (upperIndex <= 0) return 'rgb(18, 36, 51)'
+  const lower = ATLAS_COLOR_STOPS[upperIndex - 1]
+  const upper = ATLAS_COLOR_STOPS[upperIndex]
+  return mix(lower.color, upper.color, (ratio - lower.at) / (upper.at - lower.at))
 }
 
 export function niceChartMaximum(values) {

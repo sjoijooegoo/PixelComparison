@@ -348,6 +348,45 @@ describe('MapBuildView', () => {
     expect(atlas.classes()).toContain('world-selected')
   })
 
+  it('子分块网格使用平面样式且保留克制的交互反馈', () => {
+    expect(mapBuildViewSource).not.toContain('.sub-cell::after')
+    expect(mapBuildViewSource).toMatch(
+      /\.sub-grid \{[^}]*gap: 0; background: transparent;/s,
+    )
+    expect(mapBuildViewSource).toMatch(
+      /\.sub-cell:not\(:nth-child\(4n\)\) \{ border-right: 1px solid rgba\(0,0,0,\.26\); \}/,
+    )
+    expect(mapBuildViewSource).toMatch(
+      /\.sub-cell:nth-child\(-n\+12\) \{ border-bottom: 1px solid rgba\(0,0,0,\.26\); \}/,
+    )
+    expect(mapBuildViewSource).toMatch(
+      /\.sub-cell:hover \{[^}]*filter: brightness\(1\.07\);/s,
+    )
+    expect(mapBuildViewSource).not.toMatch(/\.sub-cell b \{[^}]*text-shadow:/s)
+  })
+
+  it('异常网格值不会污染正常格子的全局热力色阶', async () => {
+    const [firstCell, secondCell] = overview.blocks[0].sub_blocks
+    const invalidMetrics = { ...firstCell.metrics, all_mips_bytes: Number.NaN }
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overview,
+      blocks: [{
+        ...overview.blocks[0],
+        sub_blocks: [
+          { ...firstCell, metrics: invalidMetrics, self_metrics: invalidMetrics },
+          secondCell,
+        ],
+      }],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const cells = wrapper.findAll('.sub-cell')
+    expect(cells[0].attributes('style')).toContain('rgb(18, 36, 51)')
+    expect(cells[1].attributes('style')).toContain('rgb(206, 74, 25)')
+  })
+
   it('只有反射分块时不误判为空场景', async () => {
     apiMock.mapBuildOverview.mockResolvedValueOnce({
       ...overview,
