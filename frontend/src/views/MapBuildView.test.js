@@ -349,6 +349,8 @@ describe('MapBuildView', () => {
   })
 
   it('子分块网格使用平面样式且保留克制的交互反馈', () => {
+    const selectedRule = mapBuildViewSource.match(/\.sub-cell\.selected \{[^}]+\}/)?.[0]
+
     expect(mapBuildViewSource).not.toContain('.sub-cell::after')
     expect(mapBuildViewSource).toMatch(
       /\.sub-grid \{[^}]*gap: 0; background: transparent;/s,
@@ -362,6 +364,8 @@ describe('MapBuildView', () => {
     expect(mapBuildViewSource).toMatch(
       /\.sub-cell:hover \{[^}]*filter: brightness\(1\.07\);/s,
     )
+    expect(selectedRule).toContain('box-shadow: inset 0 0 0 2px #91bdff;')
+    expect(selectedRule?.match(/#91bdff/g)).toHaveLength(1)
     expect(mapBuildViewSource).not.toMatch(/\.sub-cell b \{[^}]*text-shadow:/s)
   })
 

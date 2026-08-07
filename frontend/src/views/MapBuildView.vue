@@ -997,7 +997,7 @@ onUnmounted(() => {
 .sub-cell:nth-child(-n+12) { border-bottom: 1px solid rgba(0,0,0,.26); }
 .sub-cell:hover { filter: brightness(1.07); z-index: 1; }
 .sub-cell:active { transform: scale(.985); }
-.sub-cell.selected { z-index: 2; box-shadow: inset 0 0 0 2px #91bdff, inset 0 0 0 4px rgba(14, 24, 38, .58), 0 0 0 1px #91bdff; }
+.sub-cell.selected { z-index: 2; box-shadow: inset 0 0 0 2px #91bdff; }
 .sub-cell span { font-size: 11px; opacity: .78; }
 .sub-cell b { margin-top: 3px; font-size: 12px; font-weight: 600; }
 .detail-panel { min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--color-bg-2) 94%, var(--color-fill-1)); }
