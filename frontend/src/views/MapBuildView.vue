@@ -305,17 +305,23 @@ async function loadTrend({ preserveOnError = false } = {}) {
 }
 
 async function loadSelectedScene() {
+  const requestedSceneId = filters.sceneId
+  const requestedMetricScope = metricScope.value
   error.value = ''
   filters.batchId = ''
   selection.blockIndex = null
   selection.subBlockIndex = null
   selection.registryPath = null
-  metricScope.value = 'self'
   if (!selectedSceneHasData.value) {
     clearSceneData()
     return
   }
-  await Promise.all([loadOverview(''), loadTrend()])
+  const [loadedOverview] = await Promise.all([loadOverview(''), loadTrend()])
+  if (
+    loadedOverview
+    && filters.sceneId === requestedSceneId
+    && metricScope.value !== requestedMetricScope
+  ) await loadTrend()
 }
 
 async function changeScene() {

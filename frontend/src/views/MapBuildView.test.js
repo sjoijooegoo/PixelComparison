@@ -882,6 +882,91 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.selection-pill').text()).toBe('主分块 · 仅自身')
   })
 
+  it('切换场景时保留含子级统计口径', async () => {
+    apiMock.mapBuildMeta.mockResolvedValueOnce({
+      ...meta,
+      scene_ids: [
+        ...meta.scene_ids,
+        {
+          value: 'Forest_WP', batch_count: 1, latest_at: '2026-08-06T10:00',
+          platforms: ['Windows'], shading_qualities: [{ value: 5, label: '电影' }],
+        },
+      ],
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.findAll('.metric-scope-switch button')[1].trigger('click')
+    await flushPromises()
+    vi.clearAllMocks()
+
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overview,
+      batch: { ...batch('9', '2026-08-06T10:00'), scene_id: 'Forest_WP' },
+    })
+    apiMock.mapBuildTrend.mockResolvedValueOnce({
+      ...worldTrend,
+      selection: { ...worldTrend.selection, metric_scope: 'subtree', label: '主分块 · 含子级汇总' },
+    })
+    const sceneSelect = wrapper.findComponent('.scene-select')
+    sceneSelect.vm.$emit('update:modelValue', 'Forest_WP')
+    sceneSelect.vm.$emit('change', 'Forest_WP')
+    await flushPromises()
+
+    expect(wrapper.get('.metric-scope-switch button[aria-pressed="true"]').text()).toBe('含子级')
+    expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Forest_WP', {
+      days: 30, metric_scope: 'subtree',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(routerMock.replace).toHaveBeenLastCalledWith({
+      path: '/map-build/Forest_WP',
+      query: expect.objectContaining({ scope: 'subtree' }),
+    })
+  })
+
+  it('目标场景没有子级时自动改用仅自身趋势', async () => {
+    apiMock.mapBuildMeta.mockResolvedValueOnce({
+      ...meta,
+      scene_ids: [
+        ...meta.scene_ids,
+        {
+          value: 'Forest_WP', batch_count: 1, latest_at: '2026-08-06T10:00',
+          platforms: ['Windows'], shading_qualities: [{ value: 5, label: '电影' }],
+        },
+      ],
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.findAll('.metric-scope-switch button')[1].trigger('click')
+    await flushPromises()
+    vi.clearAllMocks()
+
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overviewWithoutBlocks,
+      batch: { ...batch('9', '2026-08-06T10:00'), scene_id: 'Forest_WP' },
+    })
+    apiMock.mapBuildTrend
+      .mockResolvedValueOnce({
+        ...worldTrend,
+        selection: { ...worldTrend.selection, metric_scope: 'subtree' },
+      })
+      .mockResolvedValueOnce(worldTrend)
+    const sceneSelect = wrapper.findComponent('.scene-select')
+    sceneSelect.vm.$emit('update:modelValue', 'Forest_WP')
+    sceneSelect.vm.$emit('change', 'Forest_WP')
+    await flushPromises()
+
+    expect(wrapper.find('.metric-scope-switch').exists()).toBe(false)
+    expect(apiMock.mapBuildTrend).toHaveBeenCalledTimes(2)
+    expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Forest_WP', {
+      days: 30, metric_scope: 'self',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(routerMock.replace).toHaveBeenLastCalledWith({
+      path: '/map-build/Forest_WP',
+      query: expect.objectContaining({ scope: 'self' }),
+    })
+  })
+
   it('切换到缺少当前分块的批次时同步回到主分块趋势', async () => {
     const wrapper = mountView()
     await flushPromises()
