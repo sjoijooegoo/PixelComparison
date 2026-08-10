@@ -35,29 +35,22 @@ describe('map build presentation helpers', () => {
   })
 
   it('热力颜色随体积升高并对空集合提供稳定冷色', () => {
-    expect(atlasColor(null, 0)).toBe('rgb(18, 36, 51)')
-    expect(atlasColor(0, 100)).toBe('rgb(18, 36, 51)')
+    expect(atlasColor(null, 0)).toBe('rgb(33, 72, 118)')
+    expect(atlasColor(0, 100)).toBe('rgb(33, 72, 118)')
     expect(atlasColor(1, 100)).not.toBe(atlasColor(100, 100))
   })
 
-  it('热力颜色匹配选定预览图的无文字区域采样', () => {
+  it('热力颜色按参考图的蓝色到橙色控制点线性过渡', () => {
     const reference = [
-      { value: 0.253, rgb: [18, 36, 51] },
-      { value: 0.665, rgb: [17, 35, 50] },
-      { value: 0.722, rgb: [22, 40, 56] },
-      { value: 0.994, rgb: [29, 48, 64] },
-      { value: 2.16, rgb: [38, 57, 71] },
-      { value: 3.49, rgb: [48, 66, 78] },
-      { value: 4.60, rgb: [92, 89, 76] },
-      { value: 6.80, rgb: [106, 94, 71] },
-      { value: 8.30, rgb: [151, 109, 61] },
-      { value: 9.55, rgb: [180, 103, 46] },
-      { value: 12.58, rgb: [205, 72, 24] },
-      { value: 14, rgb: [206, 74, 25] },
+      { value: 0, rgb: [33, 72, 118] },
+      { value: 20, rgb: [71, 93, 112] },
+      { value: 34, rgb: [117, 105, 89] },
+      { value: 65, rgb: [179, 121, 57] },
+      { value: 100, rgb: [222, 132, 35] },
     ]
 
     for (const sample of reference) {
-      const actual = atlasColor(sample.value, 14).match(/\d+/g).map(Number)
+      const actual = atlasColor(sample.value, 100).match(/\d+/g).map(Number)
       expect(actual, `${sample.value} MiB => ${actual.join(', ')}`).toEqual(sample.rgb)
     }
   })

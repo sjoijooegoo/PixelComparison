@@ -83,35 +83,27 @@ function mix(from, to, amount) {
 }
 
 const ATLAS_COLOR_STOPS = [
-  { at: 0, color: '#122433' },
-  { at: 0.018071, color: '#122433' },
-  { at: 0.0475, color: '#112332' },
-  { at: 0.051571, color: '#162838' },
-  { at: 0.071, color: '#1d3040' },
-  { at: 0.154286, color: '#263947' },
-  { at: 0.249286, color: '#30424e' },
-  { at: 0.328571, color: '#5c594c' },
-  { at: 0.485714, color: '#6a5e47' },
-  { at: 0.592857, color: '#976d3d' },
-  { at: 0.682143, color: '#b4672e' },
-  { at: 0.898571, color: '#cd4818' },
-  { at: 1, color: '#ce4a19' },
+  { at: 0, color: '#214876' },
+  { at: 0.2, color: '#475d70' },
+  { at: 0.34, color: '#756959' },
+  { at: 0.65, color: '#b37939' },
+  { at: 1, color: '#de8423' },
 ]
 
 /**
- * 色标取自最终预览中避开文字、阴影和边框后的单元格底色中位数。
- * 使用全局 value / maximum 线性插值，保证不同分块共享同一统计口径。
+ * 色标取自参考图中避开文字和边框后的单元格底色。
+ * 使用全局 value / maximum 归一化，并在蓝、灰蓝、暖灰、琥珀和橙色之间线性插值。
  */
 export function atlasColor(value, maximum) {
   const max = Number(maximum)
   const numericValue = Number(value)
   if (!Number.isFinite(max) || max <= 0 || value === null || value === undefined
     || !Number.isFinite(numericValue)) {
-    return 'rgb(18, 36, 51)'
+    return 'rgb(33, 72, 118)'
   }
   const ratio = Math.max(0, Math.min(1, Math.max(0, numericValue) / max))
   const upperIndex = ATLAS_COLOR_STOPS.findIndex((stop) => ratio <= stop.at)
-  if (upperIndex <= 0) return 'rgb(18, 36, 51)'
+  if (upperIndex <= 0) return 'rgb(33, 72, 118)'
   const lower = ATLAS_COLOR_STOPS[upperIndex - 1]
   const upper = ATLAS_COLOR_STOPS[upperIndex]
   return mix(lower.color, upper.color, (ratio - lower.at) / (upper.at - lower.at))

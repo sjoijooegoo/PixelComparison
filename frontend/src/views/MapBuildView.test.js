@@ -387,8 +387,8 @@ describe('MapBuildView', () => {
     await flushPromises()
 
     const cells = wrapper.findAll('.sub-cell')
-    expect(cells[0].attributes('style')).toContain('rgb(18, 36, 51)')
-    expect(cells[1].attributes('style')).toContain('rgb(206, 74, 25)')
+    expect(cells[0].attributes('style')).toContain('rgb(33, 72, 118)')
+    expect(cells[1].attributes('style')).toContain('rgb(222, 132, 35)')
   })
 
   it('只有反射分块时不误判为空场景', async () => {
