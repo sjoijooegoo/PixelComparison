@@ -14,8 +14,24 @@ import {
 } from './mapBuildPresentation'
 
 describe('map build presentation helpers', () => {
-  it('趋势只展示资源规模口径', () => {
+  it('趋势提供全部静态指标且只默认开启主要五项', () => {
     expect(MAP_BUILD_SERIES.map((series) => series.key)).toEqual([
+      'all_mips_bytes',
+      'cook_estimate_bytes',
+      'lightmap_all_mips_bytes',
+      'shadowmap_all_mips_bytes',
+      'hue_all_mips_bytes',
+      'precomputed_light_volume_bytes',
+      'precomputed_reflection_volume_bytes',
+      'volumetric_lightmap_bytes',
+      'reflection_capture_bytes',
+      'mesh_map_build_data_bytes',
+      'light_build_data_bytes',
+      'precomputed_instanced_ilc_bytes',
+      'precomputed_instanced_pr_bytes',
+      'lightmap_resource_cluster_bytes',
+    ])
+    expect(MAP_BUILD_SERIES.filter((series) => series.defaultVisible).map((series) => series.key)).toEqual([
       'all_mips_bytes',
       'cook_estimate_bytes',
       'lightmap_all_mips_bytes',

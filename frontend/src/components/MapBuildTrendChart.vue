@@ -18,13 +18,22 @@ const props = defineProps({
 const emit = defineEmits(['selectBatch'])
 
 const WIDTH = 1200
-const HEIGHT = 292
+const HEIGHT = 380
 const HORIZONTAL_GUTTER = 52
 const PLOT = { left: HORIZONTAL_GUTTER, right: HORIZONTAL_GUTTER, top: 24, bottom: 44 }
 const plotWidth = WIDTH - PLOT.left - PLOT.right
 const plotHeight = HEIGHT - PLOT.top - PLOT.bottom
 const STORAGE_KEY = 'pixelcomp.mapBuildTrend.visibleSeries.v1'
-const defaultSeriesKeys = MAP_BUILD_SERIES.map((series) => series.key)
+const allSeriesKeys = MAP_BUILD_SERIES.map((series) => series.key)
+const defaultSeriesKeys = MAP_BUILD_SERIES
+  .filter((series) => series.defaultVisible)
+  .map((series) => series.key)
+const primarySeries = MAP_BUILD_SERIES.filter((series) => series.defaultVisible)
+const optionalSeries = MAP_BUILD_SERIES.filter((series) => !series.defaultVisible)
+const seriesGroups = [
+  { className: 'legend-primary', label: '选择主要趋势指标', series: primarySeries },
+  { className: 'legend-extra', label: '选择更多静态趋势指标', series: optionalSeries },
+]
 const hovered = ref(null)
 const visibleSeriesKeys = ref(loadVisibleSeriesKeys())
 const blockedSeriesKey = ref(null)
@@ -35,7 +44,7 @@ function loadVisibleSeriesKeys() {
   try {
     const stored = JSON.parse(window.localStorage.getItem(STORAGE_KEY))
     if (!Array.isArray(stored)) return defaultSeriesKeys
-    const visible = defaultSeriesKeys.filter((key) => stored.includes(key))
+    const visible = allSeriesKeys.filter((key) => stored.includes(key))
     return visible.length ? visible : defaultSeriesKeys
   } catch {
     return defaultSeriesKeys
@@ -55,7 +64,6 @@ const visibleSeriesKeySet = computed(() => new Set(visibleSeriesKeys.value))
 const visibleSeries = computed(() => MAP_BUILD_SERIES.filter(
   (series) => visibleSeriesKeySet.value.has(series.key),
 ))
-
 function isSeriesVisible(key) {
   return visibleSeriesKeySet.value.has(key)
 }
@@ -80,7 +88,7 @@ function toggleSeries(key) {
   blockedSeriesKey.value = null
   const nextKeys = isSeriesVisible(key)
     ? visibleSeriesKeys.value.filter((item) => item !== key)
-    : defaultSeriesKeys.filter((item) => item === key || visibleSeriesKeySet.value.has(item))
+    : allSeriesKeys.filter((item) => item === key || visibleSeriesKeySet.value.has(item))
   visibleSeriesKeys.value = nextKeys
   saveVisibleSeriesKeys(nextKeys)
 }
@@ -172,8 +180,9 @@ function selectPoint(point, index) {
 
 <template>
   <div v-if="points.length" class="trend-chart" :style="{ '--plot-left': `${PLOT.left}px` }">
-    <div class="legend" role="group" aria-label="选择趋势指标">
-      <button v-for="series in MAP_BUILD_SERIES" :key="series.key" type="button" class="legend-item"
+    <div v-for="group in seriesGroups" :key="group.className"
+      class="legend" :class="group.className" role="group" :aria-label="group.label">
+      <button v-for="series in group.series" :key="series.key" type="button" class="legend-item"
         :class="{ active: isSeriesVisible(series.key), blocked: blockedSeriesKey === series.key }"
         :aria-pressed="isSeriesVisible(series.key)" :style="{ '--series-color': series.color }"
         :title="seriesToggleTitle(series)"
@@ -247,6 +256,12 @@ function selectPoint(point, index) {
   display: flex; flex-wrap: wrap; align-items: center; gap: 20px;
   padding: 2px 8px 8px var(--plot-left);
 }
+.legend-primary { row-gap: 7px; }
+.legend-extra {
+  margin: 0 8px 8px var(--plot-left); padding: 8px 10px; gap: 7px 12px;
+  border-top: 1px solid var(--color-border-1);
+  background: color-mix(in srgb, var(--color-fill-1) 38%, transparent);
+}
 .legend-item {
   position: relative; padding: 3px 6px; display: inline-flex; align-items: center; gap: 7px;
   border: 1px solid transparent;
@@ -286,7 +301,7 @@ function selectPoint(point, index) {
   .legend-item, .legend-item i { transition: none; }
   .legend-item.blocked { animation: none; }
 }
-.canvas { position: relative; min-height: 238px; }
+.canvas { position: relative; min-height: 310px; }
 svg { display: block; width: 100%; height: auto; overflow: visible; }
 .grid-line { stroke: var(--color-border-1); stroke-width: 1; }
 .axis-label, .x-label { fill: var(--color-text-4); font-size: 11px; font-family: "Bahnschrift", "Segoe UI", sans-serif; }

@@ -1,13 +1,5 @@
 const MIB = 1024 * 1024
 
-export const MAP_BUILD_SERIES = [
-  { key: 'all_mips_bytes', label: '总 Mip', color: '#e8952d' },
-  { key: 'cook_estimate_bytes', label: 'Cook 估算', color: '#91a4bb' },
-  { key: 'lightmap_all_mips_bytes', label: '光照贴图纹理', color: '#4b91f1' },
-  { key: 'shadowmap_all_mips_bytes', label: '阴影贴图纹理', color: '#62aaa6' },
-  { key: 'hue_all_mips_bytes', label: '色相纹理', color: '#a77ae6' },
-]
-
 export const MAP_BUILD_DETAIL_METRICS = [
   { key: 'lightmap_all_mips_bytes', label: '光照贴图纹理', color: '#4b91f1' },
   { key: 'shadowmap_all_mips_bytes', label: '阴影贴图纹理', color: '#62aaa6' },
@@ -21,6 +13,21 @@ export const MAP_BUILD_DETAIL_METRICS = [
   { key: 'precomputed_instanced_ilc_bytes', label: '预计算实例 ILC', color: '#728f84' },
   { key: 'precomputed_instanced_pr_bytes', label: '预计算实例 PR', color: '#817b94' },
   { key: 'lightmap_resource_cluster_bytes', label: '光照贴图资源簇', color: '#8b8372' },
+]
+
+const DEFAULT_DETAIL_SERIES_KEYS = new Set([
+  'lightmap_all_mips_bytes',
+  'shadowmap_all_mips_bytes',
+  'hue_all_mips_bytes',
+])
+
+export const MAP_BUILD_SERIES = [
+  { key: 'all_mips_bytes', label: '总 Mip', color: '#e8952d', defaultVisible: true },
+  { key: 'cook_estimate_bytes', label: 'Cook 估算', color: '#91a4bb', defaultVisible: true },
+  ...MAP_BUILD_DETAIL_METRICS.map((metric) => ({
+    ...metric,
+    defaultVisible: DEFAULT_DETAIL_SERIES_KEYS.has(metric.key),
+  })),
 ]
 
 /** 字节指标才参与排行；纹理数等不同单位由界面单独展示。 */

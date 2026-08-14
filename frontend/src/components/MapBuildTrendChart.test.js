@@ -12,6 +12,15 @@ function metrics(total) {
     lightmap_all_mips_bytes: total / 2,
     hue_all_mips_bytes: total / 10,
     shadowmap_all_mips_bytes: total / 4,
+    precomputed_light_volume_bytes: total / 5,
+    precomputed_reflection_volume_bytes: total / 6,
+    volumetric_lightmap_bytes: total / 7,
+    reflection_capture_bytes: total / 8,
+    mesh_map_build_data_bytes: total / 9,
+    light_build_data_bytes: total / 10,
+    precomputed_instanced_ilc_bytes: total / 11,
+    precomputed_instanced_pr_bytes: total / 12,
+    lightmap_resource_cluster_bytes: total / 13,
   }
 }
 
@@ -107,7 +116,7 @@ describe('MapBuildTrendChart', () => {
       { batch: { id: '803', created_at: '2026-08-02T09:00' }, metrics: metrics(120 * 1024 * 1024) },
     ]
     const wrapper = mount(MapBuildTrendChart, { props: { points } })
-    const toggles = wrapper.findAll('.legend-item')
+    const toggles = wrapper.findAll('.legend-primary .legend-item')
     const initialMaximum = Math.max(...wrapper.findAll('.axis-label').map((label) => Number(label.text())))
 
     expect(toggles).toHaveLength(5)
@@ -137,13 +146,44 @@ describe('MapBuildTrendChart', () => {
     expect(restored.findAll('.series-dot')).toHaveLength(6)
   })
 
+  it('静态指标始终展开、默认关闭并在开启后持久化', async () => {
+    const points = [
+      { batch: { id: '802', created_at: '2026-08-01T09:00' }, metrics: metrics(100 * 1024 * 1024) },
+      { batch: { id: '803', created_at: '2026-08-02T09:00' }, metrics: metrics(120 * 1024 * 1024) },
+    ]
+    const wrapper = mount(MapBuildTrendChart, { props: { points } })
+
+    expect(wrapper.find('.legend-extra').exists()).toBe(true)
+    expect(wrapper.find('.legend-more').exists()).toBe(false)
+    expect(wrapper.findAll('svg path')).toHaveLength(5)
+
+    const optionalToggles = wrapper.findAll('.legend-extra .legend-item')
+    expect(optionalToggles).toHaveLength(9)
+    expect(optionalToggles.every((toggle) => toggle.attributes('aria-pressed') === 'false')).toBe(true)
+
+    await optionalToggles[0].trigger('click')
+    expect(wrapper.findAll('svg path')).toHaveLength(6)
+    expect(wrapper.findAll('.series-dot')).toHaveLength(12)
+    expect(JSON.parse(window.localStorage.getItem('pixelcomp.mapBuildTrend.visibleSeries.v1')))
+      .toContain('precomputed_light_volume_bytes')
+
+    await wrapper.findAll('svg rect')[1].trigger('mouseenter')
+    expect(wrapper.get('.tooltip').text()).toContain('预计算光照体积')
+
+    wrapper.unmount()
+    const restored = mount(MapBuildTrendChart, { props: { points } })
+    expect(restored.get('.legend-extra .legend-item[aria-pressed="true"]').text())
+      .toBe('预计算光照体积')
+    expect(restored.findAll('svg path')).toHaveLength(6)
+  })
+
   it('至少保留一条可见曲线', async () => {
     const wrapper = mount(MapBuildTrendChart, {
       props: {
         points: [{ batch: { id: '802', created_at: '2026-08-01T09:00' }, metrics: metrics(100) }],
       },
     })
-    const toggles = wrapper.findAll('.legend-item')
+    const toggles = wrapper.findAll('.legend-item[aria-pressed="true"]')
 
     for (let index = 0; index < toggles.length - 1; index += 1) {
       await toggles[index].trigger('click')
