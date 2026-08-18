@@ -624,7 +624,7 @@ const gridStyle = computed(() => ({
     <div v-else-if="store.gridLoading && !cols.length" class="grid-state">
       <a-spin :size="28" tip="正在加载列表图…" />
     </div>
-    <a-empty v-else-if="!cols.length" description="该场景下暂无批次" style="margin-top: 60px" />
+    <a-empty v-else-if="!cols.length" description="当前分支和场景下没有截图批次" style="margin-top: 60px" />
     <div v-else class="grid-scroll" :class="{ grabbing, 'auto-positioning': autoPinRight }" ref="scroll"
       @scroll.passive="onGridScroll" @pointerdown.passive="stopAutoPin" @wheel.passive="stopAutoPin"
       @mousedown="onPanDown">

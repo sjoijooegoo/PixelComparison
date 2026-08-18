@@ -134,6 +134,7 @@ def build_batch(cfg: dict) -> None:
         "capture_type": "levelsequence",
         "pipeline_data": {
             "batch_id": cfg["id"],
+            "branch_tag": cfg.get("branch_tag", "main"),
             "batch_url": f"{DEVOPS}/b-{cfg['id']}/executeDetail",
             "captured_at": cfg["captured_at"],
         },

@@ -10,6 +10,7 @@ const { apiMock, routerMock, loggerMock } = vi.hoisted(() => ({
     comparisonLookup: vi.fn(),
     comparisonTask: vi.fn(),
     createComparison: vi.fn(),
+    comparisons: vi.fn(),
     scenes: vi.fn(),
     item: vi.fn(),
   },
@@ -40,7 +41,7 @@ beforeEach(() => {
   cacheState.cache.clear()
   cacheState.inflight.clear()
   cacheState.epoch += 1
-  apiMock.meta.mockResolvedValue({ scene_ids: [], platforms: [], baselines: [] })
+  apiMock.meta.mockResolvedValue({ branch_tags: ['main'], scene_ids: [], platforms: [], baselines: [] })
   apiMock.settings.mockResolvedValue({
     default_shading_quality: 5,
     default_date_range_days: 30,
@@ -48,6 +49,7 @@ beforeEach(() => {
   })
   apiMock.batches.mockResolvedValue({ items: [], total: 0 })
   apiMock.sceneGrid.mockResolvedValue({ scene_id: '', batches: [], rows: [] })
+  apiMock.comparisons.mockResolvedValue({ items: [], total: 0 })
   apiMock.scenes.mockResolvedValue({
     items: [], total: 0,
     counts: { all: 0, fail: 0, warn: 0, pass: 0, added: 0, missing: 0 },
@@ -90,6 +92,64 @@ describe('display helpers', () => {
 })
 
 describe('batch initialization and request ordering', () => {
+  it('从路由恢复分支，并把分支带入首屏批次与列表图请求', async () => {
+    const store = useStore()
+    apiMock.meta.mockResolvedValue({
+      branch_tags: ['main', 'engine-ue5'],
+      scene_ids: ['BranchScene'],
+      platforms: [],
+      baselines: [],
+    })
+
+    await store.init('BranchScene', 'engine-ue5')
+
+    expect(store.filters.branch_tag).toBe('engine-ue5')
+    expect(apiMock.batches).toHaveBeenCalledWith(expect.objectContaining({
+      branch_tag: 'engine-ue5',
+      scene_id: 'BranchScene',
+    }))
+    expect(apiMock.sceneGrid).toHaveBeenCalledWith(
+      'BranchScene',
+      expect.objectContaining({ branch_tag: 'engine-ue5' }),
+    )
+  })
+
+  it('切换分支保留场景、清空角色和分页，并重新加载当前视图', async () => {
+    const store = useStore()
+    store.meta.branch_tags = ['main', 'engine-ue5']
+    store.filters.scene_id = 'BranchScene'
+    store.batchView = 'grid'
+    store.batchPage = 3
+    store.currentBatch = { id: '10', scene_id: 'BranchScene', branch_tag: 'main' }
+    store.baselineBatch = { id: '9', scene_id: 'BranchScene', branch_tag: 'main' }
+
+    await store.changeBranch('engine-ue5')
+
+    expect(store.filters.scene_id).toBe('BranchScene')
+    expect(store.filters.branch_tag).toBe('engine-ue5')
+    expect(store.batchPage).toBe(1)
+    expect(store.currentBatch).toBeNull()
+    expect(store.baselineBatch).toBeNull()
+    expect(apiMock.batches).toHaveBeenCalledWith(expect.objectContaining({ branch_tag: 'engine-ue5' }))
+    expect(apiMock.sceneGrid).toHaveBeenCalledWith(
+      'BranchScene',
+      expect.objectContaining({ branch_tag: 'engine-ue5' }),
+    )
+  })
+
+  it('不存在的分支深链回退 main，避免下拉框进入无选项状态', async () => {
+    const store = useStore()
+    apiMock.meta.mockResolvedValue({
+      branch_tags: ['main', 'engine-ue5'], scene_ids: [], platforms: [], baselines: [],
+    })
+
+    await store.init('', 'missing-branch')
+    await store.changeBranch('still-missing')
+
+    expect(store.filters.branch_tag).toBe('main')
+    expect(apiMock.batches).toHaveBeenLastCalledWith(expect.objectContaining({ branch_tag: 'main' }))
+  })
+
   it('深链初始化只使用项目设置下的最终场景筛选', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 6, 13, 12, 0, 0))
@@ -344,6 +404,45 @@ describe('batch initialization and request ordering', () => {
 })
 
 describe('comparison orientation', () => {
+  it('切换对比分支只加载该分支并清空旧选择', async () => {
+    const store = useStore()
+    store.meta.branch_tags = ['main', 'engine-ue5']
+    store.selectedComparison = { id: 1, branch_tag: 'main' }
+    apiMock.comparisons.mockResolvedValue({ items: [], total: 0 })
+
+    await store.changeComparisonBranch('engine-ue5')
+
+    expect(store.filters.branch_tag).toBe('engine-ue5')
+    expect(store.selectedComparison).toBeNull()
+    expect(apiMock.comparisons).toHaveBeenCalledWith(
+      { branch_tag: 'engine-ue5' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('快速切换对比分支时取消旧请求且过期响应不能覆盖当前分支', async () => {
+    const store = useStore()
+    const mainRequest = deferred()
+    const engineRequest = deferred()
+    apiMock.comparisons
+      .mockImplementationOnce(() => mainRequest.promise)
+      .mockImplementationOnce(() => engineRequest.promise)
+
+    store.filters.branch_tag = 'main'
+    const oldLoad = store.loadComparisons()
+    const oldSignal = apiMock.comparisons.mock.calls[0][1].signal
+    store.filters.branch_tag = 'engine-ue5'
+    const currentLoad = store.loadComparisons()
+
+    expect(oldSignal.aborted).toBe(true)
+    engineRequest.resolve({ items: [{ id: 2, branch_tag: 'engine-ue5' }] })
+    await currentLoad
+    mainRequest.resolve({ items: [{ id: 1, branch_tag: 'main' }] })
+    await oldLoad
+
+    expect(store.comparisons).toEqual([{ id: 2, branch_tag: 'engine-ue5' }])
+  })
+
   it('换向时交换图片、直方图和新增/缺失状态', () => {
     const store = useStore()
     store.detail = {
@@ -373,7 +472,24 @@ describe('comparison orientation', () => {
 
     expect(store.baselineBatch).toBeNull()
     expect(store.currentBatch).toEqual(batch)
-    expect(store.rolesByScene.SceneA).toEqual({ baseline: null, current: batch })
+    expect(store.rolesByScene['main\u0000SceneA']).toEqual({ baseline: null, current: batch })
+  })
+
+  it('无截图批次不能成为对比角色，跨分支选择也不能发起对比', () => {
+    const store = useStore()
+    const buildOnly = {
+      id: 'build', scene_id: 'SceneA', branch_tag: 'engine-ue5', has_screenshots: false,
+    }
+    store.setRole(buildOnly, 'current')
+    expect(store.currentBatch).toBeNull()
+
+    store.currentBatch = {
+      id: '2', scene_id: 'SceneA', branch_tag: 'engine-ue5', has_screenshots: true,
+    }
+    store.baselineBatch = {
+      id: '1', scene_id: 'SceneA', branch_tag: 'main', has_screenshots: true,
+    }
+    expect(store.canCompare).toBe(false)
   })
 })
 

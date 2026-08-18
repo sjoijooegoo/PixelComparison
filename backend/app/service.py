@@ -125,9 +125,10 @@ def run_comparison(
 
 
 def promote_baseline(db: Session, batch: Batch, version: str) -> Baseline:
-    """把批次晋升为基线;同平台同版本的旧基线退役。"""
+    """把批次晋升为基线;同分支、平台、版本的旧基线退役。"""
     old = db.scalars(
         select(Baseline).where(
+            Baseline.branch_tag == batch.branch_tag,
             Baseline.scene_id == batch.scene_id,
             Baseline.platform == batch.platform,
             Baseline.version == version,
@@ -137,7 +138,7 @@ def promote_baseline(db: Session, batch: Batch, version: str) -> Baseline:
     for b in old:
         b.status = "retired"
     baseline = Baseline(
-        version=version, scene_id=batch.scene_id,
+        version=version, branch_tag=batch.branch_tag, scene_id=batch.scene_id,
         platform=batch.platform, source_batch_id=batch.id,
     )
     db.add(baseline)

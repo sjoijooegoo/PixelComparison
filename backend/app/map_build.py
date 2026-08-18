@@ -242,6 +242,7 @@ def _batch_dto(snapshot: MapBuildSnapshot) -> dict:
     quality = _quality_value(batch)
     return {
         "id": batch.id,
+        "branch_tag": batch.branch_tag,
         "scene_id": batch.scene_id,
         "p4_version": batch.p4_version,
         "platform": batch.platform,
@@ -254,6 +255,7 @@ def _batch_dto(snapshot: MapBuildSnapshot) -> dict:
 def list_meta(
     db: Session,
     *,
+    branch_tag: str = "main",
     scene_id_order: list[str] | None = None,
     show_unlisted_scene_ids: bool = False,
 ) -> dict:
@@ -268,6 +270,7 @@ def list_meta(
             func.max(Batch.created_at),
         )
         .join(MapBuildSnapshot, MapBuildSnapshot.batch_id == Batch.id)
+        .where(Batch.branch_tag == branch_tag)
         .group_by(Batch.scene_id, Batch.platform, Batch.shading_quality)
         .order_by(Batch.scene_id, Batch.platform)
     ).all()
@@ -296,6 +299,7 @@ def list_meta(
         db.scalars(
             select(Batch.platform)
             .join(MapBuildSnapshot, MapBuildSnapshot.batch_id == Batch.id)
+            .where(Batch.branch_tag == branch_tag)
             .distinct()
             .order_by(Batch.platform)
         )
@@ -306,6 +310,7 @@ def list_meta(
             for value in db.scalars(
                 select(Batch.shading_quality)
                 .join(MapBuildSnapshot, MapBuildSnapshot.batch_id == Batch.id)
+                .where(Batch.branch_tag == branch_tag)
                 .distinct()
             )
         },
@@ -348,6 +353,7 @@ def list_meta(
 
 def _base_snapshot_query(
     scene_id: str,
+    branch_tag: str,
     platform: str | None,
     shading_quality: int | None,
 ):
@@ -355,7 +361,7 @@ def _base_snapshot_query(
         select(MapBuildSnapshot)
         .join(Batch, MapBuildSnapshot.batch_id == Batch.id)
         .options(selectinload(MapBuildSnapshot.batch))
-        .where(Batch.scene_id == scene_id)
+        .where(Batch.scene_id == scene_id, Batch.branch_tag == branch_tag)
     )
     if platform:
         stmt = stmt.where(Batch.platform == platform)
@@ -554,13 +560,14 @@ def get_overview(
     db: Session,
     scene_id: str,
     *,
+    branch_tag: str = "main",
     platform: str | None = None,
     shading_quality: int | None = None,
     batch_id: str | None = None,
 ) -> dict | None:
     """返回一个批次的世界/分块/子分块指标，不做批次间对照。"""
 
-    base = _base_snapshot_query(scene_id, platform, shading_quality)
+    base = _base_snapshot_query(scene_id, branch_tag, platform, shading_quality)
     recent = list(db.scalars(_snapshot_order(base).limit(100)))
     if not recent:
         return None
@@ -690,6 +697,7 @@ def get_trend(
     db: Session,
     scene_id: str,
     *,
+    branch_tag: str = "main",
     platform: str | None = None,
     shading_quality: int | None = None,
     block_index: int | None = None,
@@ -720,7 +728,7 @@ def get_trend(
         if (end_date - start_date).days + 1 > 90:
             raise ValueError("自定义日期范围最多 90 天")
 
-    base = _base_snapshot_query(scene_id, platform, shading_quality)
+    base = _base_snapshot_query(scene_id, branch_tag, platform, shading_quality)
     snapshots = []
     window_start = start_date
     window_end = end_date

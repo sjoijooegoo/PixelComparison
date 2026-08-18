@@ -29,6 +29,9 @@ class Batch(Base):
     __tablename__ = "batches"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)  # 例 20240524_1530
+    branch_tag: Mapped[str] = mapped_column(
+        String, default="main", server_default="main", index=True
+    )
     scene_id: Mapped[str] = mapped_column(String)  # UE Level / 场景标识,同场景才能对比
     p4_version: Mapped[int | None] = mapped_column(Integer, nullable=True)  # P4 changelist,越大越新;可空(未上报)
     platform: Mapped[str] = mapped_column(String)
@@ -150,11 +153,14 @@ class MapBuildRegistry(Base):
 
 
 class Baseline(Base):
-    """把某个被认可的批次晋升为基线版本(按平台隔离)。"""
+    """把某个被认可的批次晋升为基线版本(按分支和平台隔离)。"""
     __tablename__ = "baselines"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     version: Mapped[str] = mapped_column(String, index=True)  # 例 v1.1.5
+    branch_tag: Mapped[str] = mapped_column(
+        String, default="main", server_default="main", index=True
+    )
     scene_id: Mapped[str] = mapped_column(String)
     platform: Mapped[str] = mapped_column(String)
     source_batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"))

@@ -118,10 +118,71 @@ describe('ManualUpload', () => {
       '77',
       expect.objectContaining({ registries: [{ path: '/root' }] }),
       'map-build-data/v2',
+      'main',
     )
     expect(apiMock.uploadScreenshot).toHaveBeenCalledTimes(1)
     expect(messageMock.warning).toHaveBeenCalledWith('批次 #77 上报完成，但烘培数据失败')
     expect(wrapper.emitted('done')).toHaveLength(1)
     expect(wrapper.emitted('update:visible')).toContainEqual([false])
+  })
+
+  it('接受 engine-ue5 分支的纯烘培数据包且不会发起截图上传或自动对比', async () => {
+    const manifest = {
+      pipeline_data: { id: 'engine-77', branch_tag: ' Engine-UE5 ' },
+      ue_data: { world_name: 'Coral_WP', platform: 'WindowsEditor', p4_version: 456 },
+      artifacts: {
+        map_build_data: {
+          path: 'Artifacts/map_build_data.json',
+          format: 'map-build-data/v2',
+        },
+      },
+    }
+    const files = [
+      packageFile('manifest.json', JSON.stringify(manifest), 'application/json'),
+      packageFile(
+        'Artifacts/map_build_data.json',
+        JSON.stringify({ worldAggregate: {}, registries: [{ path: '/root' }] }),
+        'application/json',
+      ),
+    ]
+    const wrapper = mountUpload()
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('engine-ue5')
+    expect(wrapper.text()).toContain('共 0 张截图')
+    const start = wrapper.findAll('button').find((button) => button.text() === '开始上报')
+    await start.trigger('click')
+    await flushPromises()
+
+    expect(apiMock.createBatch).toHaveBeenCalledWith(expect.objectContaining({
+      branch_tag: 'engine-ue5',
+    }))
+    expect(apiMock.uploadMapBuildData).toHaveBeenCalledWith(
+      '77',
+      expect.any(Object),
+      'map-build-data/v2',
+      'engine-ue5',
+    )
+    expect(apiMock.uploadScreenshot).not.toHaveBeenCalled()
+    expect(apiMock.autoCompare).not.toHaveBeenCalled()
+  })
+
+  it('没有截图也没有烘培数据时拒绝进入上报预览', async () => {
+    const manifest = {
+      pipeline_data: { branch_tag: 'main' },
+      ue_data: { world_name: 'Coral_WP', platform: 'WindowsEditor' },
+    }
+    const files = [packageFile('manifest.json', JSON.stringify(manifest), 'application/json')]
+    const wrapper = mountUpload()
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('数据包内既没有可上传的截图，也没有烘培数据')
+    expect(wrapper.findAll('button').some((button) => button.text() === '开始上报')).toBe(false)
   })
 })

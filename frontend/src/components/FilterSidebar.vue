@@ -48,6 +48,14 @@ async function applyNow() {
   }
 }
 
+async function onBranchChange(value) {
+  try {
+    await store.changeBranch(value)
+  } catch (error) {
+    Message.error(error?.message || '分支数据加载失败，请重试')
+  }
+}
+
 function onDateChange(v) {
   if (v?.[0] && v?.[1]) {
     if (!isDateRangeAllowed(v[0], v[1])) {
@@ -93,15 +101,26 @@ function removeDay(d) {
 
 async function reset() {
   // 恢复到项目设置里的默认筛选(默认画质 + 默认日期范围);不放出全部时间数据
+  const previousBranch = store.filters.branch_tag
   store.filters = store.defaultFilters()
   dayPick.value = null
   dayPickerOpen.value = false
-  await applyNow()
+  if (previousBranch !== store.filters.branch_tag) await store.changeBranch(store.filters.branch_tag)
+  else await applyNow()
 }
 </script>
 
 <template>
   <div class="filter-bar card">
+    <div class="field">
+      <span class="label">分支</span>
+      <a-select v-model="store.filters.branch_tag" size="small" style="width: 150px"
+        @change="onBranchChange">
+        <a-option v-for="branch in store.meta.branch_tags" :key="branch" :value="branch">
+          {{ branch }}
+        </a-option>
+      </a-select>
+    </div>
     <div class="field">
       <span class="label">场景ID</span>
       <a-select v-model="store.filters.scene_id" placeholder="全部场景" allow-clear allow-search size="small"

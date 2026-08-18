@@ -72,6 +72,7 @@ _MAP_BUILD_DETAIL_JSON_PATHS = {
 
 _NEW_COLUMNS = {
     "batches": {
+        "branch_tag": "VARCHAR NOT NULL DEFAULT 'main'",
         "batch_url": "VARCHAR",
         "resolution": "VARCHAR",
         "capture_type": "VARCHAR",
@@ -83,6 +84,9 @@ _NEW_COLUMNS = {
         "frame_index": "INTEGER",
         "camera": "JSON",
         "cache_version": "VARCHAR",
+    },
+    "baselines": {
+        "branch_tag": "VARCHAR NOT NULL DEFAULT 'main'",
     },
     "comparison_items": {
         "cache_version": "VARCHAR",
@@ -221,6 +225,24 @@ def migrate_columns() -> None:
             "已回填烘培趋势静态指标: %s 条 registry", backfilled
         )
     _relax_p4_nullable()
+    with engine.begin() as conn:
+        tables = set(conn.scalars(text(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )))
+        if "batches" in tables:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_batches_branch_tag "
+                "ON batches(branch_tag)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_batches_branch_scene_created "
+                "ON batches(branch_tag, scene_id, created_at)"
+            ))
+        if "baselines" in tables:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_baselines_branch_tag "
+                "ON baselines(branch_tag)"
+            ))
     # 同一对(batch, ref)至多一条对比;防并发重复(应用层加锁兜底)
     try:
         with engine.begin() as conn:

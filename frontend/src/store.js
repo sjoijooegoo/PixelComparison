@@ -87,6 +87,7 @@ const reverseStatus = (s) => REVERSE_STATUS[s] || s
 
 const GRID_CACHE_LIMIT = 8
 const GRID_CACHE_FIELDS = [
+  'branch_tag',
   'platform',
   'shading_quality',
   'p4_min',
@@ -107,6 +108,7 @@ const gridInflight = gridCacheState.inflight
 const initPromises = new WeakMap()
 const requestRuntimes = new WeakMap()
 const REQUEST_SEQUENCE_FIELDS = {
+  comparisons: '_comparisonRequestSeq',
   scenes: '_sceneRequestSeq',
   detail: '_detailRequestSeq',
   heatmaps: '_heatmapRequestSeq',
@@ -115,7 +117,12 @@ const REQUEST_SEQUENCE_FIELDS = {
 function requestRuntime(store, channel) {
   let runtime = requestRuntimes.get(store)
   if (!runtime) {
-    runtime = { scenes: { active: null }, detail: { active: null }, heatmaps: { active: null } }
+    runtime = {
+      comparisons: { active: null },
+      scenes: { active: null },
+      detail: { active: null },
+      heatmaps: { active: null },
+    }
     requestRuntimes.set(store, runtime)
   }
   return runtime[channel]
@@ -200,9 +207,14 @@ function cloneRequestParams(params) {
   )
 }
 
+function roleStorageKey(branchTag, sceneId) {
+  return `${branchTag || 'main'}\u0000${sceneId}`
+}
+
 export const useStore = defineStore('shotdiff', {
   state: () => ({
     meta: {
+      branch_tags: ['main'],
       scene_ids: [],
       unlisted_scene_ids: [],
       scene_catalog_configured: false,
@@ -210,7 +222,7 @@ export const useStore = defineStore('shotdiff', {
       platforms: [],
       baselines: [],
     },
-    filters: { scene_id: '', shading_quality: 5, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' },   // 画质默认「电影」(5)
+    filters: { branch_tag: 'main', scene_id: '', shading_quality: 5, dateMode: 'range', ...defaultDateRange(), created_dates: [], status: '' },   // 画质默认「电影」(5)
 
     // 顶部:原始批次列表
     batches: [],
@@ -228,6 +240,7 @@ export const useStore = defineStore('shotdiff', {
     gridError: '',
     _batchRequestSeq: 0,               // 只允许最新批次请求写回状态
     _gridRequestSeq: 0,                // 只允许最新列表图请求写回状态
+    _comparisonRequestSeq: 0,          // 对比历史最新请求序号
     _sceneRequestSeq: 0,               // 对比检查点列表最新请求序号
     _detailRequestSeq: 0,              // 检查点详情最新请求序号
     _heatmapRequestSeq: 0,             // 列表图热力图 lookup 最新请求序号
@@ -239,10 +252,12 @@ export const useStore = defineStore('shotdiff', {
     // 对比的两侧选择(角色);currentBatch/baselineBatch 是「当前场景」的激活镜像
     currentBatch: null,   // 对比批次(待检查)
     baselineBatch: null,  // 基线批次(参照)
-    rolesByScene: {},     // 按场景记忆的选择 { sceneId: { baseline, current } };切场景保留、切回即恢复
+    rolesByScene: {},     // 按“分支 + 场景”记忆选择；切场景保留、切回即恢复
+    roleScopeKey: '',     // 当前角色镜像所属的「分支 + 场景」
 
     // 历史对比列表(对比结果页左侧)
     comparisons: [],
+    comparisonFilters: { scene_id: '', status: '' },
     // 运行后的活动对比
     selectedComparison: null,
     flip: false,          // 结果页换向:true 时把当前对比按"基线↔对比"翻转展示
@@ -287,8 +302,14 @@ export const useStore = defineStore('shotdiff', {
   }),
 
   getters: {
-    canCompare: (s) =>
-      !!(s.currentBatch && s.baselineBatch && s.currentBatch.id !== s.baselineBatch.id),
+    canCompare: (s) => !!(
+      s.currentBatch
+      && s.baselineBatch
+      && s.currentBatch.id !== s.baselineBatch.id
+      && s.currentBatch.has_screenshots !== false
+      && s.baselineBatch.has_screenshots !== false
+      && (s.currentBatch.branch_tag || 'main') === (s.baselineBatch.branch_tag || 'main')
+    ),
 
     // 下发给接口的筛选:按日期模式只带对应日期键(范围 / 指定多天),互不混用
     requestFilters: (s) => {
@@ -352,10 +373,10 @@ export const useStore = defineStore('shotdiff', {
   },
 
   actions: {
-    async init(routeSceneId = '') {
+    async init(routeSceneId = '', routeBranchTag = 'main') {
       const active = initPromises.get(this)
       if (active) return await active
-      const initialization = this._initialize(routeSceneId)
+      const initialization = this._initialize(routeSceneId, routeBranchTag)
       initPromises.set(this, initialization)
       try {
         return await initialization
@@ -364,11 +385,14 @@ export const useStore = defineStore('shotdiff', {
       }
     },
 
-    async _initialize(routeSceneId = '') {
+    async _initialize(routeSceneId = '', routeBranchTag = 'main') {
       this.initialized = false
       this.initializing = true
       this.initError = ''
       const sid = Array.isArray(routeSceneId) ? routeSceneId[0] : routeSceneId
+      const requestedBranch = String(
+        Array.isArray(routeBranchTag) ? routeBranchTag[0] : routeBranchTag || 'main',
+      ).trim().toLowerCase()
       // 必须在任何 await 之前固定深链场景；即使初始化接口失败，挂载后的兜底请求
       // 也不会先发出未带 scene_id 的全局查询。
       if (sid) {
@@ -378,11 +402,16 @@ export const useStore = defineStore('shotdiff', {
         this.filters.scene_id = ''
         this.batchView = 'list'
       }
+      this.filters.branch_tag = requestedBranch
       try {
         // 两个配置接口互不依赖，并行请求少等一个网络往返；批次请求仍要等最终筛选确定。
         await Promise.all([this.loadMeta(), this.loadSettings()])
         const acceptedSid = sid && this.meta.scene_ids.includes(sid) ? sid : ''
+        const acceptedBranch = this.meta.branch_tags.includes(requestedBranch)
+          ? requestedBranch
+          : 'main'
         this.filters = this.defaultFilters()   // 用项目设置里的默认画质/日期范围初始化筛选
+        this.filters.branch_tag = acceptedBranch
         if (acceptedSid) this.filters.scene_id = acceptedSid
         this.batchView = acceptedSid ? 'grid' : 'list'
         this.batchPage = 1
@@ -403,6 +432,7 @@ export const useStore = defineStore('shotdiff', {
     defaultFilters() {
       const q = this.settings.default_shading_quality
       return {
+        branch_tag: 'main',
         scene_id: '',
         shading_quality: (q === -1 || q == null) ? '' : q,   // -1/空 → 全部画质
         dateMode: 'range',
@@ -416,10 +446,22 @@ export const useStore = defineStore('shotdiff', {
     async loadMeta() {
       const next = await api.meta()
       this.meta = {
+        branch_tags: ['main'],
         unlisted_scene_ids: [],
         scene_catalog_configured: false,
         show_unlisted_scene_ids: false,
         ...next,
+      }
+      if (!this.meta.branch_tags?.includes('main')) {
+        this.meta.branch_tags = ['main', ...(this.meta.branch_tags || [])]
+      }
+      if (!this.meta.branch_tags.includes(this.filters.branch_tag)) {
+        this.filters.branch_tag = 'main'
+        this.currentBatch = null
+        this.baselineBatch = null
+        this.roleScopeKey = roleStorageKey('main', this.filters.scene_id)
+        this.grid = emptyGrid()
+        this.gridHeatmaps = null
       }
       const currentSceneId = this.filters.scene_id
       if (currentSceneId && !this.meta.scene_ids.includes(currentSceneId)) {
@@ -446,11 +488,28 @@ export const useStore = defineStore('shotdiff', {
     syncRolesForScene() {
       const sid = this.filters.scene_id
       if (!sid) return
-      const activeScene = this.baselineBatch?.scene_id || this.currentBatch?.scene_id
-      if (activeScene === sid) return
-      const saved = this.rolesByScene[sid]
+      const key = roleStorageKey(this.filters.branch_tag, sid)
+      if (this.roleScopeKey === key) return
+      this.roleScopeKey = key
+      const saved = this.rolesByScene[key]
       this.baselineBatch = saved?.baseline || null
       this.currentBatch = saved?.current || null
+    },
+
+    async changeBranch(branchTag) {
+      const requested = String(branchTag || 'main').trim().toLowerCase()
+      const next = this.meta.branch_tags.includes(requested) ? requested : 'main'
+      this.filters.branch_tag = next
+      this.batchPage = 1
+      this.currentBatch = null
+      this.baselineBatch = null
+      this.roleScopeKey = roleStorageKey(next, this.filters.scene_id)
+      this.grid = emptyGrid()
+      this.gridHeatmaps = null
+      cancelLatestRequest(this, 'heatmaps')
+      const loads = [this.loadBatches()]
+      if (this.batchView === 'grid') loads.push(this.loadGrid())
+      await Promise.all(loads)
     },
 
     async loadBatches() {
@@ -586,15 +645,18 @@ export const useStore = defineStore('shotdiff', {
     // 把当前激活的选择写入按场景记忆表(都为空则删除该场景条目)
     _saveRoles(scene) {
       if (!scene) return
+      const key = roleStorageKey(this.filters.branch_tag, scene)
+      this.roleScopeKey = key
       if (this.baselineBatch || this.currentBatch) {
-        this.rolesByScene[scene] = { baseline: this.baselineBatch, current: this.currentBatch }
+        this.rolesByScene[key] = { baseline: this.baselineBatch, current: this.currentBatch }
       } else {
-        delete this.rolesByScene[scene]
+        delete this.rolesByScene[key]
       }
     },
 
     // role: 'current'(对比) | 'baseline'(基线)
     setRole(batch, role) {
+      if (batch.has_screenshots === false) return
       const other = role === 'current' ? this.baselineBatch : this.currentBatch
       // 取消同一批次的另一角色,避免自比
       if (other && other.id === batch.id) {
@@ -667,7 +729,13 @@ export const useStore = defineStore('shotdiff', {
       if (!h?.exists || !h.comparison) return
       // 库内规范方向:batch_id=对比侧、ref_batch_id=基线侧;与当前网格所选对比侧不一致则翻转展示
       const flip = String(h.comparison.batch_id) !== String(this.currentBatch?.id)
-      router.push({ path: `/comparison/${h.comparison.id}`, query: flip ? { flip: '1' } : undefined })
+      router.push({
+        path: `/comparison/${h.comparison.id}`,
+        query: {
+          branch_tag: this.filters.branch_tag,
+          ...(flip ? { flip: '1' } : {}),
+        },
+      })
     },
 
     // 按 id 打开对比(深链/列头跳转用);在已加载历史中查找,缺失再拉一次,仍无则返回 false
@@ -683,9 +751,38 @@ export const useStore = defineStore('shotdiff', {
     },
 
     async loadComparisons() {
-      // 对比历史不随批次页筛选(尤其场景ID)过滤,始终加载全部(后端保留近 14 天)
-      const { items } = await api.comparisons({})
-      this.comparisons = items
+      // 对比历史使用独立筛选，不复用批次页的日期/画质条件。
+      const params = { branch_tag: this.filters.branch_tag }
+      if (this.comparisonFilters.scene_id) params.scene_id = this.comparisonFilters.scene_id
+      if (this.comparisonFilters.status) params.status = this.comparisonFilters.status
+      const key = JSON.stringify(params)
+      return runLatestRequest(this, 'comparisons', key, async ({ signal, isLatest }) => {
+        try {
+          const data = await api.comparisons(params, { signal })
+          if (!isLatest()) return null
+          this.comparisons = data.items
+          return data
+        } catch (error) {
+          if (isRequestCancelled(error) || !isLatest()) return null
+          throw error
+        }
+      })
+    },
+
+    async applyComparisonFilters() {
+      this.cancelComparisonDataRequests()
+      this.selectedComparison = null
+      this.comparisons = []
+      const data = await this.loadComparisons()
+      if (!data) return
+      if (this.comparisons.length) await this.openComparison(this.comparisons[0])
+    },
+
+    async changeComparisonBranch(branchTag) {
+      const requested = String(branchTag || 'main').trim().toLowerCase()
+      this.filters.branch_tag = this.meta.branch_tags.includes(requested) ? requested : 'main'
+      this.comparisonFilters = { scene_id: '', status: '' }
+      await this.applyComparisonFilters()
     },
 
     // 发起对比 -> 命中缓存直接返回;否则轮询后台任务进度直到完成
@@ -717,7 +814,9 @@ export const useStore = defineStore('shotdiff', {
         await this.loadComparisons()   // 刷新历史(可能新增了一条)
         this.loadGridHeatmaps()        // 新对比已生成,列表图热力图列可直接命中
         // 列表图里发起对比后留在原页(热力图列就地填充);列表视图仍跳到结果页
-        if (this.batchView !== 'grid') router.push('/comparison')
+        if (this.batchView !== 'grid') {
+          router.push({ path: '/comparison', query: { branch_tag: this.filters.branch_tag } })
+        }
         return comparison
       } finally {
         this.running = false
@@ -855,6 +954,7 @@ export const useStore = defineStore('shotdiff', {
 
     cancelComparisonDataRequests() {
       const interrupted = hasActiveRequest(this, 'scenes') || hasActiveRequest(this, 'detail')
+      cancelLatestRequest(this, 'comparisons')
       cancelLatestRequest(this, 'scenes')
       cancelLatestRequest(this, 'detail')
       this.loading = false

@@ -73,9 +73,11 @@ describe('api request encoding', () => {
     expect(trendUrl.searchParams.get('sub_block_index')).toBe('1')
     expect(trendUrl.searchParams.get('days')).toBe('14')
 
-    await api.uploadMapBuildData('batch 7', { worldAggregate: {} }, 'map-build-data/v2')
+    await api.uploadMapBuildData(
+      'batch 7', { worldAggregate: {} }, 'map-build-data/v2', 'engine-ue5',
+    )
     expect(fetchMock.mock.calls[1][0]).toBe(
-      '/api/batches/batch%207/map-build-data?format=map-build-data%2Fv2',
+      '/api/batches/batch%207/map-build-data?format=map-build-data%2Fv2&branch_tag=engine-ue5',
     )
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({
       method: 'POST',

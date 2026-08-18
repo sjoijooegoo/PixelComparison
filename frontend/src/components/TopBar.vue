@@ -27,10 +27,19 @@ const showDataActions = computed(() => (
 const supportsAutoRefresh = computed(() => isActive('/batches') || isActive('/comparison'))
 
 function tabTarget(tab) {
-  if (tab.path !== '/map-build' || !isActive('/batches')) return tab.path
-  const rawSceneId = route.params.sceneId
-  const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
-  return sceneId ? `/map-build/${encodeURIComponent(sceneId)}` : tab.path
+  let path = tab.path
+  if (tab.path === '/map-build' && isActive('/batches')) {
+    const rawSceneId = route.params.sceneId
+    const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
+    if (sceneId) path = `/map-build/${encodeURIComponent(sceneId)}`
+  }
+  if (tab.path === '/batches' && isActive('/map-build')) {
+    const rawSceneId = route.params.sceneId
+    const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
+    if (sceneId) path = `/batches/${encodeURIComponent(sceneId)}`
+  }
+  if (tab.path === '/settings') return path
+  return { path, query: { branch_tag: store.filters?.branch_tag || 'main' } }
 }
 
 // 按当前视图刷新对应数据;silent=true 时不弹提示(供定时自动刷新复用)

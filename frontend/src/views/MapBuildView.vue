@@ -19,6 +19,7 @@ const meta = ref({ scene_ids: [] })
 const overview = ref(null)
 const trend = ref({ selection: { label: '主分块 · 仅自身' }, points: [] })
 const filters = reactive({
+  branchTag: 'main',
   sceneId: '',
   batchId: '',
   days: 30,
@@ -95,6 +96,11 @@ function routeQueryValue(name) {
   return Array.isArray(value) ? value[0] : value
 }
 
+function availableBranchTag(value) {
+  const normalized = String(value || 'main').trim().toLowerCase()
+  return store.meta.branch_tags?.includes(normalized) ? normalized : 'main'
+}
+
 function dateStamp(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null
   const stamp = Date.parse(`${value}T00:00:00Z`)
@@ -148,8 +154,9 @@ function applyAnalysisState(state) {
 }
 
 function analysisQuery() {
-  if (!overview.value) return {}
+  if (!overview.value) return { branch_tag: filters.branchTag }
   const query = {
+    branch_tag: filters.branchTag,
     batch: String(filters.batchId),
     scope: metricScope.value,
   }
@@ -189,7 +196,10 @@ async function loadMeta(requestedSceneId) {
   const request = beginRequest('meta')
   metaLoading.value = true
   try {
-    const data = await api.mapBuildMeta({ signal: request.signal })
+    const data = await api.mapBuildMeta(
+      { branch_tag: filters.branchTag },
+      { signal: request.signal },
+    )
     if (!request.isLatest()) return null
     if (!data || !Array.isArray(data.scene_ids)) {
       throw new Error('烘培数据筛选项格式无效')
@@ -241,6 +251,7 @@ async function loadOverview(
   overviewLoading.value = true
   try {
     const data = await api.mapBuildOverview(filters.sceneId, {
+      branch_tag: filters.branchTag,
       batch_id: requestedBatchId,
     }, { signal: request.signal })
     if (!request.isLatest()) return null
@@ -278,7 +289,11 @@ async function loadTrend({ preserveOnError = false } = {}) {
     const effectiveMetricScope = auxiliary && !auxiliary.has_children
       ? 'self'
       : metricScope.value
-    const params = { days: filters.days, metric_scope: effectiveMetricScope }
+    const params = {
+      branch_tag: filters.branchTag,
+      days: filters.days,
+      metric_scope: effectiveMetricScope,
+    }
     if (trendRangeMode.value === 'custom') {
       if (customRangeDays(customDateRange.value) < 1) return null
       delete params.days
@@ -329,9 +344,40 @@ async function changeScene() {
   await syncAnalysisRoute()
 }
 
+async function changeBranch() {
+  filters.branchTag = availableBranchTag(filters.branchTag)
+  store.filters.branch_tag = filters.branchTag
+  clearSceneData()
+  selection.blockIndex = null
+  selection.subBlockIndex = null
+  selection.registryPath = null
+  error.value = ''
+  const loaded = await loadMeta(filters.sceneId)
+  if (loaded && filters.sceneId && selectedSceneHasData.value) {
+    const loadedOverview = await loadOverview('')
+    if (loadedOverview) await loadTrend()
+  }
+  await syncAnalysisRoute()
+}
+
 async function applyRouteState() {
   if (!routeReady.value) return
   const sequence = ++routeApplySequence
+  const nextBranchTag = availableBranchTag(routeQueryValue('branch_tag'))
+  if (filters.branchTag !== nextBranchTag) {
+    filters.branchTag = nextBranchTag
+    store.filters.branch_tag = nextBranchTag
+    clearSceneData()
+    applyAnalysisState(routeAnalysisState())
+    const loadedMeta = await loadMeta(routeSceneId())
+    if (sequence !== routeApplySequence) return
+    if (loadedMeta && filters.sceneId && selectedSceneHasData.value) {
+      const loadedOverview = await loadOverview(filters.batchId)
+      if (loadedOverview) await loadTrend()
+    }
+    await syncAnalysisRoute()
+    return
+  }
   const preferredSceneId = meta.value.scene_ids[0]?.value || ''
   const nextSceneId = keepOrDefault(routeSceneId(), sceneOptions.value, preferredSceneId)
   const nextState = routeAnalysisState()
@@ -604,6 +650,18 @@ function batchLabel(batch, isLatest = false) {
 
 onMounted(async () => {
   unregisterPageRefresh = registerPageRefresh(refresh)
+  const requestedBranchTag = routeQueryValue('branch_tag') || store.filters.branch_tag
+  // bootstrap 会先启动 store.init() 再挂载页面。等待同一轮初始化完成后再校验
+  // 深链分支，避免 meta 尚只有默认 main 时把有效的 engine-ue5 错误回退。
+  if (!store.initialized && typeof store.init === 'function') {
+    try {
+      await store.init('', requestedBranchTag)
+    } catch {
+      // 页面自己的错误态会继续承接 map-build 请求失败，外壳仍保持可操作。
+    }
+  }
+  filters.branchTag = availableBranchTag(requestedBranchTag)
+  store.filters.branch_tag = filters.branchTag
   applyAnalysisState(routeAnalysisState())
   const loaded = await loadMeta(routeSceneId())
   if (loaded && filters.sceneId && selectedSceneHasData.value) {
@@ -616,6 +674,7 @@ onMounted(async () => {
 watch(
   () => [
     route.params.sceneId,
+    route.query?.branch_tag,
     route.query?.batch,
     route.query?.days,
     route.query?.start,
@@ -637,6 +696,15 @@ onUnmounted(() => {
   <div class="map-build-page">
     <div class="map-build-shell">
       <section class="toolbar card" aria-label="烘培数据筛选">
+        <div class="filter-field branch-field">
+          <span class="label">分支</span>
+          <a-select v-model="filters.branchTag" size="small" style="width: 160px"
+            @change="changeBranch">
+            <a-option v-for="branch in store.meta.branch_tags" :key="branch" :value="branch">
+              {{ branch }}
+            </a-option>
+          </a-select>
+        </div>
         <div class="filter-field scene-field">
           <span class="label">场景ID</span>
           <a-select v-model="filters.sceneId" class="scene-select" :loading="metaLoading"

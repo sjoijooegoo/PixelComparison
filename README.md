@@ -1,6 +1,6 @@
 # PixelComparison
 
-PixelComparison 是面向游戏截图的视觉回归平台。采集端按批次上报同一 UE Level 的检查点截图，平台负责跨版本浏览、像素级比较、差异热力图生成和历史结果查询。
+PixelComparison 是面向游戏截图与场景烘培数据的回归平台。采集端按批次上报同一 UE Level 的截图、烘培数据或两者，平台按分支隔离浏览、像素级比较、差异热力图和烘培趋势。
 
 当前项目定位是可信局域网内的小团队工具：单进程 FastAPI 后端、SQLite 元数据、文件系统图片存储，以及 Vue 3 前端。
 
@@ -14,6 +14,8 @@ PixelComparison 是面向游戏截图的视觉回归平台。采集端按批次�
 - 支持浏览器拖入数据包手动上报，以及 HTTP API 接入 CI/采集端。
 - 支持外部模块全量同步前端场景目录，统一控制场景筛选项的顺序和可见性。
 - 接收批次随附的 `map_build_data`，以分块热力网格和跨批次折线展示烘培体积回归。
+- 使用 `pipeline_data.branch_tag` 隔离 `main`、`engine-ue5` 等分支；旧数据与缺省上报自动归入 `main`。
+- 支持不带截图的纯烘培批次；批次列表展示数据能力，列表图和图片对比只使用确有截图的批次。
 - 自动生成缩略图并按访问时间淘汰缓存；批次画廊先显示缩略图，点击后才加载原图。
 - 每天在线备份 SQLite 数据库，默认保留 30 天。
 
@@ -202,18 +204,18 @@ backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 
 | 路径 | 功能 |
 |---|---|
-| `/batches` | 批次筛选、列表、列表图、预览、删除和手动上报 |
+| `/batches?branch_tag=main` | 按分支筛选批次、列表、列表图、预览、删除和手动上报 |
 | `/batches/:sceneId` | 直接打开指定场景的列表图 |
-| `/comparison` | 打开最近一次对比 |
+| `/comparison?branch_tag=main` | 打开所选分支最近一次对比 |
 | `/comparison/:id` | 打开指定对比结果 |
-| `/map-build` | 烘培数据分块网格、选中项细则和按天历史趋势 |
+| `/map-build?branch_tag=main` | 所选分支的烘培数据分块网格、选中项细则和按天历史趋势 |
 | `/settings` | 对比算法与默认筛选设置 |
 
 列表图按照“左旧右新”排列批次。选择基线和对比批次后，已有结果会直接显示热力图；没有缓存时可在列表图内发起计算，不会跳页。
 
 ## 比较规则
 
-- 两个批次必须具有相同 `scene_id`，平台可以不同。
+- 两个批次必须具有相同 `branch_tag`、相同 `scene_id`，并且两侧都包含截图；平台可以不同。
 - 批次内的 `scene_name` 是检查点唯一键，两个版本按该字段配对。
 - 两侧都有截图时计算像素差异；只有当前侧时为 `added`，只有参照侧时为 `missing`。
 - 任一 `fail` 或 `missing` 使整体状态为失败；否则任一 `warn` 或 `added` 使整体状态为警告；其余为通过。
@@ -235,9 +237,22 @@ backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 
 当前支持：
 
-1. 前端顶栏“手动上报”，拖入包含 `manifest.json`、截图及可选烘培数据的目录。
+1. 前端顶栏“手动上报”，拖入包含 `manifest.json`，以及截图、烘培数据或两者的目录。
 2. 直接调用批次、截图、`map-build-data` 和自动对比 API。
 3. 使用 `mock_uploads/upload.py` 上传仓库内演示数据。
+
+分支写在 manifest 的 `pipeline_data` 中：
+
+```json
+{
+  "pipeline_data": {
+    "id": "engine-ue5-20260818-001",
+    "branch_tag": "engine-ue5"
+  }
+}
+```
+
+`branch_tag` 省略时为 `main`。批次 ID 在所有分支间仍必须全局唯一；已有批次不能通过覆盖改到另一分支。
 
 仓库当前不提供独立的根目录 `report.py` 客户端。生产采集端请依据[上报接入指南](docs/上报接入指南.md)实现 API 调用，或从 `mock_uploads/upload.py` 提取参考逻辑。
 

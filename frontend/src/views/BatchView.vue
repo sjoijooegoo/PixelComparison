@@ -16,10 +16,12 @@ const router = useRouter()
 async function applyRoute() {
   const rawSid = route.params.sceneId
   const sid = Array.isArray(rawSid) ? rawSid[0] : rawSid
-  if (!sid) return                       // 无参数:保持当前状态(默认列表)
+  const rawBranch = route.query.branch_tag
+  const branchTag = String(Array.isArray(rawBranch) ? rawBranch[0] : rawBranch || 'main')
+    .trim().toLowerCase()
   if (!store.initialized) {
     try {
-      await store.init(sid)               // 与 bootstrap 共用同一轮 Promise，不重复发请求
+      await store.init(sid || '', branchTag) // 与 bootstrap 共用同一轮 Promise，不重复发请求
     } catch {
       return                              // 错误由页面状态展示，避免事件处理器产生未处理拒绝
     }
@@ -27,21 +29,32 @@ async function applyRoute() {
     const latestSid = Array.isArray(latest) ? latest[0] : latest
     if (latestSid !== sid) return          // 初始化期间路由已变化，由最新一轮 applyRoute 接管
   }
+  if (!sid) {
+    if (store.filters.branch_tag !== branchTag) await store.changeBranch(branchTag)
+    return                               // 无场景参数:保持当前列表/场景状态
+  }
   if (!store.meta.scene_ids.includes(sid)) {
     const needsReload = store.filters.scene_id || store.batchView !== 'list'
     store.filters.scene_id = ''
     store.batchView = 'list'
     store.batchPage = 1
     if (needsReload) await store.refreshBatches()
-    if (route.path !== '/batches') await router.replace('/batches')
+    if (route.path !== '/batches') {
+      await router.replace({ path: '/batches', query: { branch_tag: branchTag } })
+    }
     return
   }
   const wasGrid = store.batchView === 'grid'
   const sceneChanged = store.filters.scene_id !== sid
+  const branchChanged = store.filters.branch_tag !== branchTag
   store.batchView = 'grid'
   if (sceneChanged) {
     store.filters.scene_id = sid
     store.batchPage = 1
+  }
+  if (branchChanged) {
+    await store.changeBranch(branchTag)
+  } else if (sceneChanged) {
     await Promise.all([store.loadBatches(), store.loadGrid()])
   } else if (!wasGrid) {
     await store.loadGrid()                // 同场景从列表切到列表图时只补矩阵
@@ -49,12 +62,15 @@ async function applyRoute() {
 }
 onMounted(applyRoute)
 watch(() => route.params.sceneId, applyRoute)
+watch(() => route.query.branch_tag, applyRoute)
 
 async function retryInit() {
   const rawSid = route.params.sceneId
   const sid = Array.isArray(rawSid) ? rawSid[0] : rawSid
+  const rawBranch = route.query.branch_tag
+  const branchTag = Array.isArray(rawBranch) ? rawBranch[0] : rawBranch || 'main'
   try {
-    await store.init(sid || '')
+    await store.init(sid || '', branchTag)
   } catch {
     // initError 已更新，保留错误卡片供继续重试。
   }
@@ -64,13 +80,15 @@ async function retryInit() {
 // 依赖里带上 route.path:从对比结果切回 /batches(顶栏 push 不带场景)时也能把
 // 场景段补回。startsWith 守卫确保只在批次页内同步,不会在 /comparison 等页把用户拽回来。
 watch(
-  () => [store.batchView, store.filters.scene_id, route.path],
+  () => [store.batchView, store.filters.scene_id, store.filters.branch_tag, route.path],
   () => {
     if (!route.path.startsWith('/batches')) return
     const want = (store.batchView === 'grid' && store.filters.scene_id)
       ? `/batches/${encodeURIComponent(store.filters.scene_id)}`
       : '/batches'
-    if (route.path !== want) router.replace(want)
+    if (route.path !== want || route.query.branch_tag !== store.filters.branch_tag) {
+      router.replace({ path: want, query: { branch_tag: store.filters.branch_tag } })
+    }
   },
 )
 </script>

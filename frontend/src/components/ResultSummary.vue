@@ -19,7 +19,12 @@ function diffColor(v) {
 function pick(item) {
   open.value = false
   // 走路由让 URL 成为单一事实源(可分享/后退/刷新一致);打开由 ComparisonView 的路由监听处理
-  if (item.id !== c.value?.id) router.push(`/comparison/${item.id}`)
+  if (item.id !== c.value?.id) {
+    router.push({
+      path: `/comparison/${item.id}`,
+      query: { branch_tag: item.branch_tag || store.filters.branch_tag },
+    })
+  }
 }
 
 async function rerun() {
@@ -69,6 +74,7 @@ async function rerun() {
                   {{ (h.diff_avg ?? 0).toFixed(2) }}%</span>
               </div>
               <div class="scene">{{ h.scene_id }}</div>
+              <div class="branch mono">{{ h.branch_tag || 'main' }}</div>
               <div class="meta text-secondary">
                 <span>{{ p4Label(h.ref_p4_version) }} · {{ h.ref_shading_quality_label }}</span>
                 <span class="arrow">→</span>
@@ -99,6 +105,7 @@ async function rerun() {
     <div class="spacer"></div>
 
     <div class="facts">
+      <span class="fact"><i class="k">分支</i><b class="mono">{{ c.branch_tag || 'main' }}</b></span>
       <span class="fact"><i class="k">场景ID</i><b>{{ c.scene_id }}</b></span>
       <span class="fact"><i class="k">检查点数</i><b>{{ c.scene_count }}</b></span>
       <span class="fact diff"><i class="k">整体差异率</i>

@@ -3,13 +3,16 @@ import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const routeMock = vi.hoisted(() => ({ path: '/map-build/Coral_WP', params: { sceneId: 'Coral_WP' } }))
+const routeMock = vi.hoisted(() => ({
+  path: '/map-build/Coral_WP', params: { sceneId: 'Coral_WP' }, query: { branch_tag: 'engine-ue5' },
+}))
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }))
 const storeMock = vi.hoisted(() => ({
   uploadVisible: false,
   running: false,
   refreshBatches: vi.fn(),
   loadComparisons: vi.fn(),
+  filters: { branch_tag: 'engine-ue5' },
 }))
 const messageMock = vi.hoisted(() => ({
   success: vi.fn(),
@@ -85,7 +88,10 @@ describe('TopBar map-build actions', () => {
 
     await wrapper.findAll('.tab').find((tab) => tab.text() === '烘培数据').trigger('click')
 
-    expect(routerMock.push).toHaveBeenCalledWith('/map-build/Volcano_WP')
+    expect(routerMock.push).toHaveBeenCalledWith({
+      path: '/map-build/Volcano_WP',
+      query: { branch_tag: 'engine-ue5' },
+    })
     wrapper.unmount()
   })
 

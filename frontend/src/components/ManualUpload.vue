@@ -33,6 +33,7 @@ function reset() {
   error.value = ''
   idExists.value = false
   overwrite.value = false
+  autoCompare.value = true
   parsed.body = null
   parsed.shots = []
   parsed.missing = []
@@ -111,6 +112,7 @@ async function parsePackage(map) {
     const p4 = (p4raw === undefined || p4raw === null || p4raw === '') ? null : parseInt(p4raw, 10)
     parsed.body = {
       id: batchId != null ? String(batchId) : null,
+      branch_tag: String(pipeline.branch_tag || 'main').trim().toLowerCase(),
       scene_id: ue.world_name,
       p4_version: Number.isNaN(p4) ? null : p4,   // 未上报 p4 则留空
       platform: ue.platform,
@@ -135,17 +137,25 @@ async function parsePackage(map) {
       if (file) parsed.shots.push({ name: s.name, file, camera: s.camera, index: s.index })
       else parsed.missing.push(s.image || s.name)
     }
-    if (!parsed.shots.length) { error.value = '数据包内没有可上传的截图'; parsed.body = null; return }
 
     const mapBuild = await readMapBuildArtifact(manifest, map, manifestDir)
     parsed.mapBuildData = mapBuild.data
     parsed.mapBuildFormat = mapBuild.format
     parsed.mapBuildMissing = mapBuild.missing
+    if (!parsed.shots.length && !parsed.mapBuildData) {
+      error.value = '数据包内既没有可上传的截图，也没有烘培数据'
+      parsed.body = null
+      return
+    }
+    if (!parsed.shots.length) autoCompare.value = false
 
     // 未带批次号 -> 后端上报时自动生成,无需查重;带了才检测是否已存在
     if (parsed.body.id) {
       try {
-        const { items } = await api.batches({ q: parsed.body.id })
+        const { items } = await api.batches({
+          branch_tag: parsed.body.branch_tag,
+          q: parsed.body.id,
+        })
         idExists.value = items.some((b) => String(b.id) === String(parsed.body.id))
       } catch { idExists.value = false }
     }
@@ -184,7 +194,12 @@ async function uploadShot(batchId, s, attempts = 3) {
     if (s.index != null) fd.append('frame_index', String(s.index))
     fd.append('file', s.file, s.file.name)
     try {
-      return await api.uploadScreenshot(batchId, fd, { sceneName: s.name, fileName: s.file.name })
+      return await api.uploadScreenshot(
+        batchId,
+        fd,
+        { sceneName: s.name, fileName: s.file.name },
+        parsed.body.branch_tag,
+      )
     } catch (e) {
       const transient = !e.status || e.status >= 500
       if (e.status === 409 || !transient || i === attempts) throw e
@@ -210,13 +225,20 @@ async function startUpload() {
       batchId = created.id   // 后端可能自动生成批次号,以返回值为准
       parsed.body.id = batchId
     } catch (e) {
-      if (e.status !== 409) throw e   // 409=已存在(未勾覆盖),沿用原 id 继续补传
+      // 只有预检确认是当前分支中的同号批次，409 才表示可继续补传；
+      // 其他 409 可能是全局同号但分支不同，必须中止，不能误报成功。
+      if (e.status !== 409 || !idExists.value) throw e
     }
 
     let mapBuildFailed = false
     if (parsed.mapBuildData) {
       try {
-        await api.uploadMapBuildData(batchId, parsed.mapBuildData, parsed.mapBuildFormat)
+        await api.uploadMapBuildData(
+          batchId,
+          parsed.mapBuildData,
+          parsed.mapBuildFormat,
+          parsed.body.branch_tag,
+        )
       } catch (e) {
         mapBuildFailed = true
         console.warn('烘培数据上传失败', e)
@@ -235,7 +257,7 @@ async function startUpload() {
     }
 
     let compMsg = ''
-    if (autoCompare.value && !failed) {
+    if (autoCompare.value && parsed.shots.length && !failed) {
       try {
         const r = await api.autoCompare(batchId)
         compMsg = r?.matched ? `,已与 #${r.ref_batch_id} 发起对比` : ',无同类历史批次,未对比'
@@ -249,8 +271,10 @@ async function startUpload() {
       ].filter(Boolean).join('、')
       Message.warning(`批次 #${batchId} 上报完成，但${details}`)
     } else {
-      const artifact = parsed.mapBuildData ? '，含烘培数据' : ''
-      Message.success(`批次 #${batchId} 上报成功(${parsed.shots.length} 张${artifact})${compMsg}`)
+      const payloadSummary = parsed.shots.length
+        ? `${parsed.shots.length} 张${parsed.mapBuildData ? '，含烘培数据' : ''}`
+        : '仅烘培数据'
+      Message.success(`批次 #${batchId} 上报成功(${payloadSummary})${compMsg}`)
     }
     emit('done')
     emit('update:visible', false)
@@ -274,7 +298,7 @@ async function startUpload() {
         @drop.prevent="onDrop" @click="fileInput.click()">
         <div class="big">＋</div>
         <div>把 <b>PixelComparison</b> 数据包文件夹拖到这里</div>
-        <div class="sub">或点击选择文件夹 · 需包含 manifest.json 与 Screenshot/</div>
+        <div class="sub">或点击选择文件夹 · 需包含 manifest.json，以及截图或烘培数据</div>
       </div>
       <input ref="fileInput" type="file" webkitdirectory directory multiple
         style="display:none" @change="onPick" />
@@ -285,6 +309,7 @@ async function startUpload() {
     <div v-else-if="stage === 'preview'">
       <a-descriptions :column="1" size="small" bordered :label-style="{ width: '72px' }" :data="[
         { label: '批次号', value: parsed.body.id ? ('#' + parsed.body.id) : '上报时自动生成' },
+        { label: '分支', value: parsed.body.branch_tag },
         { label: '场景ID', value: parsed.body.scene_id },
         { label: '平台', value: parsed.body.platform },
         { label: 'P4版本', value: p4Label(parsed.body.p4_version) },
@@ -315,7 +340,9 @@ async function startUpload() {
       <a-checkbox v-if="idExists" v-model="overwrite" style="margin-top:10px; display:block; color: rgb(var(--red-6))">
         覆盖同号批次(删除旧截图与其对比/热力图后重建)
       </a-checkbox>
-      <a-checkbox v-model="autoCompare" style="margin-top:10px">上传完成后自动对比(同场景+平台+画质的最新历史批次)</a-checkbox>
+      <a-checkbox v-model="autoCompare" :disabled="!parsed.shots.length" style="margin-top:10px">
+        {{ parsed.shots.length ? '上传完成后自动对比(同分支+场景+平台+画质的最新历史批次)' : '纯烘培数据不执行图片对比' }}
+      </a-checkbox>
       <div class="actions">
         <a-button @click="reset">重新选择</a-button>
         <a-button type="primary" @click="onStart">开始上报</a-button>

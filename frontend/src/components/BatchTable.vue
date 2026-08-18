@@ -1,6 +1,7 @@
 <script setup>
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import { useRouter } from 'vue-router'
 import { useStore } from '../store'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
@@ -8,6 +9,7 @@ import BatchGrid from './BatchGrid.vue'
 import { createBatchTableSizer } from './batchTableSizer'
 
 const store = useStore()
+const router = useRouter()
 
 // 视图切换:list(列表) / grid(列表图);切到 grid 时按当前场景拉矩阵
 function onViewChange() {
@@ -27,6 +29,7 @@ function changePage(page) {
 const previewVisible = ref(false)
 const previewBatch = ref(null)
 function openPreview(record) {
+  if (!record.has_screenshots) return
   previewBatch.value = record
   previewVisible.value = true
 }
@@ -59,13 +62,15 @@ watch(() => store.batches.length, () => nextTick(() => {
 
 const columns = [
   { title: '批次ID', dataIndex: 'id', slotName: 'id', width: 120 },
+  { title: '分支', dataIndex: 'branch_tag', slotName: 'branch', width: 120 },
   { title: '场景ID', dataIndex: 'scene_id', slotName: 'scene', width: 220, ellipsis: true, tooltip: true },
   { title: '平台', dataIndex: 'platform', slotName: 'platform', width: 100 },
   { title: '画质', dataIndex: 'shading_quality_label', slotName: 'quality', width: 90 },
   { title: 'P4版本', dataIndex: 'p4_version', slotName: 'p4', width: 110 },
   { title: '检查点数', dataIndex: 'scene_count', width: 100 },
+  { title: '数据', slotName: 'data', width: 120 },
   { title: '创建时间', dataIndex: 'created_at', width: 160, sortable: { sortDirections: ['ascend', 'descend'] } },
-  { title: '操作', slotName: 'ops', width: 270, align: 'center' },
+  { title: '操作', slotName: 'ops', width: 320, align: 'center' },
 ]
 
 const PLATFORM_COLOR = { Windows: 'arcoblue', iOS: 'gray', Android: 'green' }
@@ -79,8 +84,39 @@ const qualityColor = (q) => QUALITY_COLOR[q] || 'gray'
 const batchLink = (record) => record.batch_url || `https://p4web.example.com/batch/${record.id}`
 
 function setRole(record, role) {
+  if (!record.has_screenshots) return
   // 选择时不限制,允许自由换批次;场景一致性在「发起对比」时校验
   store.setRole(record, role)
+}
+
+function roleButtonStyle(record, role) {
+  // 禁用时不设置行内强调色,交还给 Arco 统一呈现灰色禁用态。
+  if (!record.has_screenshots) return {}
+  const color = role === 'baseline' ? 'rgb(var(--batch-base))' : 'rgb(var(--batch-cur))'
+  if (roleOf(record) !== role) return { color }
+  return { background: color, borderColor: color, color: '#fff' }
+}
+
+function dataLabel(record) {
+  if (record.has_screenshots && record.has_map_build_data) return '截图 · 烘培'
+  if (record.has_screenshots) return '截图'
+  if (record.has_map_build_data) return '烘培'
+  return '待补传'
+}
+
+function dataColor(record) {
+  if (record.has_screenshots && record.has_map_build_data) return 'arcoblue'
+  if (record.has_screenshots) return 'green'
+  if (record.has_map_build_data) return 'purple'
+  return 'gray'
+}
+
+function openMapBuild(record) {
+  if (!record.has_map_build_data) return
+  router.push({
+    path: `/map-build/${encodeURIComponent(record.scene_id)}`,
+    query: { branch_tag: record.branch_tag || 'main', batch: String(record.id) },
+  })
 }
 
 async function run() {
@@ -170,6 +206,9 @@ async function onDelete(record) {
         <template #id="{ record }">
           <a class="batch-link mono" :href="batchLink(record)" target="_blank" rel="noopener noreferrer">#{{ record.id }}</a>
         </template>
+        <template #branch="{ record }">
+          <span class="branch-label mono">{{ record.branch_tag || 'main' }}</span>
+        </template>
         <template #scene="{ record }">{{ record.scene_id }}</template>
         <template #platform="{ record }">
           <a-tag :color="platformColor(record.platform)" size="small">{{ record.platform }}</a-tag>
@@ -180,18 +219,26 @@ async function onDelete(record) {
         <template #p4="{ record }">
           <span class="mono">{{ record.p4_version ?? '——' }}</span>
         </template>
+        <template #data="{ record }">
+          <a-tag :color="dataColor(record)" size="small">{{ dataLabel(record) }}</a-tag>
+        </template>
         <template #ops="{ record }">
-          <a-button size="mini" type="text" @click="openPreview(record)">预览</a-button>
+          <a-button size="mini" type="text" :disabled="!record.has_screenshots"
+            :title="record.has_screenshots ? '预览截图' : '该批次没有截图数据'"
+            @click="openPreview(record)">预览</a-button>
           <a-button size="mini" :type="roleOf(record) === 'baseline' ? 'primary' : 'text'"
-            :style="roleOf(record) === 'baseline'
-              ? { background: 'rgb(var(--batch-base))', borderColor: 'rgb(var(--batch-base))', color: '#fff' }
-              : { color: 'rgb(var(--batch-base))' }"
+            :disabled="!record.has_screenshots"
+            :title="record.has_screenshots ? '设为基线批次' : '该批次没有截图数据'"
+            :style="roleButtonStyle(record, 'baseline')"
             @click="setRole(record, 'baseline')">设为基线</a-button>
           <a-button size="mini" :type="roleOf(record) === 'current' ? 'primary' : 'text'"
-            :style="roleOf(record) === 'current'
-              ? { background: 'rgb(var(--batch-cur))', borderColor: 'rgb(var(--batch-cur))', color: '#fff' }
-              : { color: 'rgb(var(--batch-cur))' }"
+            :disabled="!record.has_screenshots"
+            :title="record.has_screenshots ? '设为对比批次' : '该批次没有截图数据'"
+            :style="roleButtonStyle(record, 'current')"
             @click="setRole(record, 'current')">设为对比</a-button>
+          <a-button size="mini" type="text" :disabled="!record.has_map_build_data"
+            :title="record.has_map_build_data ? '查看烘培数据' : '该批次没有烘培数据'"
+            @click="openMapBuild(record)">查看烘培数据</a-button>
           <a-popconfirm position="br" type="warning" ok-text="删除" cancel-text="取消"
             :content="`删除批次 #${record.id}?将连带删除它参与的对比、对比项、由其晋升的基线,以及图片/热力图/缩略图,不可恢复。`"
             @ok="onDelete(record)">
@@ -237,6 +284,7 @@ async function onDelete(record) {
 .run-btn { margin-left: auto; }
 .batch-link { color: rgb(var(--arcoblue-6)); text-decoration: none; }
 .batch-link:hover { text-decoration: underline; }
+.branch-label { color: var(--color-text-2); font-size: 12px; }
 .slot { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .slot-tag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }
 .slot-cur { background: rgba(var(--batch-cur), .16); color: rgb(var(--batch-cur)); }

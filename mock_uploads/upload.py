@@ -89,6 +89,7 @@ def build_batch_body(manifest: dict) -> dict:
     p4_raw = ue.get("p4_version")
     return {
         "id": str(batch_id) if batch_id is not None else None,
+        "branch_tag": str(pipeline.get("branch_tag") or "main").strip().lower(),
         "scene_id": ue["world_name"],
         "p4_version": int(p4_raw) if p4_raw not in (None, "") else None,
         "platform": ue["platform"],            # 后端归一化(WindowsEditor→Windows)
@@ -107,25 +108,37 @@ def build_batch_body(manifest: dict) -> dict:
 def upload_package(pkg_dir: Path) -> None:
     manifest = json.loads((pkg_dir / "manifest.json").read_text(encoding="utf-8"))
     batch = build_batch_body(manifest)
-    print(f"\n上报批次 {batch['id']} (P4 {batch['p4_version']} / {batch['platform']})")
+    shots = manifest.get("screenshots") or []
+    artifact = (manifest.get("artifacts") or {}).get("map_build_data")
+    if not shots and not artifact:
+        print("  ! 数据包既没有 screenshots，也没有 artifacts.map_build_data，跳过")
+        return
+    print(
+        f"\n上报批次 {batch['id']} "
+        f"({batch['branch_tag']} / P4 {batch['p4_version']} / {batch['platform']})"
+    )
 
     status, body = post_json(f"{BASE}/api/batches", batch)
     if status not in (200, 201):
         print(f"  建批次失败: {status} {body}")
         if status != 409:  # 409=已存在,继续补传截图
             return
+        conflict = str(body).lower()
+        if "belongs to branch" in conflict or "branch_tag is immutable" in conflict:
+            print("  ! 批次号已属于其他分支，停止补传")
+            return
         print("  批次已存在,继续上传截图…")
     elif isinstance(body, dict):
         # manifest 未指定 id 时由后端生成；后续 artifact/截图必须使用返回值。
         batch["id"] = body["id"]
 
-    artifact = (manifest.get("artifacts") or {}).get("map_build_data")
     if artifact:
         artifact_path = pkg_dir / str(artifact.get("path") or "")
         if artifact_path.is_file():
             payload = json.loads(artifact_path.read_text(encoding="utf-8"))
             query = urllib.parse.urlencode({
                 "format": artifact.get("format") or "map-build-data/v2",
+                "branch_tag": batch["branch_tag"],
             })
             code, response = post_json(
                 f"{BASE}/api/batches/{batch['id']}/map-build-data?{query}", payload,
@@ -137,12 +150,12 @@ def upload_package(pkg_dir: Path) -> None:
         else:
             print(f"  ! manifest 声明的烘培数据文件不存在: {artifact_path}")
 
-    shots = manifest["screenshots"]
     ok = 0
     for s in shots:
         img = pkg_dir / s["image"]
         code = post_screenshot(
-            f"{BASE}/api/batches/{batch['id']}/screenshots",
+            f"{BASE}/api/batches/{batch['id']}/screenshots?"
+            + urllib.parse.urlencode({"branch_tag": batch["branch_tag"]}),
             s["name"], img, camera=s.get("camera"), frame_index=s.get("index"),
         )
         if code in (200, 201):

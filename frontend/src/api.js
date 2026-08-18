@@ -117,14 +117,21 @@ export const api = {
   batches: (params) => get('/api/batches', params),
   createBatch: (body) => post('/api/batches', body),
   deleteBatch: (id) => del(`/api/batches/${encodeURIComponent(id)}`),
-  uploadScreenshot: (id, formData, context = {}) =>
-    upload(`/api/batches/${id}/screenshots`, formData, { ...context, batchId: id }),
-  uploadMapBuildData: (id, body, format = 'map-build-data/v2') =>
-    post(`/api/batches/${encodeURIComponent(id)}/map-build-data?format=${encodeURIComponent(format)}`, body),
+  uploadScreenshot: (id, formData, context = {}, branchTag = 'main') =>
+    upload(
+      `/api/batches/${encodeURIComponent(id)}/screenshots?branch_tag=${encodeURIComponent(branchTag)}`,
+      formData,
+      { ...context, batchId: id },
+    ),
+  uploadMapBuildData: (id, body, format = 'map-build-data/v2', branchTag = 'main') =>
+    post(
+      `/api/batches/${encodeURIComponent(id)}/map-build-data?format=${encodeURIComponent(format)}&branch_tag=${encodeURIComponent(branchTag)}`,
+      body,
+    ),
   autoCompare: (id) => post(`/api/batches/${id}/auto-compare`, {}),
   batchScreenshots: (id, options = {}) => get(`/api/batches/${id}/screenshots`, {}, options),
   sceneGrid: (sceneId, params) => get(`/api/scenes/${sceneId}/grid`, params),
-  comparisons: (filters) => get('/api/comparisons', filters),
+  comparisons: (filters, options = {}) => get('/api/comparisons', filters, options),
   createComparison: (body) => post('/api/comparisons', body),
   comparisonLookup: (batchId, refBatchId, options = {}) =>
     get('/api/comparisons/lookup', { batch_id: batchId, ref_batch_id: refBatchId }, options),
@@ -132,12 +139,12 @@ export const api = {
   scenes: (comparisonId, params, options = {}) =>
     get(`/api/comparisons/${comparisonId}/scenes`, params, options),
   item: (id, options = {}) => get(`/api/items/${id}`, {}, options),
-  mapBuildMeta: (options = {}) => get('/api/map-build/meta', {}, options),
+  mapBuildMeta: (params = {}, options = {}) => get('/api/map-build/meta', params, options),
   mapBuildOverview: (sceneId, params = {}, options = {}) =>
     get(`/api/map-build/scenes/${encodeURIComponent(sceneId)}/overview`, params, options),
   mapBuildTrend: (sceneId, params = {}, options = {}) =>
     get(`/api/map-build/scenes/${encodeURIComponent(sceneId)}/trend`, params, options),
-  baselines: () => get('/api/baselines'),
+  baselines: (filters = {}) => get('/api/baselines', filters),
   settings: () => get('/api/settings'),
   saveSettings: (body) => put('/api/settings', body),
 }

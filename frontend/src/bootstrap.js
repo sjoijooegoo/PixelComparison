@@ -1,8 +1,11 @@
 export async function bootstrapApp({ app, router, store, logger, mountTarget = '#app' }) {
   let routeSceneId = ''
+  let routeBranchTag = 'main'
   try {
     await router.isReady()
     const currentRoute = router.currentRoute.value
+    const rawBranchTag = currentRoute.query?.branch_tag
+    routeBranchTag = Array.isArray(rawBranchTag) ? rawBranchTag[0] : rawBranchTag || 'main'
     if (currentRoute.path?.startsWith('/batches')) {
       const rawSceneId = currentRoute.params.sceneId
       routeSceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId || ''
@@ -14,7 +17,7 @@ export async function bootstrapApp({ app, router, store, logger, mountTarget = '
 
   // init() 会在首次 await 前同步固定深链场景和 loading 状态。随后立即挂载，
   // 页面展示骨架；批次/列表图继续在后台加载，失败后可在页面内重试。
-  const initialization = store.init(routeSceneId)
+  const initialization = store.init(routeSceneId, routeBranchTag)
   app.mount(mountTarget)
   try {
     await initialization

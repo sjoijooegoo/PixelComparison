@@ -9,10 +9,14 @@ const apiMock = vi.hoisted(() => ({
   mapBuildTrend: vi.fn(),
 }))
 const storeMock = vi.hoisted(() => ({
+  initialized: true,
   meta: {
+    branch_tags: ['main', 'engine-ue5'],
     scene_ids: ['Forest_WP', 'Coral_WP', 'Unlisted_WP'],
     unlisted_scene_ids: ['Unlisted_WP'],
   },
+  filters: { branch_tag: 'main' },
+  init: vi.fn(),
 }))
 const routeMock = vi.hoisted(() => ({
   path: '/map-build', params: { sceneId: undefined }, query: {},
@@ -174,9 +178,13 @@ function mountView() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  storeMock.initialized = true
+  storeMock.meta.branch_tags = ['main', 'engine-ue5']
+  storeMock.init.mockResolvedValue()
   routeMock.path = '/map-build'
   routeMock.params.sceneId = undefined
   routeMock.query = {}
+  storeMock.filters.branch_tag = 'main'
   routerMock.replace.mockResolvedValue()
   apiMock.mapBuildMeta.mockResolvedValue(meta)
   apiMock.mapBuildOverview.mockResolvedValue(overview)
@@ -239,6 +247,7 @@ describe('MapBuildView', () => {
     await flushPromises()
 
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
+      branch_tag: 'main',
       start_date: '2026-06-01',
       end_date: '2026-08-29',
       metric_scope: 'self',
@@ -246,7 +255,7 @@ describe('MapBuildView', () => {
     expect(routerMock.replace).toHaveBeenLastCalledWith({
       path: '/map-build/Coral_WP',
       query: {
-        batch: '2', start: '2026-06-01', end: '2026-08-29', scope: 'self',
+        branch_tag: 'main', batch: '2', start: '2026-06-01', end: '2026-08-29', scope: 'self',
       },
     })
   })
@@ -270,6 +279,7 @@ describe('MapBuildView', () => {
       '2026-07-01', '2026-08-05',
     ])
     expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
       start_date: '2026-07-01',
       end_date: '2026-08-05',
       metric_scope: 'self',
@@ -417,15 +427,82 @@ describe('MapBuildView', () => {
 
     expect(wrapper.findComponent('.scene-select').props('modelValue')).toBe('Coral_WP')
     expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
       batch_id: '',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'self',
+      branch_tag: 'main', days: 30, metric_scope: 'self',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(routerMock.replace).toHaveBeenLastCalledWith({
       path: '/map-build/Coral_WP',
-      query: { batch: '2', days: '30', scope: 'self' },
+      query: { branch_tag: 'main', batch: '2', days: '30', scope: 'self' },
     })
+  })
+
+  it('分支深链只加载该分支的烘培元数据、网格和趋势', async () => {
+    routeMock.path = '/map-build/Coral_WP'
+    routeMock.params.sceneId = 'Coral_WP'
+    routeMock.query = { branch_tag: 'engine-ue5' }
+
+    mountView()
+    await flushPromises()
+
+    expect(storeMock.filters.branch_tag).toBe('engine-ue5')
+    expect(apiMock.mapBuildMeta).toHaveBeenCalledWith(
+      { branch_tag: 'engine-ue5' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    expect(apiMock.mapBuildOverview).toHaveBeenCalledWith(
+      'Coral_WP',
+      expect.objectContaining({ branch_tag: 'engine-ue5' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    expect(apiMock.mapBuildTrend).toHaveBeenCalledWith(
+      'Coral_WP',
+      expect.objectContaining({ branch_tag: 'engine-ue5' }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('首屏等待全局元数据后再校验分支深链，避免有效分支闪回 main', async () => {
+    routeMock.path = '/map-build/Coral_WP'
+    routeMock.params.sceneId = 'Coral_WP'
+    routeMock.query = { branch_tag: 'engine-ue5' }
+    storeMock.initialized = false
+    storeMock.meta.branch_tags = ['main']
+    storeMock.init.mockImplementation(async (_sceneId, branchTag) => {
+      storeMock.meta.branch_tags = ['main', 'engine-ue5']
+      storeMock.filters.branch_tag = branchTag
+      storeMock.initialized = true
+    })
+
+    mountView()
+    await flushPromises()
+
+    expect(storeMock.init).toHaveBeenCalledWith('', 'engine-ue5')
+    expect(storeMock.filters.branch_tag).toBe('engine-ue5')
+    expect(apiMock.mapBuildMeta).toHaveBeenCalledWith(
+      { branch_tag: 'engine-ue5' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('未知分支深链回退 main 并修正地址栏', async () => {
+    routeMock.path = '/map-build/Coral_WP'
+    routeMock.params.sceneId = 'Coral_WP'
+    routeMock.query = { branch_tag: 'missing-branch' }
+
+    mountView()
+    await flushPromises()
+
+    expect(storeMock.filters.branch_tag).toBe('main')
+    expect(apiMock.mapBuildMeta).toHaveBeenCalledWith(
+      { branch_tag: 'main' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    expect(routerMock.replace).toHaveBeenLastCalledWith(expect.objectContaining({
+      query: expect.objectContaining({ branch_tag: 'main' }),
+    }))
   })
 
   it('从 URL 恢复批次、分块、统计口径和趋势天数', async () => {
@@ -447,9 +524,11 @@ describe('MapBuildView', () => {
     await flushPromises()
 
     expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
       batch_id: '1',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
       days: 14,
       metric_scope: 'subtree',
       block_index: 3,
@@ -471,7 +550,7 @@ describe('MapBuildView', () => {
     expect(routerMock.replace).toHaveBeenLastCalledWith({
       path: '/map-build/Coral_WP',
       query: {
-        batch: '2', days: '30', scope: 'self', block: '3', sub: '1',
+        branch_tag: 'main', batch: '2', days: '30', scope: 'self', block: '3', sub: '1',
       },
     })
   })
@@ -629,7 +708,9 @@ describe('MapBuildView', () => {
     expect(wrapper.text()).toContain('该场景还没有烘培数据')
     expect(wrapper.find('.atlas-card').exists()).toBe(false)
     expect(apiMock.mapBuildOverview).toHaveBeenCalledTimes(1)
-    expect(routerMock.replace).toHaveBeenLastCalledWith('/map-build/Forest_WP')
+    expect(routerMock.replace).toHaveBeenLastCalledWith({
+      path: '/map-build/Forest_WP', query: { branch_tag: 'main' },
+    })
   })
 
   it('卡片右下统计口径统一控制网格并在切换节点后保持不变', async () => {
@@ -655,7 +736,7 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.world-total small').text()).toBe('含子级汇总')
     expect(wrapper.get('.block-values small').text()).toBe('含子级汇总')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'subtree', block_index: 3,
+      branch_tag: 'main', days: 30, metric_scope: 'subtree', block_index: 3,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
 
     await wrapper.findAll('.sub-cell')[0].trigger('click')
@@ -666,7 +747,7 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.detail-head h3').text()).toBe('分块 3 / 0x00（含子级汇总）')
     expect(wrapper.find('.detail-eyebrow').exists()).toBe(false)
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'subtree', block_index: 3, sub_block_index: 0,
+      branch_tag: 'main', days: 30, metric_scope: 'subtree', block_index: 3, sub_block_index: 0,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 
@@ -688,6 +769,7 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.detail-head h3').text()).toBe('反射分块')
     expect(wrapper.get('.detail-head p').text()).toBe('/reflection')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
+      branch_tag: 'main',
       days: 30,
       metric_scope: 'self',
       registry_path: '/reflection',
@@ -698,6 +780,7 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.auxiliary-block').text()).toBe('反射分块12.00 MiB')
     expect(wrapper.get('.detail-head h3').text()).toBe('反射分块')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
+      branch_tag: 'main',
       days: 30,
       metric_scope: 'self',
       registry_path: '/reflection',
@@ -709,6 +792,7 @@ describe('MapBuildView', () => {
     await flushPromises()
 
     expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
       batch_id: '',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).not.toContain('平台')
@@ -721,7 +805,7 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.atlas-card').find('.detail-panel').exists()).toBe(false)
     expect(wrapper.get('.detail-panel').element.parentElement).toBe(wrapper.get('.atlas-row').element)
     expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'self',
+      branch_tag: 'main', days: 30, metric_scope: 'self',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.get('.detail-head h3').text()).toBe('主分块')
     expect(wrapper.get('.detail-head p').text()).toBe('/root')
@@ -761,7 +845,7 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.block-panel').classes()).not.toContain('selected')
     expect(wrapper.get('.block-head').attributes('aria-pressed')).toBe('true')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'self', block_index: 3,
+      branch_tag: 'main', days: 30, metric_scope: 'self', block_index: 3,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.get('.metric-scope-switch button[aria-pressed="true"]').text()).toBe('仅自身')
 
@@ -771,7 +855,7 @@ describe('MapBuildView', () => {
     await wrapper.findAll('.metric-scope-switch button')[1].trigger('click')
     await flushPromises()
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'subtree', block_index: 3,
+      branch_tag: 'main', days: 30, metric_scope: 'subtree', block_index: 3,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.get('.detail-head h3').text()).toBe('分块 3（含子级汇总）')
     expect(wrapper.get('.block-panel').classes()).toContain('selected')
@@ -785,7 +869,7 @@ describe('MapBuildView', () => {
     await flushPromises()
 
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'subtree', block_index: 3, sub_block_index: 1,
+      branch_tag: 'main', days: 30, metric_scope: 'subtree', block_index: 3, sub_block_index: 1,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.get('.selection-pill').text()).toBe('分块 3 / 子分块 0x01')
     expect(wrapper.get('.detail-head h3').text()).toBe('分块 3 / 0x01（含子级汇总）')
@@ -915,7 +999,7 @@ describe('MapBuildView', () => {
 
     expect(wrapper.get('.metric-scope-switch button[aria-pressed="true"]').text()).toBe('含子级')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Forest_WP', {
-      days: 30, metric_scope: 'subtree',
+      branch_tag: 'main', days: 30, metric_scope: 'subtree',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(routerMock.replace).toHaveBeenLastCalledWith({
       path: '/map-build/Forest_WP',
@@ -959,7 +1043,7 @@ describe('MapBuildView', () => {
     expect(wrapper.find('.metric-scope-switch').exists()).toBe(false)
     expect(apiMock.mapBuildTrend).toHaveBeenCalledTimes(2)
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Forest_WP', {
-      days: 30, metric_scope: 'self',
+      branch_tag: 'main', days: 30, metric_scope: 'self',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(routerMock.replace).toHaveBeenLastCalledWith({
       path: '/map-build/Forest_WP',
@@ -991,7 +1075,7 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.detail-head h3').text()).toBe('主分块')
     expect(wrapper.get('.selection-pill').text()).toBe('主分块 · 仅自身')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'self',
+      branch_tag: 'main', days: 30, metric_scope: 'self',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 
@@ -1008,6 +1092,7 @@ describe('MapBuildView', () => {
     await flushPromises()
 
     expect(apiMock.mapBuildOverview).toHaveBeenLastCalledWith('Coral_WP', {
+      branch_tag: 'main',
       batch_id: '1',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.findComponent('.batch-select').props('modelValue')).toBe('1')
@@ -1042,7 +1127,7 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.world-total small').text()).toBe('仅自身')
     expect(wrapper.get('.selection-pill').text()).toBe('主分块 · 仅自身')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
-      days: 30, metric_scope: 'self',
+      branch_tag: 'main', days: 30, metric_scope: 'self',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 })

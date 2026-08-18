@@ -1,6 +1,6 @@
 # 示例上报数据包
 
-`mock_uploads` 保存可重复生成的演示数据包，用于验证 manifest 解析、批次上报、截图配对、跨平台比较以及新增/缺失检查点。
+`mock_uploads` 保存可重复生成的演示数据包，用于验证 manifest 解析、分支隔离、批次上报、截图配对、跨平台比较、纯烘培包以及新增/缺失检查点。
 
 生产接入请阅读[数据上报接入指南](../docs/上报接入指南.md)。这里的 `upload.py` 是演示工具，不是完整 CI 客户端。
 
@@ -24,11 +24,13 @@ mock_uploads/
       ...
 ```
 
-数据包必须包含：
+数据包内容：
 
-- `manifest.json`：批次元数据和截图清单。
-- `Screenshot/`：manifest 中 `screenshots[].image` 指向的图片。
-- `Artifacts/MapBuildData/map_build_data.json`：manifest 声明时上传的一批一份烘培快照。
+- `manifest.json`：必需，包含批次元数据、分支及可选截图清单。
+- `Screenshot/`：可选，manifest 中 `screenshots[].image` 指向的图片。
+- `Artifacts/MapBuildData/map_build_data.json`：可选，manifest 声明时上传的一批一份烘培快照。
+
+截图和烘培数据至少提供一种；纯烘培数据包可以省略 `Screenshot/` 和 `screenshots`。
 
 ## manifest 示例
 
@@ -38,6 +40,7 @@ mock_uploads/
   "capture_type": "levelsequence",
   "pipeline_data": {
     "batch_id": "7",
+    "branch_tag": "main",
     "batch_url": "https://ci.example/pipeline/7",
     "captured_at": "2024-06-01T10:00:00",
     "overwrite": false
@@ -77,6 +80,7 @@ mock_uploads/
 | 字段 | 用途 |
 |---|---|
 | `pipeline_data.batch_id` | 批次 ID |
+| `pipeline_data.branch_tag` | 分支标签；省略时为 `main` |
 | `pipeline_data.batch_url` | 流水线链接 |
 | `pipeline_data.captured_at` | 批次创建时间 |
 | `pipeline_data.overwrite` | 同号时是否删旧建新 |
@@ -122,7 +126,7 @@ $env:BASE = "http://10.30.129.32:8020"
 python mock_uploads\upload.py 7
 ```
 
-脚本只依赖 Python 标准库，执行“创建批次 → 上传可选烘培数据 → 逐张上传截图”。批次已存在时继续补传；烘培数据重复发送会原子替换；manifest 中 `overwrite=true` 时会请求覆盖。脚本不会自动发起对比，也没有完整的重试和 CI 退出码设计。
+脚本只依赖 Python 标准库，执行“创建批次 → 上传可选烘培数据 → 逐张上传可选截图”。它会在创建与所有上传接口中传递 `pipeline_data.branch_tag`；批次已存在时继续补传，烘培数据重复发送会原子替换，manifest 中 `overwrite=true` 时会请求覆盖。批次 ID 全局唯一，不能在不同分支重复使用。脚本不会自动发起对比，也没有完整的重试和 CI 退出码设计。
 
 ## 示例批次
 
@@ -144,4 +148,4 @@ python mock_uploads\upload.py 7
 - 13 对 12：另一个场景的回归。
 - 8 对 9：同场景跨平台比较。
 
-不同场景 ID 的批次不能比较。
+不同分支或不同场景 ID 的批次不能比较；任一批次没有截图时也不能比较。

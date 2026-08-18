@@ -1,5 +1,6 @@
 import json
 import mimetypes
+import re
 import shutil
 import threading
 import time
@@ -34,7 +35,14 @@ from .map_build import (
     list_meta as list_map_build_meta,
     store_snapshot as store_map_build_snapshot,
 )
-from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
+from .models import (
+    Baseline,
+    Batch,
+    Comparison,
+    ComparisonItem,
+    MapBuildSnapshot,
+    Screenshot,
+)
 from .service import run_comparison
 from .settings import get_settings, save_settings
 from .thumbnails import ThumbnailService
@@ -185,6 +193,36 @@ def normalize_platform(raw: str) -> str:
     return raw
 
 
+_BRANCH_TAG_PATTERN = re.compile(r"^[a-z0-9._/-]{1,128}$")
+
+
+def normalize_branch_tag(raw: str | None) -> str:
+    """把上报和筛选使用的分支标签收敛为稳定的小写标识。"""
+    if raw is not None and not isinstance(raw, str):
+        raise ValueError("branch_tag 必须是字符串")
+    value = (raw or "main").strip().lower()
+    if not _BRANCH_TAG_PATTERN.fullmatch(value):
+        raise ValueError("branch_tag 只能包含字母、数字、.、_、-、/，长度 1-128")
+    return value
+
+
+def require_batch_branch(db: Session, batch_id: str, raw_branch_tag: str | None) -> Batch:
+    """返回批次，并确保本次写入明确属于同一分支。"""
+    batch = db.get(Batch, batch_id)
+    if batch is None:
+        raise HTTPException(404, "batch not found")
+    try:
+        branch_tag = normalize_branch_tag(raw_branch_tag)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if batch.branch_tag != branch_tag:
+        raise HTTPException(
+            409,
+            f"batch {batch_id} belongs to branch {batch.branch_tag}, not {branch_tag}",
+        )
+    return batch
+
+
 def safe_segment(value: str, field: str) -> str:
     """收口落盘用的路径段:禁止分隔符 / 上跳,防目录遍历。"""
     if not value or value in (".", "..") or "/" in value or "\\" in value or "\0" in value:
@@ -194,9 +232,25 @@ def safe_segment(value: str, field: str) -> str:
 
 # ---------------------------------------------------------------- DTO
 
-def batch_dto(b: Batch, db: Session) -> dict:
+_UNSET = object()
+
+
+def batch_dto(
+    b: Batch,
+    db: Session,
+    *,
+    scene_count: int | None = None,
+    has_map_build_data: bool | object = _UNSET,
+) -> dict:
+    if scene_count is None:
+        scene_count = db.scalar(
+            select(func.count(Screenshot.id)).where(Screenshot.batch_id == b.id)
+        ) or 0
+    if has_map_build_data is _UNSET:
+        has_map_build_data = db.get(MapBuildSnapshot, b.id) is not None
     return {
         "id": b.id,
+        "branch_tag": b.branch_tag,
         "scene_id": b.scene_id,
         "p4_version": b.p4_version,
         "platform": b.platform,
@@ -206,9 +260,9 @@ def batch_dto(b: Batch, db: Session) -> dict:
         "shading_quality": b.shading_quality if b.shading_quality is not None else _DEFAULT_SHADING_QUALITY,
         "shading_quality_label": shading_quality_label(b.shading_quality),
         "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
-        "scene_count": db.scalar(
-            select(func.count(Screenshot.id)).where(Screenshot.batch_id == b.id)
-        ) or 0,
+        "scene_count": scene_count,
+        "has_screenshots": scene_count > 0,
+        "has_map_build_data": has_map_build_data,
     }
 
 
@@ -243,6 +297,7 @@ def comparison_dto(c: Comparison, db: Session) -> dict:
     return {
         "id": c.id,
         "batch_id": c.batch_id,
+        "branch_tag": c.batch.branch_tag,
         "scene_id": c.batch.scene_id,
         "p4_version": c.batch.p4_version,
         "platform": c.batch.platform,
@@ -290,6 +345,7 @@ def item_dto(it: ComparisonItem, with_metrics: bool = False) -> dict:
 class BatchIn(BaseModel):
     id: str | None = None
     scene_id: str
+    branch_tag: str = "main"
     p4_version: int | None = None
     platform: str
     creator: str = "CI机器人"
@@ -303,11 +359,17 @@ class BatchIn(BaseModel):
     captured_at: str | None = None
     overwrite: bool = False        # 同号批次已存在时:True=删旧建新(级联清对比/热力图),False=409
 
+    @field_validator("branch_tag", mode="before")
+    @classmethod
+    def validate_branch_tag(cls, value):
+        return normalize_branch_tag(value)
+
 
 @app.get("/api/batches")
 def list_batches(
     db: Session = Depends(get_db),
     scene_id: str | None = None,
+    branch_tag: str = "main",
     platform: str | None = None,
     shading_quality: int | None = None,
     p4_min: int | None = None,
@@ -323,6 +385,11 @@ def list_batches(
     # 末尾再按 id 本身兜底,保证是全序(created_at 因 --time 撞车时分页仍不重不漏)。
     stmt = select(Batch).order_by(
         cast(Batch.id, Integer).desc(), Batch.created_at.desc(), Batch.id.desc())
+    try:
+        branch_tag = normalize_branch_tag(branch_tag)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    stmt = stmt.where(Batch.branch_tag == branch_tag)
     if scene_id:
         stmt = stmt.where(Batch.scene_id == scene_id)
     if platform:
@@ -356,11 +423,34 @@ def list_batches(
     if page_size is not None:
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     batches = db.scalars(stmt).all()
+    batch_ids = [batch.id for batch in batches]
+    screenshot_counts = dict(
+        db.execute(
+            select(Screenshot.batch_id, func.count(Screenshot.id))
+            .where(Screenshot.batch_id.in_(batch_ids))
+            .group_by(Screenshot.batch_id)
+        ).all()
+    ) if batch_ids else {}
+    map_build_batch_ids = set(
+        db.scalars(
+            select(MapBuildSnapshot.batch_id).where(
+                MapBuildSnapshot.batch_id.in_(batch_ids)
+            )
+        ).all()
+    ) if batch_ids else set()
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [batch_dto(b, db) for b in batches],
+        "items": [
+            batch_dto(
+                batch,
+                db,
+                scene_count=screenshot_counts.get(batch.id, 0),
+                has_map_build_data=batch.id in map_build_batch_ids,
+            )
+            for batch in batches
+        ],
     }
 
 
@@ -391,6 +481,12 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db)):
             batch_id = safe_segment(body.id, "batch id")
             existing = db.get(Batch, batch_id)
             if existing:
+                if existing.branch_tag != body.branch_tag:
+                    raise HTTPException(
+                        409,
+                        f"batch {batch_id} belongs to branch {existing.branch_tag}; "
+                        "branch_tag is immutable",
+                    )
                 if not body.overwrite:
                     raise HTTPException(409, f"batch {batch_id} already exists")
                 # 覆盖:级联删旧批次(截图/对比/对比项/由其晋升的基线;计算中相关对比会抛 409),再清孤儿文件
@@ -400,7 +496,8 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db)):
         else:
             batch_id = _next_batch_id(db)
         batch = Batch(
-            id=batch_id, scene_id=body.scene_id, p4_version=body.p4_version,
+            id=batch_id, branch_tag=body.branch_tag,
+            scene_id=body.scene_id, p4_version=body.p4_version,
             platform=normalize_platform(body.platform), creator=body.creator,
             batch_url=body.batch_url, resolution=body.resolution,
             capture_type=body.capture_type,
@@ -422,6 +519,7 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db)):
 @app.post("/api/batches/{batch_id}/screenshots", status_code=201)
 def upload_screenshot(
     batch_id: str,
+    branch_tag: str = Query("main"),
     scene_name: str = Form(...),
     file: UploadFile = File(...),
     camera: str | None = Form(None),       # JSON 字符串:{location, rotation}
@@ -430,12 +528,14 @@ def upload_screenshot(
 ):
     original_scene_name = scene_name
     filename = file.filename or ""
-    if not db.get(Batch, batch_id):
+    try:
+        require_batch_branch(db, batch_id, branch_tag)
+    except HTTPException:
         log.warning(
-            "截图上报失败 batch=%s scene=%s file=%s reason=batch_not_found",
+            "截图上报失败 batch=%s scene=%s file=%s reason=batch_or_branch_mismatch",
             batch_id, original_scene_name, filename,
         )
-        raise HTTPException(404, "batch not found")
+        raise
     try:
         scene_name = safe_segment(scene_name, "scene name")
     except HTTPException:
@@ -515,12 +615,11 @@ def upload_map_build_data(
     batch_id: str,
     body: MapBuildDataIn,
     format: str = Query(MAP_BUILD_FORMAT_VERSION, min_length=1, max_length=64),
+    branch_tag: str = Query("main"),
     db: Session = Depends(get_db),
 ):
     """上报批次随附的 map_build_data；重复上报会原子替换同批快照。"""
-    batch = db.get(Batch, batch_id)
-    if batch is None:
-        raise HTTPException(404, "batch not found")
+    batch = require_batch_branch(db, batch_id, branch_tag)
     result = store_map_build_snapshot(db, batch, body, format)
     log.info(
         "烘培数据上报成功 batch=%s scene=%s registries=%d updated=%s",
@@ -533,11 +632,19 @@ def upload_map_build_data(
 
 
 @app.get("/api/map-build/meta")
-def map_build_meta(db: Session = Depends(get_db)):
+def map_build_meta(
+    branch_tag: str = "main",
+    db: Session = Depends(get_db),
+):
     """烘培页面可用的场景元数据。"""
+    try:
+        branch_tag = normalize_branch_tag(branch_tag)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     settings = get_settings(db)
     return list_map_build_meta(
         db,
+        branch_tag=branch_tag,
         scene_id_order=settings["scene_id_order"],
         show_unlisted_scene_ids=settings["show_unlisted_scene_ids"],
     )
@@ -546,15 +653,21 @@ def map_build_meta(db: Session = Depends(get_db)):
 @app.get("/api/map-build/scenes/{scene_id}/overview")
 def map_build_overview(
     scene_id: str,
+    branch_tag: str = "main",
     platform: str | None = None,
     shading_quality: int | None = None,
     batch_id: str | None = None,
     db: Session = Depends(get_db),
 ):
     """最新或指定批次的独立分块网格。"""
+    try:
+        branch_tag = normalize_branch_tag(branch_tag)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     result = get_map_build_overview(
         db,
         scene_id,
+        branch_tag=branch_tag,
         platform=platform,
         shading_quality=shading_quality,
         batch_id=batch_id,
@@ -567,6 +680,7 @@ def map_build_overview(
 @app.get("/api/map-build/scenes/{scene_id}/trend")
 def map_build_trend(
     scene_id: str,
+    branch_tag: str = "main",
     platform: str | None = None,
     shading_quality: int | None = None,
     block_index: int | None = Query(None, ge=0, le=65535),
@@ -580,9 +694,14 @@ def map_build_trend(
 ):
     """所选节点最近 N 日或指定日期范围的体积趋势。"""
     try:
+        branch_tag = normalize_branch_tag(branch_tag)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    try:
         return get_map_build_trend(
             db,
             scene_id,
+            branch_tag=branch_tag,
             platform=platform,
             shading_quality=shading_quality,
             block_index=block_index,
@@ -600,6 +719,7 @@ def map_build_trend(
 @app.get("/api/scenes/{scene_id}/grid")
 def scene_grid(
     scene_id: str,
+    branch_tag: str = "main",
     platform: str | None = None,
     shading_quality: int | None = None,
     p4_min: int | None = None,
@@ -614,7 +734,15 @@ def scene_grid(
     行=检查点(按 scene_name 对齐、frame_index 排序),cells 与 batches 同序,缺图为 null。
 
     支持与批次列表一致的筛选(平台/画质/P4范围/创建时间/批次号)。"""
-    bstmt = select(Batch).where(Batch.scene_id == scene_id)
+    try:
+        branch_tag = normalize_branch_tag(branch_tag)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+    bstmt = select(Batch).where(
+        Batch.scene_id == scene_id,
+        Batch.branch_tag == branch_tag,
+        Batch.screenshots.any(),
+    )
     if platform:
         bstmt = bstmt.where(Batch.platform == platform)
     if shading_quality is not None:
@@ -662,8 +790,11 @@ def scene_grid(
     )
     return {
         "scene_id": scene_id,
+        "branch_tag": branch_tag,
+        "total": len(batches),
         "batches": [
-            {"id": b.id, "scene_id": b.scene_id, "p4_version": b.p4_version,
+            {"id": b.id, "scene_id": b.scene_id, "branch_tag": b.branch_tag,
+             "p4_version": b.p4_version,
              "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
              "platform": b.platform,
              "shading_quality_label": shading_quality_label(b.shading_quality)}
@@ -906,8 +1037,12 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
         raise HTTPException(404, "batch not found")
     if batch.id == ref.id:
         raise HTTPException(400, "不能与自身对比")
+    if batch.branch_tag != ref.branch_tag:
+        raise HTTPException(400, "两个批次的分支不同,无法对比")
     if batch.scene_id != ref.scene_id:
         raise HTTPException(400, "两个批次的场景ID不同,无法对比")
+    if not batch.screenshots or not ref.screenshots:
+        raise HTTPException(400, "两个批次都必须包含截图才能对比")
 
     baseline = db.scalar(
         select(Baseline).where(
@@ -1009,13 +1144,17 @@ def auto_compare_batch(batch_id: str, db: Session = Depends(get_db)):
     batch = db.get(Batch, batch_id)
     if not batch:
         raise HTTPException(404, "batch not found")
+    if not batch.screenshots:
+        raise HTTPException(400, "当前批次没有截图,无法自动对比")
     bq = batch.shading_quality if batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY
 
     # 同场景 + 同平台 + 同画质的候选基底(画质为空按默认等价)
     base = select(Batch).where(
         Batch.id != batch.id,
+        Batch.branch_tag == batch.branch_tag,
         Batch.scene_id == batch.scene_id,
         Batch.platform == batch.platform,
+        Batch.screenshots.any(),
     )
     if bq == _DEFAULT_SHADING_QUALITY:
         base = base.where(or_(Batch.shading_quality == bq, Batch.shading_quality.is_(None)))
@@ -1069,16 +1208,22 @@ def get_comparison_task(task_id: str, db: Session = Depends(get_db)):
 @app.get("/api/comparisons")
 def list_comparisons(
     db: Session = Depends(get_db),
+    branch_tag: str = "main",
     scene_id: str | None = None,
     platform: str | None = None,
     baseline: str | None = None,
     status: str | None = None,
     q: str | None = None,
 ):
+    try:
+        branch_tag = normalize_branch_tag(branch_tag)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     stmt = (
         select(Comparison)
         .join(Batch, Comparison.batch_id == Batch.id)
         .order_by(Comparison.created_at.desc())
+        .where(Batch.branch_tag == branch_tag)
     )
     if scene_id:
         stmt = stmt.where(Batch.scene_id == scene_id)
@@ -1168,13 +1313,25 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------- 基线 / 元数据
 
 @app.get("/api/baselines")
-def list_baselines(db: Session = Depends(get_db)):
-    baselines = db.scalars(select(Baseline).order_by(Baseline.created_at.desc())).all()
+def list_baselines(
+    branch_tag: str = "main",
+    db: Session = Depends(get_db),
+):
+    try:
+        branch_tag = normalize_branch_tag(branch_tag)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    baselines = db.scalars(
+        select(Baseline)
+        .where(Baseline.branch_tag == branch_tag)
+        .order_by(Baseline.created_at.desc())
+    ).all()
     return {
         "items": [
             {
                 "id": b.id,
                 "version": b.version,
+                "branch_tag": b.branch_tag,
                 "scene_id": b.scene_id,
                 "platform": b.platform,
                 "source_batch_id": b.source_batch_id,
@@ -1304,7 +1461,12 @@ def get_meta(db: Session = Depends(get_db)):
         scene_ids = list(configured)
         if settings["show_unlisted_scene_ids"]:
             scene_ids.extend(unlisted)
+    discovered_branches = set(
+        db.scalars(select(Batch.branch_tag).distinct()).all()
+    )
+    discovered_branches.discard("main")
     return {
+        "branch_tags": ["main", *sorted(discovered_branches)],
         "scene_ids": scene_ids,
         "unlisted_scene_ids": unlisted,
         "scene_catalog_configured": configured is not None,

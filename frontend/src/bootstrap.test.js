@@ -18,13 +18,17 @@ describe('bootstrapApp', () => {
     const app = { mount: vi.fn() }
     const router = {
       isReady: vi.fn().mockResolvedValue(),
-      currentRoute: { value: { path: '/batches/SceneA', params: { sceneId: 'SceneA' } } },
+      currentRoute: {
+        value: {
+          path: '/batches/SceneA', params: { sceneId: 'SceneA' }, query: { branch_tag: 'engine-ue5' },
+        },
+      },
     }
     const store = { init: vi.fn().mockReturnValue(init.promise) }
     const logger = { error: vi.fn() }
 
     const boot = bootstrapApp({ app, router, store, logger })
-    await vi.waitFor(() => expect(store.init).toHaveBeenCalledWith('SceneA'))
+    await vi.waitFor(() => expect(store.init).toHaveBeenCalledWith('SceneA', 'engine-ue5'))
 
     expect(app.mount).toHaveBeenCalledWith('#app')
     expect(logger.error).not.toHaveBeenCalled()
@@ -37,14 +41,18 @@ describe('bootstrapApp', () => {
     const app = { mount: vi.fn() }
     const router = {
       isReady: vi.fn().mockResolvedValue(),
-      currentRoute: { value: { path: '/map-build/Coral_WP', params: { sceneId: 'Coral_WP' } } },
+      currentRoute: {
+        value: {
+          path: '/map-build/Coral_WP', params: { sceneId: 'Coral_WP' }, query: { branch_tag: 'engine-ue5' },
+        },
+      },
     }
     const store = { init: vi.fn().mockResolvedValue() }
     const logger = { error: vi.fn() }
 
     await bootstrapApp({ app, router, store, logger })
 
-    expect(store.init).toHaveBeenCalledWith('')
+    expect(store.init).toHaveBeenCalledWith('', 'engine-ue5')
     expect(app.mount).toHaveBeenCalledWith('#app')
   })
 
