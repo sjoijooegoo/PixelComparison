@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useStore, p4Label } from '../store'
+import { p4Label } from '../store'
+import { useScreenshotComparisonStore } from '../stores/screenshotComparisonStore'
 import { thumbUrl } from '../api'
 import { splitCheckpointName } from './checkpointName'
 
@@ -13,7 +14,7 @@ function onThumbErr(e, orig) {
   img.src = orig
 }
 
-const store = useStore()
+const store = useScreenshotComparisonStore()
 const cols = computed(() => store.grid.batches)
 const rows = computed(() => store.grid.rows.map((row) => ({
   ...row,
@@ -25,11 +26,10 @@ const VISIBLE_BATCHES = 7     // 全屏时完整展示的批次列数
 const VISIBLE_IMAGE_COLS = VISIBLE_BATCHES + 1  // 额外预留最右差异热力图列
 const COLLAPSED_W = 18        // 折叠后列宽(细条)
 const MIN_COL = 120           // 列宽下限
-const MAX_COL = 300           // 列宽上限
 const panel = ref(null)
 const scroll = ref(null)      // 滚动容器(用于拖拽平移)
 const matrix = ref(null)      // 实际网格(监听异步数据/列宽动画导致的宽度增长)
-const colW = ref(160)         // 单个批次列宽(按全屏标定,固定;窗口拉伸不变)
+const colW = ref(160)         // 单个批次列宽(按当前网格可视宽度动态适配)
 const imgH = computed(() => Math.round(colW.value * 9 / 16))   // 16:9 等比
 
 // 最右「差异热力图」列(吸附):展示已选基线/对比这对批次各检查点的差异热力图。
@@ -43,8 +43,9 @@ const heatForPair = computed(() => {
   const h = store.gridHeatmaps
   return h && h.current_id === currentBatch.value?.id && h.baseline_id === baselineBatch.value?.id ? h : null
 })
-const heatExists = computed(() => !!heatForPair.value?.exists)
-const heatNoCache = computed(() => heatForPair.value?.exists === false)
+const heatExists = computed(() => !!(heatForPair.value?.exists && heatForPair.value?.ready))
+const heatNoCache = computed(() => heatForPair.value?.status === 'missing')
+const heatRunning = computed(() => heatForPair.value?.status === 'running' || store.running)
 const heatUrl = (sceneName) => (heatExists.value ? heatForPair.value.map[sceneName] || '' : '')
 
 // 刚算完的热力图文件可能有极短的落盘/服务竞态导致首次 404,失败后带缓存戳重试几次
@@ -452,35 +453,33 @@ function onRoleBtn(b) {
   return store.setRole(b, 'current')                        // 有基线 → 设为对比(含替换原对比)
 }
 
-// 发起对比(列表图内,入口在热力图表头按钮);同场景天然成立,无需跨场景守卫
-async function runCompare() {
+// 发起对比(截图网格内,入口在热力图表头按钮);同场景天然成立,无需跨场景守卫
+async function runCompare(force = false) {
   if (!store.canCompare || store.running) return
   try {
-    await store.runComparison()
-    Message.success('对比完成')
+    const result = await store.runComparison({ force })
+    if (result?.ready || result?.status === 'done') Message.success('对比完成')
   } catch (e) {
     Message.error(e.message || '对比失败')
   }
 }
 
-// 列宽按「全屏时面板可用宽度」标定,使列宽不随当前窗口拉伸而变:
-//   - 窗口非占面板的部分(留白/滚动条)= innerWidth - 面板宽,与窗口大小无关;
-//   - 全屏面板宽 ≈ 屏幕可用宽 - 该占用 → 据此 8 等分,全屏正好容纳 7 个批次列 + 1 个热力图列。
-//   网页缩放(Ctrl±)由浏览器自身缩放固定的 CSS 像素列宽,图片随之放大/缩小;
-//   MIN_COL/MAX_COL 给出最大最小约束。
+// 按网格真实可视宽度动态计算列宽：扣除检查点列后 8 等分，
+// 正好容纳 7 个批次列 + 1 个差异热力图列。使用 scroll.clientWidth
+// 可自动扣除边框和纵向滚动条，不依赖屏幕物理分辨率或系统缩放。
 function recalc() {
   const el = panel.value
   if (!el) return
-  const chrome = Math.max(0, window.innerWidth - el.clientWidth)   // 面板以外占用(与窗口宽无关)
-  const fullPanelW = (window.screen?.availWidth || window.innerWidth) - chrome
-  const avail = fullPanelW - 24 - FIRST_COL - 8
-  const nextColW = Math.min(MAX_COL, Math.max(MIN_COL, Math.floor(avail / VISIBLE_IMAGE_COLS)))
+  const viewportW = scroll.value?.clientWidth || el.clientWidth
+  const availableForImages = Math.max(0, viewportW - FIRST_COL)
+  const fittedWidth = Math.round((availableForImages / VISIBLE_IMAGE_COLS) * 100) / 100
+  const nextColW = Math.max(MIN_COL, fittedWidth)
   if (nextColW === colW.value) return
   colW.value = nextColW
 }
 let ro
 
-// 列表图默认停在最右(最新批次在右);仅切场景/首屏/keep-alive 返回时滚,自动刷新不打断
+// 截图网格默认停在最右(最新批次在右);仅切场景/首屏/keep-alive 返回时滚,自动刷新不打断
 let pendingScrollRight = true
 let pendingScrollTop = false
 const autoPinRight = ref(true)
@@ -533,11 +532,11 @@ onMounted(() => {
     if (autoPinRight.value) scrollToRight()
   })
   if (panel.value) ro.observe(panel.value)
+  if (scroll.value) ro.observe(scroll.value)
   if (matrix.value) ro.observe(matrix.value)
   recalc()
   // 用捕获阶段:抢在 Arco 灯箱自身的按键处理之前拿到方向键
   window.addEventListener('keydown', onKey, true)
-  store.loadGridHeatmaps()   // keep-alive 返回 / 首屏:按当前选择恢复热力图列
   if (cols.value.length && pendingScrollRight) { pendingScrollRight = false; scrollToRight() }
 })
 watch(matrix, (next, previous) => {
@@ -545,10 +544,9 @@ watch(matrix, (next, previous) => {
   if (previous) ro.unobserve(previous)
   if (next) ro.observe(next)
 })
-// keep-alive 返回(如从对比结果切回批次管理)时,列表图也停到最右看最新
+// keep-alive 返回截图对比时，网格仍停到最右看最新
 onActivated(() => {
   autoPinRight.value = true
-  store.loadGridHeatmaps()
   if (cols.value.length) scrollToRight()
 })
 onDeactivated(() => {
@@ -603,9 +601,6 @@ watch(() => [
   pendingScrollRight = true
   autoPinRight.value = true
 }, { deep: true })
-// 选择变化 / 切场景(cols 变)时刷新热力图列(组件级兜底,store 内也会触发)
-watch([currentBatch, baselineBatch, cols], () => store.loadGridHeatmaps())
-
 const gridStyle = computed(() => ({
   gridTemplateColumns: `${FIRST_COL}px ` +
     cols.value.map((b) => (isCollapsed(b.id) ? COLLAPSED_W : colW.value) + 'px').join(' ') +
@@ -617,14 +612,14 @@ const gridStyle = computed(() => ({
   <div class="grid-panel" ref="panel">
     <a-empty v-if="!store.filters.scene_id" description="请先在上方筛选条选择一个场景" style="margin-top: 60px" />
     <div v-else-if="store.gridError" class="grid-state">
-      <div class="grid-state-title">列表图加载失败</div>
+      <div class="grid-state-title">截图网格加载失败</div>
       <div class="grid-state-message">{{ store.gridError }}</div>
       <a-button type="primary" size="small" @click="retryGrid">重新加载</a-button>
     </div>
     <div v-else-if="store.gridLoading && !cols.length" class="grid-state">
-      <a-spin :size="28" tip="正在加载列表图…" />
+      <a-spin :size="28" tip="正在加载截图网格…" />
     </div>
-    <a-empty v-else-if="!cols.length" description="当前分支和场景下没有截图批次" style="margin-top: 60px" />
+    <a-empty v-else-if="!cols.length" description="当前分支和场景下没有包含截图的批次" style="margin-top: 60px" />
     <div v-else class="grid-scroll" :class="{ grabbing, 'auto-positioning': autoPinRight }" ref="scroll"
       @scroll.passive="onGridScroll" @pointerdown.passive="stopAutoPin" @wheel.passive="stopAutoPin"
       @mousedown="onPanDown">
@@ -665,17 +660,16 @@ const gridStyle = computed(() => ({
             <a-spin v-if="bothSelected && store.gridHeatmapLoading" :size="16" />
             <a-button v-else-if="bothSelected && store.gridHeatmapError" size="mini" long
               @click="store.loadGridHeatmaps()">查询失败，重试</a-button>
+            <span v-else-if="bothSelected && heatRunning" class="heat-running">
+              {{ store.progress.total ? `对比中 ${store.progress.done}/${store.progress.total}` : '对比中…' }}
+            </span>
             <a-button v-else-if="bothSelected && heatNoCache" type="primary" size="mini" long
-              :loading="store.running" :disabled="!store.canCompare || store.running" @click="runCompare">
+              :loading="store.running" :disabled="!store.canCompare || store.running" @click="runCompare(false)">
               {{ store.running && store.progress.total ? `对比中 ${store.progress.done}/${store.progress.total}` : '发起对比' }}
             </a-button>
-            <span v-else-if="heatExists" class="heat-title-link" title="查看该对比结果"
-              @click="store.gotoGridComparison()">
-              <span class="heat-title-dot"></span>差异对比
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" class="heat-title-arrow">
-                <polyline points="9 6 15 12 9 18" />
-              </svg>
+            <span v-else-if="heatExists" class="heat-title-ready">
+              <span class="heat-title-dot"></span>差异热力图
+              <button class="rerun-link" :disabled="store.running" @click="runCompare(true)">重新对比</button>
             </span>
             <template v-else><span class="heat-title-dot"></span>差异对比</template>
           </div>
@@ -764,7 +758,7 @@ const gridStyle = computed(() => ({
 </template>
 
 <style scoped>
-.grid-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; }
+.grid-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 0 12px; }
 .grid-state {
   flex: 1; min-height: 160px; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 9px;
@@ -902,18 +896,19 @@ const gridStyle = computed(() => ({
   display: inline-block; width: 10px; height: 10px; border-radius: 2px;
   background: rgb(var(--arcoblue-5)); margin-right: 5px; vertical-align: -1px;
 }
-/* 命中缓存:列头可点击进入对比结果页 */
-.heat-title-link {
-  display: inline-flex; align-items: center; cursor: pointer; border-radius: 4px;
-  padding: 1px 4px; transition: color .15s, background .15s;
+.heat-title-ready, .heat-running { display: inline-flex; align-items: center; }
+.heat-running { color: var(--color-text-2); font-weight: 500; }
+.rerun-link {
+  margin-left: 8px; padding: 0; border: 0; background: none; cursor: pointer;
+  color: var(--color-text-3); font: inherit; font-size: 10px; font-weight: 500;
 }
-.heat-title-link:hover { color: rgb(var(--arcoblue-5)); background: var(--color-fill-2); }
-.heat-title-arrow { margin-left: 3px; opacity: .8; }
+.rerun-link:hover { color: rgb(var(--arcoblue-5)); }
+.rerun-link:disabled { cursor: default; opacity: .45; }
 /* 按钮态:让「发起对比」按钮撑满标题条(高度仍由 .heat-title 固定,保证两态等高) */
 .heat-title.is-btn { padding: 0 6px; }
 .heat-title.is-btn :deep(.arco-btn) { width: 100%; }
 .heat-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 6px 8px; }
-/* 基线 / 对比 两栏,中间 VS 徽标 + 竖向分隔线,日期与 P4 按角色着色(参照对比结果卡片) */
+/* 基线 / 对比 两栏,中间 VS 徽标 + 竖向分隔线,日期与 P4 按角色着色 */
 .heat-cmp {
   display: grid; grid-template-columns: 1fr auto 1fr;
   align-items: center; gap: 4px; width: 100%;

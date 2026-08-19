@@ -33,8 +33,8 @@ vi.mock('vue-router', () => ({
 }))
 vi.mock('../store', () => ({
   p4Label: (value) => `P4 ${value}`,
-  useStore: () => storeMock,
 }))
+vi.mock('../stores/projectStore', () => ({ useProjectStore: () => storeMock }))
 vi.mock('../components/MapBuildTrendChart.vue', () => ({
   default: defineComponent({
     props: {
@@ -447,7 +447,6 @@ describe('MapBuildView', () => {
     mountView()
     await flushPromises()
 
-    expect(storeMock.filters.branch_tag).toBe('engine-ue5')
     expect(apiMock.mapBuildMeta).toHaveBeenCalledWith(
       { branch_tag: 'engine-ue5' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -479,8 +478,7 @@ describe('MapBuildView', () => {
     mountView()
     await flushPromises()
 
-    expect(storeMock.init).toHaveBeenCalledWith('', 'engine-ue5')
-    expect(storeMock.filters.branch_tag).toBe('engine-ue5')
+    expect(storeMock.init).toHaveBeenCalledWith()
     expect(apiMock.mapBuildMeta).toHaveBeenCalledWith(
       { branch_tag: 'engine-ue5' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -698,6 +696,12 @@ describe('MapBuildView', () => {
     expect(wrapper.findAll('.scene-option').map((option) => option.text())).toEqual([
       'Forest_WP', 'Coral_WP', 'Unlisted_WP未配置',
     ])
+    const sceneNames = wrapper.findAll('.scene-option-name')
+    expect(sceneNames.map((name) => name.classes('is-data-empty'))).toEqual([
+      true, false, true,
+    ])
+    expect(sceneNames[0].attributes('title')).toBe('当前分支没有烘培数据')
+    expect(sceneNames[1].attributes('title')).toBeUndefined()
     const sceneSelect = wrapper.findComponent('.scene-select')
     expect(sceneSelect.props('modelValue')).toBe('Coral_WP')
 

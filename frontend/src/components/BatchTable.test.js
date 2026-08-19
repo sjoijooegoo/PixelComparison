@@ -5,22 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }))
 const storeMock = vi.hoisted(() => ({
-  batchView: 'list',
   batchTotal: 0,
   batches: [],
   batchError: '',
   batchLoading: false,
   batchPage: 1,
   batchPageSize: 10,
-  baselineBatch: null,
-  currentBatch: null,
-  canCompare: false,
-  running: false,
-  progress: { done: 0, total: 0 },
   loadBatches: vi.fn(),
-  loadGrid: vi.fn(),
-  setRole: vi.fn(),
-  clearRole: vi.fn(),
   deleteBatch: vi.fn(),
 }))
 const tableSizerMock = vi.hoisted(() => ({
@@ -29,8 +20,11 @@ const tableSizerMock = vi.hoisted(() => ({
   recalc: vi.fn(),
 }))
 
-vi.mock('vue-router', () => ({ useRouter: () => routerMock }))
-vi.mock('../store', () => ({ useStore: () => storeMock }))
+vi.mock('vue-router', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useRouter: () => routerMock,
+}))
+vi.mock('../stores/batchCatalogStore', () => ({ useBatchCatalogStore: () => storeMock }))
 vi.mock('./batchTableSizer', () => ({ createBatchTableSizer: () => tableSizerMock }))
 vi.mock('@arco-design/web-vue', () => ({
   Message: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
@@ -58,12 +52,9 @@ function mountTable(records) {
       stubs: {
         'a-button': ButtonStub,
         'a-table': TableStub,
-        'a-radio-group': PassthroughStub,
-        'a-radio': PassthroughStub,
         'a-popconfirm': PassthroughStub,
         Pager: true,
         BatchPreview: true,
-        BatchGrid: true,
       },
     },
   })
@@ -75,13 +66,10 @@ function button(row, label) {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  storeMock.batchView = 'list'
-  storeMock.baselineBatch = null
-  storeMock.currentBatch = null
 })
 
 describe('BatchTable 数据能力操作', () => {
-  it('始终展示四个数据入口，并按截图和烘培能力分别禁用', () => {
+  it('展示目录操作，并按截图和烘培能力分别禁用', () => {
     const wrapper = mountTable([
       { id: 'empty', has_screenshots: false, has_map_build_data: false },
       { id: 'map', has_screenshots: false, has_map_build_data: true },
@@ -89,18 +77,18 @@ describe('BatchTable 数据能力操作', () => {
     ])
     const [emptyRow, mapRow, shotsRow] = wrapper.findAll('.batch-row')
 
-    for (const label of ['预览', '设为基线', '设为对比']) {
-      expect(button(emptyRow, label).element.disabled).toBe(true)
-      expect(button(mapRow, label).element.disabled).toBe(true)
-      expect(button(shotsRow, label).element.disabled).toBe(false)
-    }
+    expect(button(emptyRow, '预览').element.disabled).toBe(true)
+    expect(button(mapRow, '预览').element.disabled).toBe(true)
+    expect(button(shotsRow, '预览').element.disabled).toBe(false)
     expect(button(emptyRow, '查看烘培数据').element.disabled).toBe(true)
     expect(button(mapRow, '查看烘培数据').element.disabled).toBe(false)
     expect(button(shotsRow, '查看烘培数据').element.disabled).toBe(true)
 
-    // 禁用的角色按钮不得残留蓝/橙强调色，否则视觉上仍会像可点击。
-    expect(button(emptyRow, '设为基线').attributes('style') || '').not.toContain('color')
-    expect(button(emptyRow, '设为对比').attributes('style') || '').not.toContain('color')
+    expect(wrapper.text()).not.toContain('设为基线')
+    expect(wrapper.text()).not.toContain('设为对比')
+    expect(wrapper.text()).not.toContain('列表图')
+    expect(wrapper.text()).not.toContain('截图对比')
+    expect(wrapper.text()).not.toContain('批次列表')
     wrapper.unmount()
   })
 
@@ -113,15 +101,8 @@ describe('BatchTable 数据能力操作', () => {
     const wrapper = mountTable(records)
     const [emptyRow, mapRow, shotsRow] = wrapper.findAll('.batch-row')
 
-    await button(emptyRow, '设为基线').trigger('click')
-    await button(emptyRow, '设为对比').trigger('click')
     await button(emptyRow, '查看烘培数据').trigger('click')
-    expect(storeMock.setRole).not.toHaveBeenCalled()
     expect(routerMock.push).not.toHaveBeenCalled()
-
-    await button(shotsRow, '设为基线').trigger('click')
-    expect(storeMock.setRole).toHaveBeenCalledWith(records[2], 'baseline')
-
     await button(mapRow, '查看烘培数据').trigger('click')
     expect(routerMock.push).toHaveBeenCalledWith({
       path: '/map-build/SceneA',

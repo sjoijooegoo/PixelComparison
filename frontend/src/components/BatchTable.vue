@@ -2,19 +2,13 @@
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useRouter } from 'vue-router'
-import { useStore } from '../store'
+import { useBatchCatalogStore } from '../stores/batchCatalogStore'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
-import BatchGrid from './BatchGrid.vue'
 import { createBatchTableSizer } from './batchTableSizer'
 
-const store = useStore()
+const store = useBatchCatalogStore()
 const router = useRouter()
-
-// 视图切换:list(列表) / grid(列表图);切到 grid 时按当前场景拉矩阵
-function onViewChange() {
-  if (store.batchView === 'grid') store.loadGrid().catch(() => {})
-}
 
 function retryBatches() {
   store.loadBatches().catch(() => {})
@@ -44,8 +38,6 @@ async function syncTableWrap() {
   if (mounted) tableSizer.observe(tableWrap.value)
 }
 
-// table-wrap 受 v-if 控制:深链首屏为列表图时,它会在组件 mounted 之后才出现。
-// 监听模板 ref 才能在 grid -> list 时补绑 ResizeObserver,避免长期沿用默认 10 条。
 watch(tableWrap, syncTableWrap, { flush: 'post' })
 onMounted(() => {
   mounted = true
@@ -70,7 +62,7 @@ const columns = [
   { title: '检查点数', dataIndex: 'scene_count', width: 100 },
   { title: '数据', slotName: 'data', width: 120 },
   { title: '创建时间', dataIndex: 'created_at', width: 160, sortable: { sortDirections: ['ascend', 'descend'] } },
-  { title: '操作', slotName: 'ops', width: 320, align: 'center' },
+  { title: '操作', slotName: 'ops', width: 220, align: 'center' },
 ]
 
 const PLATFORM_COLOR = { Windows: 'arcoblue', iOS: 'gray', Android: 'green' }
@@ -82,20 +74,6 @@ const qualityColor = (q) => QUALITY_COLOR[q] || 'gray'
 
 // 批次详情外链:优先用上报带来的真实流水线链接,旧数据回退到占位地址
 const batchLink = (record) => record.batch_url || `https://p4web.example.com/batch/${record.id}`
-
-function setRole(record, role) {
-  if (!record.has_screenshots) return
-  // 选择时不限制,允许自由换批次;场景一致性在「发起对比」时校验
-  store.setRole(record, role)
-}
-
-function roleButtonStyle(record, role) {
-  // 禁用时不设置行内强调色,交还给 Arco 统一呈现灰色禁用态。
-  if (!record.has_screenshots) return {}
-  const color = role === 'baseline' ? 'rgb(var(--batch-base))' : 'rgb(var(--batch-cur))'
-  if (roleOf(record) !== role) return { color }
-  return { background: color, borderColor: color, color: '#fff' }
-}
 
 function dataLabel(record) {
   if (record.has_screenshots && record.has_map_build_data) return '截图 · 烘培'
@@ -119,27 +97,6 @@ function openMapBuild(record) {
   })
 }
 
-async function run() {
-  if (!store.canCompare) return
-  // 场景守卫:两侧必须同场景ID(同 Level 才能对比)
-  if (store.currentBatch.scene_id !== store.baselineBatch.scene_id) {
-    Message.warning('对比批次与基线批次需为同一场景ID(同 Level)')
-    return
-  }
-  try {
-    await store.runComparison()
-    Message.success('对比完成')
-  } catch (e) {
-    Message.error(e.message || '对比失败')
-  }
-}
-
-function roleOf(record) {
-  if (store.currentBatch?.id === record.id) return 'current'
-  if (store.baselineBatch?.id === record.id) return 'baseline'
-  return null
-}
-
 // 删除单个批次(低调入口:操作列末尾的小垃圾桶 + 二次确认)
 const deletingId = ref(null)
 async function onDelete(record) {
@@ -159,41 +116,7 @@ async function onDelete(record) {
 
 <template>
   <section class="batch-panel card">
-    <div class="head">
-      <h3>批次列表 ({{ store.batchTotal }})</h3>
-      <div style="flex:1"></div>
-      <a-radio-group v-model="store.batchView" type="button" size="small" @change="onViewChange">
-        <a-radio value="list">列表</a-radio>
-        <a-radio value="grid">列表图</a-radio>
-      </a-radio-group>
-    </div>
-
-    <!-- 选择条:已选的对比批次 / 基线批次 + 发起对比(仅列表视图;列表图视图改用热力图表头按钮) -->
-    <div v-if="store.batchView === 'list'" class="select-bar">
-      <div class="slot">
-        <span class="slot-tag slot-base">基线批次</span>
-        <template v-if="store.baselineBatch">
-          <span class="mono">#{{ store.baselineBatch.id }}</span>
-          <button class="slot-x" @click="store.clearRole('baseline')">×</button>
-        </template>
-        <span v-else class="slot-empty">未选择</span>
-      </div>
-      <span class="vs">VS</span>
-      <div class="slot">
-        <span class="slot-tag slot-cur">对比批次</span>
-        <template v-if="store.currentBatch">
-          <span class="mono">#{{ store.currentBatch.id }}</span>
-          <button class="slot-x" @click="store.clearRole('current')">×</button>
-        </template>
-        <span v-else class="slot-empty">未选择</span>
-      </div>
-      <a-button type="primary" size="medium" class="run-btn" :disabled="!store.canCompare"
-        :loading="store.running" @click="run">
-        {{ store.running && store.progress.total ? `对比中 ${store.progress.done}/${store.progress.total}` : '发起对比' }}
-      </a-button>
-    </div>
-
-    <div v-if="store.batchView === 'list'" class="table-wrap" ref="tableWrap">
+    <div class="table-wrap" ref="tableWrap">
       <div v-if="store.batchError" class="load-error">
         <span>{{ store.batchError }}</span>
         <a-button size="mini" type="primary" @click="retryBatches">重新加载</a-button>
@@ -226,16 +149,6 @@ async function onDelete(record) {
           <a-button size="mini" type="text" :disabled="!record.has_screenshots"
             :title="record.has_screenshots ? '预览截图' : '该批次没有截图数据'"
             @click="openPreview(record)">预览</a-button>
-          <a-button size="mini" :type="roleOf(record) === 'baseline' ? 'primary' : 'text'"
-            :disabled="!record.has_screenshots"
-            :title="record.has_screenshots ? '设为基线批次' : '该批次没有截图数据'"
-            :style="roleButtonStyle(record, 'baseline')"
-            @click="setRole(record, 'baseline')">设为基线</a-button>
-          <a-button size="mini" :type="roleOf(record) === 'current' ? 'primary' : 'text'"
-            :disabled="!record.has_screenshots"
-            :title="record.has_screenshots ? '设为对比批次' : '该批次没有截图数据'"
-            :style="roleButtonStyle(record, 'current')"
-            @click="setRole(record, 'current')">设为对比</a-button>
           <a-button size="mini" type="text" :disabled="!record.has_map_build_data"
             :title="record.has_map_build_data ? '查看烘培数据' : '该批次没有烘培数据'"
             @click="openMapBuild(record)">查看烘培数据</a-button>
@@ -256,15 +169,11 @@ async function onDelete(record) {
       </a-table>
     </div>
 
-    <div v-if="store.batchView === 'list'" class="foot">
+    <div class="foot">
       <Pager
         :total="store.batchTotal" :page-size="store.batchPageSize" :current="store.batchPage"
         @change="changePage" />
     </div>
-
-    <!-- 列表图:同场景多批次图片矩阵 -->
-    <BatchGrid v-else />
-
     <BatchPreview v-model:visible="previewVisible" :batch="previewBatch" />
   </section>
 </template>
@@ -274,28 +183,9 @@ async function onDelete(record) {
 /* 删除入口低调:默认浅灰、悬停才变红 */
 .del-btn { color: var(--color-text-4); margin-left: 2px; }
 .del-btn:hover { color: rgb(var(--red-6)); background: var(--color-fill-2); }
-.head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
-.head h3 { margin: 0; font-size: 14px; }
-
-.select-bar {
-  display: flex; align-items: center; gap: 12px; padding: 10px 16px;
-  margin: 0 12px 10px; background: var(--color-fill-1); border-radius: 8px;
-}
-.run-btn { margin-left: auto; }
 .batch-link { color: rgb(var(--arcoblue-6)); text-decoration: none; }
 .batch-link:hover { text-decoration: underline; }
 .branch-label { color: var(--color-text-2); font-size: 12px; }
-.slot { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.slot-tag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; }
-.slot-cur { background: rgba(var(--batch-cur), .16); color: rgb(var(--batch-cur)); }
-.slot-base { background: rgba(var(--batch-base), .16); color: rgb(var(--batch-base)); }
-.slot-empty { color: var(--color-text-4); }
-.slot-x {
-  border: none; background: none; cursor: pointer; color: var(--color-text-3);
-  font-size: 14px; line-height: 1; padding: 0 2px;
-}
-.slot-x:hover { color: rgb(var(--red-6)); }
-.vs { font-size: 11px; font-weight: 700; color: var(--color-text-4); }
 
 /* 行内边距适度紧凑,同样高度能多放几行 */
 :deep(.arco-table-td) { padding-top: 4px; padding-bottom: 4px; }
@@ -308,7 +198,7 @@ async function onDelete(record) {
 
 /* 表格区:去掉外层容器整体边框,只保留表格自身随数据变化的行/表头边框 */
 .table-wrap {
-  flex: 1; min-height: 0; overflow: auto; margin: 0 16px;
+  flex: 1; min-height: 0; overflow: auto; margin: 12px 16px 0;
 }
 .load-error {
   display: flex; align-items: center; justify-content: center; gap: 10px;

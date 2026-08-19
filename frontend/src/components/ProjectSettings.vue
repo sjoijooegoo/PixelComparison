@@ -5,10 +5,10 @@ import {
   MAX_DATE_RANGE_DAYS,
   SHADING_QUALITY_OPTIONS,
   normalizeDateRangeDays,
-  useStore,
 } from '../store'
+import { useProjectStore } from '../stores/projectStore'
 
-const store = useStore()
+const store = useProjectStore()
 
 // 默认画质下拉:「全部画质」(-1) + 当前勾选为可见的画质档位(随复选框联动)
 const defaultQualityOptions = computed(() => [
@@ -63,9 +63,8 @@ async function save() {
   saving.v = true
   try {
     await store.saveSettings({ ...form })
-    const hiddenSceneId = await store.refreshBatches()
+    await store.loadMeta()
     sync()
-    if (hiddenSceneId) Message.info(`场景 ${hiddenSceneId} 已被目录配置隐藏，筛选已清空`)
     Message.success('已保存;算法配置对新对比生效,筛选默认值在下次进入或点「清空」时套用')
   } catch (e) {
     Message.error(e.message || '保存失败')
@@ -86,7 +85,7 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
       </div>
 
       <a-alert type="info" closable class="tip">
-        对比算法配置仅对新发起的对比生效;已有对比结果如需套用新配置,可在「对比结果」页点「重新对比」。
+        对比算法配置仅对新发起的对比生效;已有热力图如需套用新配置,可在「截图对比」中点「重新对比」。
       </a-alert>
 
       <!-- 差异判定 -->

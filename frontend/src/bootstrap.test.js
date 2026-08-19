@@ -28,7 +28,7 @@ describe('bootstrapApp', () => {
     const logger = { error: vi.fn() }
 
     const boot = bootstrapApp({ app, router, store, logger })
-    await vi.waitFor(() => expect(store.init).toHaveBeenCalledWith('SceneA', 'engine-ue5'))
+    await vi.waitFor(() => expect(store.init).toHaveBeenCalledWith())
 
     expect(app.mount).toHaveBeenCalledWith('#app')
     expect(logger.error).not.toHaveBeenCalled()
@@ -37,7 +37,7 @@ describe('bootstrapApp', () => {
     await boot
   })
 
-  it('烘培数据深链不使用场景参数初始化批次列表', async () => {
+  it('任意深链只初始化项目级数据', async () => {
     const app = { mount: vi.fn() }
     const router = {
       isReady: vi.fn().mockResolvedValue(),
@@ -52,7 +52,7 @@ describe('bootstrapApp', () => {
 
     await bootstrapApp({ app, router, store, logger })
 
-    expect(store.init).toHaveBeenCalledWith('', 'engine-ue5')
+    expect(store.init).toHaveBeenCalledWith()
     expect(app.mount).toHaveBeenCalledWith('#app')
   })
 

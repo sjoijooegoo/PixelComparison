@@ -37,19 +37,26 @@ const storeHolder = vi.hoisted(() => ({
     clearRole: vi.fn(),
     setRole: vi.fn(),
     runComparison: vi.fn(),
-    gotoGridComparison: vi.fn(),
   },
 }))
 
+const messageMock = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+}))
+
 vi.mock('../store', async () => {
-  const { reactive } = await import('vue')
-  storeHolder.current = reactive(storeHolder.state)
   return {
-    useStore: () => storeHolder.current,
     p4Label: (value) => `P4 ${value}`,
   }
 })
+vi.mock('../stores/screenshotComparisonStore', async () => {
+  const { reactive } = await import('vue')
+  storeHolder.current = reactive(storeHolder.state)
+  return { useScreenshotComparisonStore: () => storeHolder.current }
+})
 vi.mock('../api', () => ({ thumbUrl: (url) => url }))
+vi.mock('@arco-design/web-vue', () => ({ Message: messageMock }))
 vi.mock('./checkpointName', () => ({
   splitCheckpointName: (name) => ({ name, index: '' }),
 }))
@@ -156,6 +163,8 @@ beforeEach(() => {
   storeMock.gridHeatmaps = null
   storeMock.baselineBatch = null
   storeMock.currentBatch = null
+  storeMock.running = false
+  storeMock.canCompare = false
   vi.stubGlobal('ResizeObserver', class {
     observe() {}
     unobserve() {}
@@ -186,6 +195,37 @@ describe('BatchGrid scene scrolling', () => {
     await nextTick()
     await nextTick()
     expect(scroller.scrollTop).toBe(0)
+  })
+})
+
+describe('BatchGrid comparison feedback', () => {
+  it('网格组件只展示 store 结果，不额外发起 lookup', async () => {
+    mountGrid()
+    storeMock.baselineBatch = { ...defaultGrid().batches[0], id: 'base' }
+    storeMock.currentBatch = { ...defaultGrid().batches[0], id: 'current' }
+    await nextTick()
+
+    expect(storeMock.loadGridHeatmaps).not.toHaveBeenCalled()
+  })
+
+  it('对比在用户切换角色后被取消时不误报完成', async () => {
+    const baseline = { ...defaultGrid().batches[0], id: '1' }
+    const current = { ...defaultGrid().batches[0], id: '2' }
+    storeMock.grid = { batches: [baseline, current], rows: [] }
+    storeMock.baselineBatch = baseline
+    storeMock.currentBatch = current
+    storeMock.canCompare = true
+    storeMock.gridHeatmaps = {
+      baseline_id: '1', current_id: '2', exists: false, ready: false, status: 'missing', map: {},
+    }
+    storeMock.runComparison.mockResolvedValue(null)
+    mountGrid()
+
+    await wrapper.get('.heat-title.is-btn > div').trigger('click')
+    await Promise.resolve()
+
+    expect(storeMock.runComparison).toHaveBeenCalledWith({ force: false })
+    expect(messageMock.success).not.toHaveBeenCalled()
   })
 })
 
@@ -370,6 +410,8 @@ describe('BatchGrid original image preloading', () => {
       baseline_id: '1',
       current_id: '2',
       exists: true,
+      ready: true,
+      status: 'done',
       map: {
         Up: '/heat/up.png',
         Middle: '/heat/middle.png',

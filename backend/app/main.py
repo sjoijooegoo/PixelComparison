@@ -454,6 +454,15 @@ def list_batches(
     }
 
 
+@app.get("/api/batches/{batch_id}")
+def get_batch(batch_id: str, db: Session = Depends(get_db)):
+    """按全局唯一批次号读取完整元数据，供前端深链恢复筛选和角色。"""
+    batch = db.get(Batch, batch_id)
+    if batch is None:
+        raise HTTPException(404, "batch not found")
+    return batch_dto(batch, db)
+
+
 # 自动生成批次号时串行化,避免并发取到同一个序号
 _BATCH_LOCK = threading.Lock()
 
@@ -797,6 +806,7 @@ def scene_grid(
              "p4_version": b.p4_version,
              "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
              "platform": b.platform,
+             "has_screenshots": True,
              "shading_quality_label": shading_quality_label(b.shading_quality)}
             for b in batches
         ],
@@ -1065,8 +1075,30 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
         # flip:库内方向与本次请求相反(请求的 batch 实际是库里的参照)
         flip = bool(existing) and existing.batch_id != batch.id
 
-        if existing and not body.force:
-            return {"status": "done", "comparison": comparison_dto(existing, db), "flip": flip}
+        if existing:
+            # 空行会在后台任务真正完成前就存在。必须先识别运行任务，再判断
+            # 是否已有可复用结果，否则刷新或重复点击会把空行误报为 done。
+            running_task_id = _RUNNING.get(existing.id)
+            if running_task_id:
+                task = _TASKS.get(running_task_id, {})
+                return {
+                    "task_id": running_task_id,
+                    "status": task.get("status", "running"),
+                    "done": task.get("done", 0),
+                    "total": task.get("total", 0),
+                    "flip": flip,
+                }
+            item_count = db.scalar(
+                select(func.count(ComparisonItem.id)).where(
+                    ComparisonItem.comparison_id == existing.id
+                )
+            ) or 0
+            if item_count > 0 and not body.force:
+                return {
+                    "status": "done",
+                    "comparison": comparison_dto(existing, db),
+                    "flip": flip,
+                }
 
         if existing is None:
             # 先建空行拿到稳定 id(按请求方向为规范方向)
@@ -1089,12 +1121,6 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
                 )
             )
         cid = comparison.id
-
-        # 已有任务在算这条对比 -> 直接复用其进度,不重复起线程
-        if cid in _RUNNING:
-            t = _TASKS.get(_RUNNING[cid], {})
-            return {"task_id": _RUNNING[cid], "status": t.get("status", "running"),
-                    "done": t.get("done", 0), "total": t.get("total", 0), "flip": flip}
 
         _prune_tasks()
         task_id = uuid.uuid4().hex
@@ -1123,13 +1149,54 @@ def lookup_comparison(batch_id: str, ref_batch_id: str, db: Session = Depends(ge
         )).order_by(Comparison.created_at.desc())
     ).first()
     if not existing:
-        return {"exists": False}
+        return {
+            "exists": False,
+            "status": "missing",
+            "ready": False,
+            "task_id": None,
+            "done": 0,
+            "total": 0,
+        }
     items = db.scalars(
         select(ComparisonItem).where(ComparisonItem.comparison_id == existing.id)
     ).all()
     heatmaps = {it.scene_name: _heatmap_url(it)
                 for it in items if it.heatmap_path}
-    return {"exists": True, "comparison": comparison_dto(existing, db), "heatmaps": heatmaps}
+    running_task_id = _RUNNING.get(existing.id)
+    if running_task_id:
+        task = _TASKS.get(running_task_id, {})
+        return {
+            "exists": True,
+            "status": "running",
+            "ready": False,
+            "task_id": running_task_id,
+            "done": task.get("done", 0),
+            "total": task.get("total", 0),
+            "comparison": comparison_dto(existing, db),
+            "heatmaps": heatmaps,
+        }
+    if not items:
+        # 服务异常退出可能留下没有任何对比项的空壳行。对调用方表现为
+        # 可重新发起的 missing，create_comparison 会复用同一行重新计算。
+        return {
+            "exists": False,
+            "status": "missing",
+            "ready": False,
+            "task_id": None,
+            "done": 0,
+            "total": 0,
+        }
+    total = len(items)
+    return {
+        "exists": True,
+        "status": "done",
+        "ready": True,
+        "task_id": None,
+        "done": total,
+        "total": total,
+        "comparison": comparison_dto(existing, db),
+        "heatmaps": heatmaps,
+    }
 
 
 @app.post("/api/batches/{batch_id}/auto-compare", status_code=202)
@@ -1465,9 +1532,36 @@ def get_meta(db: Session = Depends(get_db)):
         db.scalars(select(Batch.branch_tag).distinct()).all()
     )
     discovered_branches.discard("main")
+    branch_tags = ["main", *sorted(discovered_branches)]
+    # 下拉菜单需要区分“目录中存在”与“当前分支确实有对应数据”。这里按
+    # 分支 + 场景一次聚合，避免前端为每个场景分别请求；目录中但未入库的
+    # 场景不会出现在映射中，前端按 false 处理。
+    scene_data_flags: dict[str, dict[str, dict[str, bool]]] = {
+        branch_tag: {} for branch_tag in branch_tags
+    }
+    for branch_tag, scene_id in db.execute(
+        select(Batch.branch_tag, Batch.scene_id).distinct()
+    ):
+        scene_data_flags[branch_tag][scene_id] = {
+            "has_screenshots": False,
+            "has_map_build_data": False,
+        }
+    for branch_tag, scene_id in db.execute(
+        select(Batch.branch_tag, Batch.scene_id)
+        .join(Screenshot, Screenshot.batch_id == Batch.id)
+        .distinct()
+    ):
+        scene_data_flags[branch_tag][scene_id]["has_screenshots"] = True
+    for branch_tag, scene_id in db.execute(
+        select(Batch.branch_tag, Batch.scene_id)
+        .join(MapBuildSnapshot, MapBuildSnapshot.batch_id == Batch.id)
+        .distinct()
+    ):
+        scene_data_flags[branch_tag][scene_id]["has_map_build_data"] = True
     return {
-        "branch_tags": ["main", *sorted(discovered_branches)],
+        "branch_tags": branch_tags,
         "scene_ids": scene_ids,
+        "scene_data_flags": scene_data_flags,
         "unlisted_scene_ids": unlisted,
         "scene_catalog_configured": configured is not None,
         "show_unlisted_scene_ids": settings["show_unlisted_scene_ids"],

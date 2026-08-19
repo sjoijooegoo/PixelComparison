@@ -6,8 +6,8 @@ PixelComparison 是面向游戏截图与场景烘培数据的回归平台。采�
 
 ## 主要能力
 
-- 管理包含场景、平台、画质、P4 版本和采集时间的截图批次。
-- 以表格或二维列表图浏览同一场景的多个版本。
+- 管理批次及其场景、平台、画质、P4 版本、采集时间和截图数据。
+- 在批次管理表格中维护全部批次，并在独立“截图对比”工作区浏览同一场景的多个版本。
 - 任意选择两个同场景批次进行异步比较，并复用已有结果。
 - 输出差异率、SSIM、PSNR、通道差异、RGB 直方图和 WebP 热力图。
 - 识别新增、缺失、通过、警告和失败检查点。
@@ -15,7 +15,7 @@ PixelComparison 是面向游戏截图与场景烘培数据的回归平台。采�
 - 支持外部模块全量同步前端场景目录，统一控制场景筛选项的顺序和可见性。
 - 接收批次随附的 `map_build_data`，以分块热力网格和跨批次折线展示烘培体积回归。
 - 使用 `pipeline_data.branch_tag` 隔离 `main`、`engine-ue5` 等分支；旧数据与缺省上报自动归入 `main`。
-- 支持不带截图的纯烘培批次；批次列表展示数据能力，列表图和图片对比只使用确有截图的批次。
+- 支持不带截图的纯烘培批次；批次列表展示数据能力，截图对比只使用确有截图的批次。
 - 自动生成缩略图并按访问时间淘汰缓存；批次画廊先显示缩略图，点击后才加载原图。
 - 每天在线备份 SQLite 数据库，默认保留 30 天。
 
@@ -165,7 +165,7 @@ backend/data/
 | `PIXELCOMP_BACKUP_RETENTION_DAYS` | `30` | 数据库备份保留天数；`0` 表示永久保留 |
 | `PIXELCOMP_BACKUP_CHECK_INTERVAL_SECONDS` | `3600` | 自动备份检查间隔，最小 60 秒 |
 
-不要把正在写入的 SQLite 主库放在 SMB/NFS 网络共享目录。若需要共享存储，建议只把 `PIXELCOMP_IMAGES_DIR` 指向共享盘，数据库和 `PIXELCOMP_THUMB_DIR` 仍保留在本地磁盘。截图上报成功后会立即把缩略图预热任务放入有界守护线程，但不会等待编码完成；历史图片或队列遗漏的缓存未命中请求仍会立即回退原图并异步补生成。后台线程不会阻止 Uvicorn 退出。批次和列表图 API 使用数据库缓存版本生成图片 URL，不会为了组装响应逐张访问远程原图；用户真正打开原图或后台生成缩略图时仍受共享存储速度影响。
+不要把正在写入的 SQLite 主库放在 SMB/NFS 网络共享目录。若需要共享存储，建议只把 `PIXELCOMP_IMAGES_DIR` 指向共享盘，数据库和 `PIXELCOMP_THUMB_DIR` 仍保留在本地磁盘。截图上报成功后会立即把缩略图预热任务放入有界守护线程，但不会等待编码完成；历史图片或队列遗漏的缓存未命中请求仍会立即回退原图并异步补生成。后台线程不会阻止 Uvicorn 退出。批次和截图网格 API 使用数据库缓存版本生成图片 URL，不会为了组装响应逐张访问远程原图；用户真正打开原图或后台生成缩略图时仍受共享存储速度影响。
 
 Linux 上将数据库和缩略图放本地、原图等大文件放远端的完整示例：
 
@@ -204,14 +204,14 @@ backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 
 | 路径 | 功能 |
 |---|---|
-| `/batches?branch_tag=main` | 按分支筛选批次、列表、列表图、预览、删除和手动上报 |
-| `/batches/:sceneId` | 直接打开指定场景的列表图 |
-| `/comparison?branch_tag=main` | 打开所选分支最近一次对比 |
-| `/comparison/:id` | 打开指定对比结果 |
+| `/batches` | 筛选、预览和维护全部批次；页面只展示表格 |
+| `/screenshot?branch_tag=main` | 打开截图对比空工作区，等待选择场景 |
+| `/screenshot/:sceneId?branch_tag=main&quality=4&date_mode=range&from=2026-08-06&to=2026-08-19` | 打开指定场景并恢复画质与日期筛选；可追加 `baseline`、`current` 恢复对比角色 |
+| `/batches/:sceneId` | 兼容旧链接，自动重定向到 `/screenshot/:sceneId` |
 | `/map-build?branch_tag=main` | 所选分支的烘培数据分块网格、选中项细则和按天历史趋势 |
 | `/settings` | 对比算法与默认筛选设置 |
 
-列表图按照“左旧右新”排列批次。选择基线和对比批次后，已有结果会直接显示热力图；没有缓存时可在列表图内发起计算，不会跳页。
+截图对比按照“左旧右新”排列批次。场景、画质和日期筛选会同步到 URL，切换场景以及刷新、复制链接或浏览器前进后退时均可恢复；指定日期使用 `date_mode=days&dates=2026-08-01,2026-08-03`。选择基线和对比批次后，已有结果会直接显示热力图；没有缓存时可在当前工作区发起计算，不会跳页。旧 `/comparison` 地址不再提供历史或详情页面，会返回批次管理；对比记录及热力图仍在后端保留 14 天，重新选择同一批次对即可恢复。
 
 ## 比较规则
 
@@ -341,8 +341,10 @@ Vue 3 + Pinia + Arco Design
 | `backend/app/service.py` | 检查点配对与对比结果生成 |
 | `backend/app/backup.py` | SQLite 每日在线备份和保留策略 |
 | `backend/app/models.py` | SQLAlchemy 数据模型 |
-| `frontend/src/store.js` | Pinia 状态、API 加载和对比轮询 |
-| `frontend/src/components/BatchGrid.vue` | 多批次二维列表图 |
+| `frontend/src/stores/projectStore.js` | 项目设置、场景目录和上报弹窗状态 |
+| `frontend/src/stores/batchCatalogStore.js` | 批次管理筛选、分页和目录请求 |
+| `frontend/src/stores/screenshotComparisonStore.js` | 截图网格、URL 角色、热力图和对比轮询 |
+| `frontend/src/components/BatchGrid.vue` | 截图对比的多批次二维网格 |
 
 ## 当前边界
 
@@ -350,4 +352,4 @@ Vue 3 + Pinia + Arco Design
 - 对比任务和进度在单进程内存中，服务重启会中断正在执行的任务。
 - SQLite 适合当前小团队规模；更大并发应迁移 PostgreSQL 和独立任务队列。
 - 当前 SSIM 是全局简化算法，不是滑窗 SSIM。
-- 列表图尚未实现二维虚拟化，大规模行列会产生较多 DOM 和图片请求。
+- 截图网格尚未实现二维虚拟化，大规模行列会产生较多 DOM 和图片请求。

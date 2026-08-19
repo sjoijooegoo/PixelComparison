@@ -3,16 +3,20 @@ import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { theme, toggleTheme } from '../theme'
-import { useStore } from '../store'
 import { runPageRefresh } from '../pageActions'
+import { useBatchCatalogStore } from '../stores/batchCatalogStore'
+import { useProjectStore } from '../stores/projectStore'
+import { useScreenshotComparisonStore } from '../stores/screenshotComparisonStore'
 
-const store = useStore()
+const project = useProjectStore()
+const catalog = useBatchCatalogStore()
+const screenshot = useScreenshotComparisonStore()
 const route = useRoute()
 const router = useRouter()
 
 const tabs = [
   { path: '/batches', label: '批次管理' },
-  { path: '/comparison', label: '对比结果' },
+  { path: '/screenshot', label: '截图对比' },
   { path: '/map-build', label: '烘培数据' },
   { path: '/settings', label: '项目设置' },
 ]
@@ -22,38 +26,35 @@ const current = computed(() => (route.path === '/' ? '/batches' : route.path))
 // 前缀匹配:/batches/<场景> 时「批次管理」仍高亮
 const isActive = (path) => current.value === path || current.value.startsWith(path + '/')
 const showDataActions = computed(() => (
-  isActive('/batches') || isActive('/comparison') || isActive('/map-build')
+  isActive('/batches') || isActive('/screenshot') || isActive('/map-build')
 ))
-const supportsAutoRefresh = computed(() => isActive('/batches') || isActive('/comparison'))
+const supportsAutoRefresh = computed(() => showDataActions.value)
+
+function currentBranch() {
+  const raw = route.query.branch_tag
+  if (Array.isArray(raw)) return raw[0] || 'main'
+  if (raw) return raw
+  if (isActive('/batches')) return catalog.filters.branch_tag || 'main'
+  return 'main'
+}
 
 function tabTarget(tab) {
   let path = tab.path
-  if (tab.path === '/map-build' && isActive('/batches')) {
+  if ((tab.path === '/map-build' && isActive('/screenshot'))
+      || (tab.path === '/screenshot' && isActive('/map-build'))) {
     const rawSceneId = route.params.sceneId
     const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
-    if (sceneId) path = `/map-build/${encodeURIComponent(sceneId)}`
+    if (sceneId) path = `${tab.path}/${encodeURIComponent(sceneId)}`
   }
-  if (tab.path === '/batches' && isActive('/map-build')) {
-    const rawSceneId = route.params.sceneId
-    const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
-    if (sceneId) path = `/batches/${encodeURIComponent(sceneId)}`
-  }
-  if (tab.path === '/settings') return path
-  return { path, query: { branch_tag: store.filters?.branch_tag || 'main' } }
+  if (tab.path === '/settings' || tab.path === '/batches') return path
+  return { path, query: { branch_tag: currentBranch() } }
 }
 
 // 按当前视图刷新对应数据;silent=true 时不弹提示(供定时自动刷新复用)
 async function doRefresh({ silent = false } = {}) {
-  let hiddenSceneId = ''
-  if (isActive('/map-build')) {
-    const handled = await runPageRefresh({ silent })
-    if (!handled) return
-  } else if (isActive('/comparison')) {
-    await store.loadComparisons()
-  } else {
-    hiddenSceneId = await store.refreshBatches()
-  }
-  if (hiddenSceneId) Message.info(`场景 ${hiddenSceneId} 已被目录配置隐藏，筛选已清空`)
+  await project.loadMeta()
+  const handled = await runPageRefresh({ silent })
+  if (!handled) return
   if (!silent) Message.success('已刷新')
 }
 
@@ -68,8 +69,8 @@ let autoTimer = null
 function autoTick() {
   if (document.hidden) return                       // 后台标签页不刷,省请求
   if (!supportsAutoRefresh.value) return             // 仅批次/对比页自动刷
-  if (store.uploadVisible || store.running) return  // 上传弹窗 / 对比中,不打断
-  // 列表图也刷新:渲染 key 稳定(列=批次id、行=检查点名),Vue 复用 DOM,
+  if (project.uploadVisible || screenshot.running) return  // 上传弹窗 / 对比中,不打断
+  // 截图网格也刷新:渲染 key 稳定(列=批次id、行=检查点名),Vue 复用 DOM,
   // 已有图片不重载、滚动位置不丢;有新批次时仅在末尾插入新列。
   doRefresh({ silent: true }).catch(() => {})       // 异常不应中断定时器
 }
@@ -113,7 +114,7 @@ onUnmounted(() => {
           </button>
         </a-tooltip>
         <a-tooltip content="手动上报">
-          <button class="icon-btn" aria-label="手动上报" @click="store.uploadVisible = true">
+          <button class="icon-btn" aria-label="手动上报" @click="project.uploadVisible = true">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 16V4" /><path d="M7 9l5-5 5 5" /><path d="M5 20h14" />

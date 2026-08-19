@@ -41,6 +41,19 @@ describe('api request encoding', () => {
     expect(requestUrl.searchParams.has('platform')).toBe(false)
   })
 
+  it('按全局批次号读取角色元数据并安全编码路径', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ id: 'build #7' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+
+    await api.batch('build #7', { signal: controller.signal })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/batches/build%20%237')
+    expect(fetchMock.mock.calls[0][1]).toEqual(expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }))
+  })
+
   it('按 JSON 提交完整热力图设置', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ heatmap_method: 'legacy' }))
     vi.stubGlobal('fetch', fetchMock)
@@ -129,7 +142,7 @@ describe('api request encoding', () => {
     vi.stubGlobal('fetch', fetchMock)
     const controller = new AbortController()
 
-    const pending = api.item(7, { signal: controller.signal }).catch((error) => error)
+    const pending = api.batch(7, { signal: controller.signal }).catch((error) => error)
     controller.abort()
 
     await expect(pending).resolves.toMatchObject({ code: 'ABORTED', cancelled: true })

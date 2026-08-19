@@ -7,11 +7,14 @@ const routeMock = vi.hoisted(() => ({
   path: '/map-build/Coral_WP', params: { sceneId: 'Coral_WP' }, query: { branch_tag: 'engine-ue5' },
 }))
 const routerMock = vi.hoisted(() => ({ push: vi.fn() }))
-const storeMock = vi.hoisted(() => ({
+const projectMock = vi.hoisted(() => ({
   uploadVisible: false,
+  loadMeta: vi.fn(),
+}))
+const screenshotMock = vi.hoisted(() => ({
   running: false,
-  refreshBatches: vi.fn(),
-  loadComparisons: vi.fn(),
+}))
+const catalogMock = vi.hoisted(() => ({
   filters: { branch_tag: 'engine-ue5' },
 }))
 const messageMock = vi.hoisted(() => ({
@@ -24,7 +27,11 @@ vi.mock('vue-router', () => ({
   useRoute: () => routeMock,
   useRouter: () => routerMock,
 }))
-vi.mock('../store', () => ({ useStore: () => storeMock }))
+vi.mock('../stores/projectStore', () => ({ useProjectStore: () => projectMock }))
+vi.mock('../stores/screenshotComparisonStore', () => ({
+  useScreenshotComparisonStore: () => screenshotMock,
+}))
+vi.mock('../stores/batchCatalogStore', () => ({ useBatchCatalogStore: () => catalogMock }))
 vi.mock('../theme', async () => {
   const { ref } = await import('vue')
   return { theme: ref('dark'), toggleTheme: vi.fn() }
@@ -46,10 +53,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   routeMock.path = '/map-build/Coral_WP'
   routeMock.params.sceneId = 'Coral_WP'
-  storeMock.uploadVisible = false
-  storeMock.running = false
-  storeMock.refreshBatches.mockResolvedValue('')
-  storeMock.loadComparisons.mockResolvedValue()
+  routeMock.query = { branch_tag: 'engine-ue5' }
+  projectMock.uploadVisible = false
+  projectMock.loadMeta.mockResolvedValue()
+  screenshotMock.running = false
 })
 
 describe('TopBar map-build actions', () => {
@@ -61,11 +68,10 @@ describe('TopBar map-build actions', () => {
     await wrapper.get('button[aria-label="刷新"]').trigger('click')
     await flushPromises()
     expect(refreshPage).toHaveBeenCalledWith({ silent: false })
-    expect(storeMock.refreshBatches).not.toHaveBeenCalled()
     expect(messageMock.success).toHaveBeenCalledWith('已刷新')
 
     await wrapper.get('button[aria-label="手动上报"]').trigger('click')
-    expect(storeMock.uploadVisible).toBe(true)
+    expect(projectMock.uploadVisible).toBe(true)
 
     unregister()
     wrapper.unmount()
@@ -81,15 +87,30 @@ describe('TopBar map-build actions', () => {
     wrapper.unmount()
   })
 
-  it('从批次管理进入烘培数据时继承当前场景', async () => {
-    routeMock.path = '/batches/Volcano_WP'
+  it('烘培数据与截图对比之间继承当前场景和分支', async () => {
+    routeMock.path = '/map-build/Volcano_WP'
     routeMock.params.sceneId = 'Volcano_WP'
     const wrapper = mountTopBar()
 
-    await wrapper.findAll('.tab').find((tab) => tab.text() === '烘培数据').trigger('click')
+    await wrapper.findAll('.tab').find((tab) => tab.text() === '截图对比').trigger('click')
 
     expect(routerMock.push).toHaveBeenCalledWith({
-      path: '/map-build/Volcano_WP',
+      path: '/screenshot/Volcano_WP',
+      query: { branch_tag: 'engine-ue5' },
+    })
+    wrapper.unmount()
+  })
+
+  it('从批次管理直接进入截图对比时不擅自选择场景', async () => {
+    routeMock.path = '/batches'
+    routeMock.params.sceneId = undefined
+    routeMock.query = {}
+    const wrapper = mountTopBar()
+
+    await wrapper.findAll('.tab').find((tab) => tab.text() === '截图对比').trigger('click')
+
+    expect(routerMock.push).toHaveBeenCalledWith({
+      path: '/screenshot',
       query: { branch_tag: 'engine-ue5' },
     })
     wrapper.unmount()

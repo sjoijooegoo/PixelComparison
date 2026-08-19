@@ -73,6 +73,44 @@ def test_batch_branch_defaults_normalizes_and_filters(client):
     assert [item["id"] for item in engine_items] == ["engine-batch"]
 
 
+def test_exact_batch_returns_capabilities_without_branch_filter(client, png_bytes):
+    _create_batch(
+        client,
+        "engine-exact",
+        branch_tag="engine-ue5",
+        scene_id="ExactScene",
+        captured_at="2026-08-03T12:34:00",
+    )
+    screenshot = client.post(
+        "/api/batches/engine-exact/screenshots",
+        params={"branch_tag": "engine-ue5"},
+        data={"scene_name": "shot_01"},
+        files={"file": ("shot_01.png", png_bytes(), "image/png")},
+    )
+    assert screenshot.status_code == 201, screenshot.text
+
+    response = client.get("/api/batches/engine-exact")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "id": "engine-exact",
+        "branch_tag": "engine-ue5",
+        "scene_id": "ExactScene",
+        "p4_version": 100,
+        "platform": "Windows",
+        "creator": "CI机器人",
+        "batch_url": None,
+        "resolution": None,
+        "shading_quality": 4,
+        "shading_quality_label": "极致",
+        "created_at": "2026-08-03 12:34",
+        "scene_count": 1,
+        "has_screenshots": True,
+        "has_map_build_data": False,
+    }
+    assert client.get("/api/batches/missing-batch").status_code == 404
+
+
 def test_batch_branch_rejects_non_string_value_as_validation_error(client):
     response = client.post(
         "/api/batches",
@@ -89,8 +127,15 @@ def test_batch_branch_rejects_non_string_value_as_validation_error(client):
 
 
 def test_capability_flags_and_grid_only_include_screenshot_batches(client, png_bytes):
-    _create_batch(client, "engine-shot", branch_tag="engine-ue5")
-    _create_batch(client, "engine-build", branch_tag="engine-ue5")
+    _create_batch(
+        client, "engine-shot", branch_tag="engine-ue5", scene_id="ShotScene"
+    )
+    _create_batch(
+        client, "engine-build", branch_tag="engine-ue5", scene_id="BuildScene"
+    )
+    _create_batch(
+        client, "engine-empty", branch_tag="engine-ue5", scene_id="EmptyScene"
+    )
 
     screenshot = client.post(
         "/api/batches/engine-shot/screenshots",
@@ -116,9 +161,25 @@ def test_capability_flags_and_grid_only_include_screenshot_batches(client, png_b
     assert items["engine-shot"]["has_map_build_data"] is False
     assert items["engine-build"]["has_screenshots"] is False
     assert items["engine-build"]["has_map_build_data"] is True
+    assert items["engine-empty"]["has_screenshots"] is False
+    assert items["engine-empty"]["has_map_build_data"] is False
+
+    flags = client.get("/api/meta").json()["scene_data_flags"]["engine-ue5"]
+    assert flags["ShotScene"] == {
+        "has_screenshots": True,
+        "has_map_build_data": False,
+    }
+    assert flags["BuildScene"] == {
+        "has_screenshots": False,
+        "has_map_build_data": True,
+    }
+    assert flags["EmptyScene"] == {
+        "has_screenshots": False,
+        "has_map_build_data": False,
+    }
 
     grid = client.get(
-        "/api/scenes/BranchScene/grid", params={"branch_tag": "engine-ue5"}
+        "/api/scenes/ShotScene/grid", params={"branch_tag": "engine-ue5"}
     ).json()
     assert grid["total"] == 1
     assert [batch["id"] for batch in grid["batches"]] == ["engine-shot"]

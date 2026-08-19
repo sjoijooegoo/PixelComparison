@@ -57,14 +57,17 @@ async function get(url, params = {}, options = {}) {
   return fetchWithTimeout(qs ? `${url}?${qs}` : url, options, API_TIMEOUT_MS, async (res) => {
     if (!res.ok) {
       logger.error('接口失败', `GET ${url}`, res.status)
-      throw new Error(`${res.status} ${url}`)
+      const error = new Error(`${res.status} ${url}`)
+      error.status = res.status
+      throw error
     }
     return await res.json()
   })
 }
 
-async function send(method, url, body) {
+async function send(method, url, body, options = {}) {
   return fetchWithTimeout(url, {
+    ...options,
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -108,13 +111,14 @@ async function upload(url, formData, context = {}) {
 export const thumbUrl = (url) => (url ? url.replace('/images/', '/thumb/') : url)
 export const isRequestCancelled = (error) => error?.code === 'ABORTED' || error?.cancelled === true
 
-const post = (url, body) => send('POST', url, body)
+const post = (url, body, options = {}) => send('POST', url, body, options)
 const put = (url, body) => send('PUT', url, body)
 const del = (url) => send('DELETE', url)
 
 export const api = {
   meta: () => get('/api/meta'),
   batches: (params) => get('/api/batches', params),
+  batch: (id, options = {}) => get(`/api/batches/${encodeURIComponent(id)}`, {}, options),
   createBatch: (body) => post('/api/batches', body),
   deleteBatch: (id) => del(`/api/batches/${encodeURIComponent(id)}`),
   uploadScreenshot: (id, formData, context = {}, branchTag = 'main') =>
@@ -130,15 +134,11 @@ export const api = {
     ),
   autoCompare: (id) => post(`/api/batches/${id}/auto-compare`, {}),
   batchScreenshots: (id, options = {}) => get(`/api/batches/${id}/screenshots`, {}, options),
-  sceneGrid: (sceneId, params) => get(`/api/scenes/${sceneId}/grid`, params),
-  comparisons: (filters, options = {}) => get('/api/comparisons', filters, options),
-  createComparison: (body) => post('/api/comparisons', body),
+  sceneGrid: (sceneId, params, options = {}) => get(`/api/scenes/${sceneId}/grid`, params, options),
+  createComparison: (body, options = {}) => post('/api/comparisons', body, options),
   comparisonLookup: (batchId, refBatchId, options = {}) =>
     get('/api/comparisons/lookup', { batch_id: batchId, ref_batch_id: refBatchId }, options),
-  comparisonTask: (taskId) => get(`/api/comparisons/tasks/${taskId}`),
-  scenes: (comparisonId, params, options = {}) =>
-    get(`/api/comparisons/${comparisonId}/scenes`, params, options),
-  item: (id, options = {}) => get(`/api/items/${id}`, {}, options),
+  comparisonTask: (taskId, options = {}) => get(`/api/comparisons/tasks/${taskId}`, {}, options),
   mapBuildMeta: (params = {}, options = {}) => get('/api/map-build/meta', params, options),
   mapBuildOverview: (sceneId, params = {}, options = {}) =>
     get(`/api/map-build/scenes/${encodeURIComponent(sceneId)}/overview`, params, options),

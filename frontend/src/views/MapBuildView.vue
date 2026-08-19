@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, isRequestCancelled } from '../api'
-import { p4Label, useStore } from '../store'
+import { p4Label } from '../store'
+import { useProjectStore } from '../stores/projectStore'
 import {
   atlasColor,
   formatExactBytes,
@@ -12,7 +13,7 @@ import {
 import MapBuildTrendChart from '../components/MapBuildTrendChart.vue'
 import { registerPageRefresh } from '../pageActions'
 
-const store = useStore()
+const store = useProjectStore()
 const route = useRoute()
 const router = useRouter()
 const meta = ref({ scene_ids: [] })
@@ -346,7 +347,6 @@ async function changeScene() {
 
 async function changeBranch() {
   filters.branchTag = availableBranchTag(filters.branchTag)
-  store.filters.branch_tag = filters.branchTag
   clearSceneData()
   selection.blockIndex = null
   selection.subBlockIndex = null
@@ -366,7 +366,6 @@ async function applyRouteState() {
   const nextBranchTag = availableBranchTag(routeQueryValue('branch_tag'))
   if (filters.branchTag !== nextBranchTag) {
     filters.branchTag = nextBranchTag
-    store.filters.branch_tag = nextBranchTag
     clearSceneData()
     applyAnalysisState(routeAnalysisState())
     const loadedMeta = await loadMeta(routeSceneId())
@@ -567,6 +566,10 @@ const sceneOptions = computed(() => {
 const unlistedSceneIds = computed(() => new Set(store.meta.unlisted_scene_ids || []))
 const hasSceneOptions = computed(() => sceneOptions.value.length > 0)
 const selectedSceneHasData = computed(() => mapBuildSceneIds.value.has(filters.sceneId))
+function sceneHasMapBuildData(sceneId) {
+  if (metaLoading.value) return null
+  return mapBuildSceneIds.value.has(sceneId)
+}
 const hasBlockTree = computed(() => (
   (overview.value?.blocks?.length || 0) + (overview.value?.auxiliary_blocks?.length || 0)
 ) > 0)
@@ -650,18 +653,17 @@ function batchLabel(batch, isLatest = false) {
 
 onMounted(async () => {
   unregisterPageRefresh = registerPageRefresh(refresh)
-  const requestedBranchTag = routeQueryValue('branch_tag') || store.filters.branch_tag
-  // bootstrap 会先启动 store.init() 再挂载页面。等待同一轮初始化完成后再校验
+  const requestedBranchTag = routeQueryValue('branch_tag') || 'main'
+  // bootstrap 会先启动项目初始化再挂载页面。等待同一轮初始化完成后再校验
   // 深链分支，避免 meta 尚只有默认 main 时把有效的 engine-ue5 错误回退。
   if (!store.initialized && typeof store.init === 'function') {
     try {
-      await store.init('', requestedBranchTag)
+      await store.init()
     } catch {
       // 页面自己的错误态会继续承接 map-build 请求失败，外壳仍保持可操作。
     }
   }
   filters.branchTag = availableBranchTag(requestedBranchTag)
-  store.filters.branch_tag = filters.branchTag
   applyAnalysisState(routeAnalysisState())
   const loaded = await loadMeta(routeSceneId())
   if (loaded && filters.sceneId && selectedSceneHasData.value) {
@@ -712,7 +714,11 @@ onUnmounted(() => {
             @change="changeScene">
             <a-option v-for="scene in sceneOptions" :key="scene" :value="scene">
               <span class="scene-option">
-                <span>{{ scene }}</span>
+                <span class="scene-option-name"
+                  :class="{ 'is-data-empty': sceneHasMapBuildData(scene) === false }"
+                  :title="sceneHasMapBuildData(scene) === false ? '当前分支没有烘培数据' : undefined">
+                  {{ scene }}
+                </span>
                 <span v-if="unlistedSceneIds.has(scene)" class="unlisted">未配置</span>
               </span>
             </a-option>
@@ -933,6 +939,7 @@ onUnmounted(() => {
 .scene-field { flex: 0 0 auto; }
 .batch-field { flex: 0 0 auto; }
 .scene-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.scene-option-name.is-data-empty { color: var(--color-text-4); }
 .unlisted { color: var(--color-text-3); font-size: 11px; }
 .page-state { min-height: 420px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--color-text-3); }
 .state-glyph { font-size: 38px; color: var(--color-text-4); }

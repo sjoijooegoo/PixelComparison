@@ -1,14 +1,18 @@
 <script setup>
-import { useStore } from './store'
+import { useProjectStore } from './stores/projectStore'
 import TopBar from './components/TopBar.vue'
 import ManualUpload from './components/ManualUpload.vue'
 import { runPageRefresh } from './pageActions'
 
-const store = useStore()
+const store = useProjectStore()
 
-function refreshAfterUpload() {
-  store.refreshBatches().catch(() => {})
-  runPageRefresh().catch(() => {})
+async function refreshAfterUpload() {
+  try {
+    await store.loadMeta()
+    await runPageRefresh({ refreshMeta: false })
+  } catch {
+    // 上报已经成功；刷新失败由当前页面的错误态和手动刷新继续承接。
+  }
 }
 </script>
 
@@ -18,9 +22,9 @@ function refreshAfterUpload() {
     <div v-if="store.initializing" class="startup-progress" aria-label="正在初始化">
       <span></span>
     </div>
-    <!-- 缓存批次管理(列表图 DOM 较重):切到对比/设置再切回时不重建,避免明显卡顿 -->
+    <!-- 只缓存截图对比工作区的重型网格 DOM。 -->
     <router-view v-slot="{ Component }">
-      <keep-alive :include="['BatchView']">
+      <keep-alive :include="['ScreenshotComparisonView']">
         <component :is="Component" />
       </keep-alive>
     </router-view>

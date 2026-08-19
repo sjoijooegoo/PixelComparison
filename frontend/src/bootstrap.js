@@ -1,23 +1,14 @@
 export async function bootstrapApp({ app, router, store, logger, mountTarget = '#app' }) {
-  let routeSceneId = ''
-  let routeBranchTag = 'main'
   try {
     await router.isReady()
-    const currentRoute = router.currentRoute.value
-    const rawBranchTag = currentRoute.query?.branch_tag
-    routeBranchTag = Array.isArray(rawBranchTag) ? rawBranchTag[0] : rawBranchTag || 'main'
-    if (currentRoute.path?.startsWith('/batches')) {
-      const rawSceneId = currentRoute.params.sceneId
-      routeSceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId || ''
-    }
   } catch (error) {
     // 路由初始化异常也要挂载外壳，避免用户只看到空白页。
     logger.error('初始路由解析失败', error)
   }
 
-  // init() 会在首次 await 前同步固定深链场景和 loading 状态。随后立即挂载，
-  // 页面展示骨架；批次/列表图继续在后台加载，失败后可在页面内重试。
-  const initialization = store.init(routeSceneId, routeBranchTag)
+  // 应用壳只初始化项目元信息和设置；批次目录、截图网格与烘培数据由
+  // 各自路由页面加载，避免深链首屏先发出错误工作区的请求。
+  const initialization = store.init()
   app.mount(mountTarget)
   try {
     await initialization

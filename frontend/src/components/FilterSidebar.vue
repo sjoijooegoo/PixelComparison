@@ -5,15 +5,26 @@ import {
   MAX_DATE_RANGE_DAYS,
   defaultDateRange,
   isDateRangeAllowed,
-  useStore,
   visibleQualityOptions,
 } from '../store'
+import { useBatchCatalogStore } from '../stores/batchCatalogStore'
+import { useProjectStore } from '../stores/projectStore'
 
-const store = useStore()
+const store = useBatchCatalogStore()
+const project = useProjectStore()
 
 // 画质下拉选项:跟随项目设置「筛选框显示的画质」
-const qualityOptions = computed(() => visibleQualityOptions(store.settings))
-const unlistedSceneIds = computed(() => new Set(store.meta.unlisted_scene_ids || []))
+const qualityOptions = computed(() => visibleQualityOptions(project.settings))
+const unlistedSceneIds = computed(() => new Set(project.meta.unlisted_scene_ids || []))
+
+function sceneHasBatchData(sceneId) {
+  const flagsByBranch = project.meta.scene_data_flags
+  const branchTag = store.filters.branch_tag || 'main'
+  if (!flagsByBranch || !Object.prototype.hasOwnProperty.call(flagsByBranch, branchTag)) {
+    return null
+  }
+  return Object.prototype.hasOwnProperty.call(flagsByBranch[branchTag] || {}, sceneId)
+}
 
 // 创建时间范围:绑定到 filters.created_from/created_to(YYYY-MM-DD)
 const dateRange = computed(() => {
@@ -38,11 +49,8 @@ function isDaySelected(date) {
 
 // 任意筛选项变更即自动应用(静默)
 async function applyNow() {
-  store.batchPage = 1
-  const loads = [store.loadBatches()]
-  if (store.batchView === 'grid') loads.push(store.loadGrid())
   try {
-    await Promise.all(loads)
+    await store.applyFilters()
   } catch (error) {
     Message.error(error?.message || '筛选数据加载失败，请重试')
   }
@@ -66,7 +74,7 @@ function onDateChange(v) {
     store.filters.created_to = v[1]
   } else {
     // 不允许清空成全部时间,恢复默认日期范围(跟随项目设置)
-    Object.assign(store.filters, defaultDateRange(store.settings.default_date_range_days))
+    Object.assign(store.filters, defaultDateRange(project.settings.default_date_range_days))
   }
   applyNow()
 }
@@ -101,12 +109,13 @@ function removeDay(d) {
 
 async function reset() {
   // 恢复到项目设置里的默认筛选(默认画质 + 默认日期范围);不放出全部时间数据
-  const previousBranch = store.filters.branch_tag
-  store.filters = store.defaultFilters()
   dayPick.value = null
   dayPickerOpen.value = false
-  if (previousBranch !== store.filters.branch_tag) await store.changeBranch(store.filters.branch_tag)
-  else await applyNow()
+  try {
+    await store.resetFilters()
+  } catch (error) {
+    Message.error(error?.message || '筛选数据加载失败，请重试')
+  }
 }
 </script>
 
@@ -116,7 +125,7 @@ async function reset() {
       <span class="label">分支</span>
       <a-select v-model="store.filters.branch_tag" size="small" style="width: 150px"
         @change="onBranchChange">
-        <a-option v-for="branch in store.meta.branch_tags" :key="branch" :value="branch">
+        <a-option v-for="branch in project.meta.branch_tags" :key="branch" :value="branch">
           {{ branch }}
         </a-option>
       </a-select>
@@ -125,9 +134,13 @@ async function reset() {
       <span class="label">场景ID</span>
       <a-select v-model="store.filters.scene_id" placeholder="全部场景" allow-clear allow-search size="small"
         style="width: 320px" @change="applyNow">
-        <a-option v-for="s in store.meta.scene_ids" :key="s" :value="s">
+        <a-option v-for="s in project.meta.scene_ids" :key="s" :value="s">
           <span class="scene-option">
-            <span>{{ s }}</span>
+            <span class="scene-option-name"
+              :class="{ 'is-data-empty': sceneHasBatchData(s) === false }"
+              :title="sceneHasBatchData(s) === false ? '当前分支没有批次数据' : undefined">
+              {{ s }}
+            </span>
             <span v-if="unlistedSceneIds.has(s)" class="unlisted">未配置</span>
           </span>
         </a-option>
@@ -182,6 +195,7 @@ async function reset() {
 .field { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .field .label { color: var(--color-text-3); font-size: 12px; white-space: nowrap; }
 .scene-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.scene-option-name.is-data-empty { color: var(--color-text-4); }
 .unlisted { color: var(--color-text-3); font-size: 11px; }
 .days { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; max-width: 500px; }
 .day-cell {
