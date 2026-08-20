@@ -67,6 +67,7 @@ const storeMock = storeHolder.current
 const SlotStub = defineComponent({ template: '<div><slot/></div>' })
 let wrapper
 let imageRequests
+let resizeCallbacks
 
 class ControlledImage {
   constructor() {
@@ -156,6 +157,7 @@ function mountKeptGrid() {
 beforeEach(() => {
   vi.clearAllMocks()
   imageRequests = []
+  resizeCallbacks = []
   storeMock.filters.scene_id = 'SceneA'
   storeMock.filters.shading_quality = 5
   storeMock.grid = defaultGrid()
@@ -165,7 +167,9 @@ beforeEach(() => {
   storeMock.currentBatch = null
   storeMock.running = false
   storeMock.canCompare = false
+  vi.stubGlobal('devicePixelRatio', 1)
   vi.stubGlobal('ResizeObserver', class {
+    constructor(callback) { resizeCallbacks.push(callback) }
     observe() {}
     unobserve() {}
     disconnect() {}
@@ -195,6 +199,29 @@ describe('BatchGrid scene scrolling', () => {
     await nextTick()
     await nextTick()
     expect(scroller.scrollTop).toBe(0)
+  })
+})
+
+describe('BatchGrid column sizing', () => {
+  it('窗口化时保持全屏列宽，浏览器缩放时交给页面自然缩放', async () => {
+    mountGrid()
+    const scroller = wrapper.get('.grid-scroll').element
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 1700 })
+
+    resizeCallbacks.forEach((callback) => callback())
+    await nextTick()
+    expect(wrapper.get('.matrix').attributes('style')).toContain('100px 200px 200px')
+
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 1300 })
+    resizeCallbacks.forEach((callback) => callback())
+    await nextTick()
+    expect(wrapper.get('.matrix').attributes('style')).toContain('100px 200px 200px')
+
+    vi.stubGlobal('devicePixelRatio', 1.25)
+    Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 1360 })
+    resizeCallbacks.forEach((callback) => callback())
+    await nextTick()
+    expect(wrapper.get('.matrix').attributes('style')).toContain('100px 200px 200px')
   })
 })
 

@@ -701,6 +701,7 @@ onUnmounted(() => {
         <div class="filter-field branch-field">
           <span class="label">分支</span>
           <a-select v-model="filters.branchTag" size="small" style="width: 160px"
+            popup-container=".map-build-page"
             @change="changeBranch">
             <a-option v-for="branch in store.meta.branch_tags" :key="branch" :value="branch">
               {{ branch }}
@@ -711,6 +712,7 @@ onUnmounted(() => {
           <span class="label">场景ID</span>
           <a-select v-model="filters.sceneId" class="scene-select" :loading="metaLoading"
             placeholder="全部场景" allow-clear allow-search size="small" style="width: 320px"
+            popup-container=".map-build-page"
             @change="changeScene">
             <a-option v-for="scene in sceneOptions" :key="scene" :value="scene">
               <span class="scene-option">
@@ -728,6 +730,7 @@ onUnmounted(() => {
           <span class="label">网格批次</span>
           <a-select v-model="filters.batchId" class="batch-select" :loading="overviewLoading"
             :disabled="!selectedSceneHasData" allow-search size="small" style="width: 520px"
+            popup-container=".map-build-page"
             @change="changeBatch">
             <a-option v-for="(batch, index) in overview?.available_batches || []"
               :key="batch.id" :value="batch.id">
@@ -903,7 +906,8 @@ onUnmounted(() => {
             </div>
             <div class="trend-controls">
               <a-select :model-value="trendRangeMode === 'custom' ? 'custom' : filters.days"
-                size="small" class="days-select" @change="changeTrendRangeMode">
+                size="small" class="days-select" popup-container=".map-build-page"
+                @change="changeTrendRangeMode">
                 <a-option :value="7">最近 7 天</a-option>
                 <a-option :value="14">最近 14 天</a-option>
                 <a-option :value="30">最近 30 天</a-option>
@@ -913,6 +917,7 @@ onUnmounted(() => {
               </a-select>
               <a-range-picker v-if="trendRangeMode === 'custom'" class="custom-range-picker"
                 size="small" value-format="YYYY-MM-DD" :allow-clear="false"
+                popup-container=".map-build-page"
                 :model-value="customDateRange" @change="changeCustomDateRange" />
             </div>
           </header>
@@ -928,7 +933,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.map-build-page { flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 18px; }
+.map-build-page { position: relative; flex: 1; min-height: 0; overflow: auto; padding: 10px 12px 18px; }
 .map-build-shell { width: min(1760px, 100%); margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
 .toolbar {
   padding: 10px 14px; display: flex; flex-wrap: wrap; align-items: center;

@@ -17,21 +17,23 @@ async function refreshAfterUpload() {
 </script>
 
 <template>
-  <div class="app-layout">
-    <TopBar />
-    <div v-if="store.initializing" class="startup-progress" aria-label="正在初始化">
-      <span></span>
-    </div>
-    <!-- 只缓存截图对比工作区的重型网格 DOM。 -->
-    <router-view v-slot="{ Component }">
-      <keep-alive :include="['ScreenshotComparisonView']">
-        <component :is="Component" />
-      </keep-alive>
-    </router-view>
+  <a-config-provider update-at-scroll>
+    <div class="app-layout">
+      <TopBar />
+      <div v-if="store.initializing" class="startup-progress" aria-label="正在初始化">
+        <span></span>
+      </div>
+      <!-- 只缓存截图对比工作区的重型网格 DOM。 -->
+      <router-view v-slot="{ Component }">
+        <keep-alive :include="['ScreenshotComparisonView']">
+          <component :is="Component" />
+        </keep-alive>
+      </router-view>
 
-    <!-- 手动上报弹窗(由顶栏按钮触发,全局挂载) -->
-    <ManualUpload v-model:visible="store.uploadVisible" @done="refreshAfterUpload" />
-  </div>
+      <!-- 手动上报弹窗(由顶栏按钮触发,全局挂载) -->
+      <ManualUpload v-model:visible="store.uploadVisible" @done="refreshAfterUpload" />
+    </div>
+  </a-config-provider>
 </template>
 
 <style scoped>

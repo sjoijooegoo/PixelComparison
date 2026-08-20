@@ -30,7 +30,7 @@ const MIN_COL = 120           // 列宽下限
 const panel = ref(null)
 const scroll = ref(null)      // 滚动容器(用于拖拽平移)
 const matrix = ref(null)      // 实际网格(监听异步数据/列宽动画导致的宽度增长)
-const colW = ref(160)         // 单个批次列宽(按当前网格可视宽度动态适配)
+const colW = ref(160)         // 单个批次列宽(按全屏/最大网格宽度适配，窗口化后不回缩)
 const imgH = computed(() => Math.round(colW.value * 9 / 16))   // 16:9 等比
 
 // 最右「差异热力图」列(吸附):展示已选基线/对比这对批次各检查点的差异热力图。
@@ -486,13 +486,24 @@ async function runCompare(force = false) {
   }
 }
 
-// 按网格真实可视宽度动态计算列宽：扣除检查点列后 8 等分，
-// 正好容纳 7 个批次列 + 1 个差异热力图列。使用 scroll.clientWidth
-// 可自动扣除边框和纵向滚动条，不依赖屏幕物理分辨率或系统缩放。
+// 按网格见过的最大可视宽度计算列宽：全屏时扣除检查点列后 8 等分，
+// 正好容纳 7 个批次列 + 1 个差异热力图列。窗口化只缩小视口，不压缩图片，
+// 由横向滚动承接；浏览器缩放改变 devicePixelRatio 时保留 CSS 列宽，让页面自然缩放。
+let sizingViewportW = 0
+let sizingDpr = window.devicePixelRatio || 1
 function recalc() {
   const el = panel.value
   if (!el) return
   const viewportW = scroll.value?.clientWidth || el.clientWidth
+  if (viewportW <= 0) return
+  const currentDpr = window.devicePixelRatio || 1
+  if (Math.abs(currentDpr - sizingDpr) > 0.001) {
+    sizingDpr = currentDpr
+    sizingViewportW = viewportW
+    return
+  }
+  if (viewportW <= sizingViewportW) return
+  sizingViewportW = viewportW
   const availableForImages = Math.max(0, viewportW - FIRST_COL)
   const fittedWidth = Math.round((availableForImages / VISIBLE_IMAGE_COLS) * 100) / 100
   const nextColW = Math.max(MIN_COL, fittedWidth)
