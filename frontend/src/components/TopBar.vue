@@ -62,8 +62,8 @@ function refresh() {
   return doRefresh().catch((error) => Message.error(error?.message || '刷新失败，请重试'))
 }   // 顶栏按钮:有提示
 
-// 定时自动刷新:固定 1 分钟一次,静默;按多重守卫跳过本轮(下一轮再判断)
-const AUTO_REFRESH_MS = 60000
+// 定时自动刷新:固定 2 分钟一次,静默;按多重守卫跳过本轮(下一轮再判断)
+const AUTO_REFRESH_MS = 120000
 let autoTimer = null
 
 function autoTick() {
