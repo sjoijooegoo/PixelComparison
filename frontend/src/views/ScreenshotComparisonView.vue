@@ -29,8 +29,15 @@ let pageActive = false
 const routeError = ref('')
 
 const selectedSceneHasScreenshots = computed(() => (
-  project.meta.scene_data_flags?.[store.filters.branch_tag]?.[store.filters.scene_id]
-    ?.has_screenshots === true
+  (() => {
+    const flags = project.meta.scene_data_flags?.[store.filters.branch_tag]?.[store.filters.scene_id]
+    if (!flags) return false
+    if (store.filters.shading_quality === '' || store.filters.shading_quality == null) {
+      return flags.has_screenshots === true
+    }
+    return (flags.screenshot_qualities || []).map(Number)
+      .includes(Number(store.filters.shading_quality))
+  })()
 ))
 
 const routeState = () => parseScreenshotRoute(route)
@@ -69,7 +76,9 @@ async function syncRoleUrl() {
   if (!store.initialized || writingUrl || !route.path.startsWith('/screenshot')) return
   await replaceUrl(screenshotStateFromFilters(store.filters, {
     baselineId: store.baselineBatch ? String(store.baselineBatch.id) : '',
+    baselineQuality: store.baselineBatch?.shading_quality ?? '',
     currentId: store.currentBatch ? String(store.currentBatch.id) : '',
+    currentQuality: store.currentBatch?.shading_quality ?? '',
   }))
 }
 
@@ -89,7 +98,10 @@ watch(() => route.fullPath, () => {
   void applyRoute()
 })
 watch(
-  () => [store.baselineBatch?.id, store.currentBatch?.id],
+  () => [
+    store.baselineBatch?.id, store.baselineBatch?.shading_quality,
+    store.currentBatch?.id, store.currentBatch?.shading_quality,
+  ],
   () => { void syncRoleUrl() },
 )
 

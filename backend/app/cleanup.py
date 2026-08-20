@@ -29,7 +29,12 @@ def find_orphans(db) -> dict[str, list]:
 
     live_batch_ids = set(db.scalars(select(Batch.id)))
     live_comparison_ids = {str(cid) for cid in db.scalars(select(Comparison.id))}
-    shot_paths = list(db.scalars(select(Screenshot.path)))
+    shot_paths = list(db.scalars(
+        select(Screenshot.path).where(
+            Screenshot.upload_status == "ready",
+            Screenshot.path.is_not(None),
+        )
+    ))
     live_shot_paths = {str((IMAGES_DIR / p).resolve()) for p in shot_paths}
     # 每张存活截图对应的合法缩略图路径(thumbs/<原路径>.webp)
     live_thumb_paths = {
@@ -45,7 +50,7 @@ def find_orphans(db) -> dict[str, list]:
             if d.is_dir() and d.name not in live_batch_ids:
                 orphan_dirs.append(d)
             elif d.is_dir():
-                for f in d.iterdir():
+                for f in d.rglob("*"):
                     if f.is_file() and str(f.resolve()) not in live_shot_paths:
                         orphan_files.append(f)
 

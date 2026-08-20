@@ -43,6 +43,19 @@ async function fetchWithTimeout(
   }
 }
 
+async function responseError(res, fallback) {
+  const payload = await res.json().catch(() => null)
+  const nested = payload?.detail
+  const message = payload?.message
+    || (typeof nested === 'string' ? nested : nested?.message)
+    || fallback
+  const error = new Error(message)
+  error.status = res.status
+  error.code = payload?.code || nested?.code
+  error.details = payload?.details || nested?.details
+  return error
+}
+
 async function get(url, params = {}, options = {}) {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
@@ -57,9 +70,7 @@ async function get(url, params = {}, options = {}) {
   return fetchWithTimeout(qs ? `${url}?${qs}` : url, options, API_TIMEOUT_MS, async (res) => {
     if (!res.ok) {
       logger.error('接口失败', `GET ${url}`, res.status)
-      const error = new Error(`${res.status} ${url}`)
-      error.status = res.status
-      throw error
+      throw await responseError(res, `${res.status} ${url}`)
     }
     return await res.json()
   })
@@ -73,11 +84,9 @@ async function send(method, url, body, options = {}) {
     body: JSON.stringify(body),
   }, API_TIMEOUT_MS, async (res) => {
     if (!res.ok) {
-      const detail = (await res.json().catch(() => null))?.detail
-      logger.error('接口失败', `${method} ${url}`, res.status, detail || '')
-      const err = new Error(detail || `${res.status} ${url}`)
-      err.status = res.status
-      throw err
+      const error = await responseError(res, `${res.status} ${url}`)
+      logger.error('接口失败', `${method} ${url}`, res.status, error.message || '')
+      throw error
     }
     return await res.json()
   })
@@ -91,16 +100,14 @@ async function upload(url, formData, context = {}) {
     UPLOAD_TIMEOUT_MS,
     async (res) => {
       if (!res.ok) {
-        const detail = (await res.json().catch(() => null))?.detail
+        const error = await responseError(res, `${res.status} ${url}`)
         const ctx = [
           context.batchId != null ? `batch=${context.batchId}` : '',
           context.sceneName ? `scene=${context.sceneName}` : '',
           context.fileName ? `file=${context.fileName}` : '',
         ].filter(Boolean).join(' ')
-        logger.error('上传失败', `POST ${url}`, res.status, ctx, detail || '')
-        const err = new Error(detail || `${res.status} ${url}`)
-        err.status = res.status
-        throw err
+        logger.error('上传失败', `POST ${url}`, res.status, ctx, error.message || '')
+        throw error
       }
       return await res.json()
     },
@@ -117,6 +124,7 @@ const del = (url) => send('DELETE', url)
 
 export const api = {
   meta: () => get('/api/meta'),
+  sceneAvailability: (params, options = {}) => get('/api/scene-availability', params, options),
   batches: (params) => get('/api/batches', params),
   batch: (id, options = {}) => get(`/api/batches/${encodeURIComponent(id)}`, {}, options),
   createBatch: (body) => post('/api/batches', body),
@@ -127,6 +135,12 @@ export const api = {
       formData,
       { ...context, batchId: id },
     ),
+  uploadQualityScreenshot: (id, quality, formData, context = {}, branchTag = 'main') =>
+    upload(
+      `/api/batches/${encodeURIComponent(id)}/quality-runs/${encodeURIComponent(quality)}/screenshots?branch_tag=${encodeURIComponent(branchTag)}`,
+      formData,
+      { ...context, batchId: id },
+    ),
   uploadMapBuildData: (id, body, format = 'map-build-data/v2', branchTag = 'main') =>
     post(
       `/api/batches/${encodeURIComponent(id)}/map-build-data?format=${encodeURIComponent(format)}&branch_tag=${encodeURIComponent(branchTag)}`,
@@ -134,10 +148,19 @@ export const api = {
     ),
   autoCompare: (id) => post(`/api/batches/${id}/auto-compare`, {}),
   batchScreenshots: (id, options = {}) => get(`/api/batches/${id}/screenshots`, {}, options),
+  qualityRunScreenshots: (id, quality, options = {}) => get(
+    `/api/batches/${encodeURIComponent(id)}/quality-runs/${encodeURIComponent(quality)}/screenshots`,
+    {},
+    options,
+  ),
   sceneGrid: (sceneId, params, options = {}) => get(`/api/scenes/${sceneId}/grid`, params, options),
   createComparison: (body, options = {}) => post('/api/comparisons', body, options),
-  comparisonLookup: (batchId, refBatchId, options = {}) =>
-    get('/api/comparisons/lookup', { batch_id: batchId, ref_batch_id: refBatchId }, options),
+  comparisonLookup: (batchId, refBatchId, quality, options = {}) =>
+    get('/api/comparisons/lookup', {
+      batch_id: batchId,
+      ref_batch_id: refBatchId,
+      shading_quality: quality,
+    }, options),
   comparisonTask: (taskId, options = {}) => get(`/api/comparisons/tasks/${taskId}`, {}, options),
   mapBuildMeta: (params = {}, options = {}) => get('/api/map-build/meta', params, options),
   mapBuildOverview: (sceneId, params = {}, options = {}) =>

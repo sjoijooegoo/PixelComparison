@@ -1,5 +1,7 @@
 import json
+import hashlib
 import mimetypes
+import os
 import re
 import shutil
 import threading
@@ -15,21 +17,26 @@ from urllib.parse import quote
 mimetypes.add_type("image/webp", ".webp")
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy import Integer, and_, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .cleanup import prune_orphans
+from .errors import ApiError
 from .backup import backup_scheduler
-from .db import IMAGES_DIR, THUMB_DIR, Base, SessionLocal, engine, get_db, migrate_columns
+from .db import IMAGES_DIR, THUMB_DIR, SessionLocal, get_db, initialize_database
 from .logging_setup import client_log, log, setup_logging
 from .map_build import (
     FORMAT_VERSION as MAP_BUILD_FORMAT_VERSION,
     MapBuildDataIn,
+    SnapshotContentConflict,
     get_overview as get_map_build_overview,
     get_trend as get_map_build_trend,
     list_meta as list_map_build_meta,
@@ -41,25 +48,37 @@ from .models import (
     Comparison,
     ComparisonItem,
     MapBuildSnapshot,
+    QualityRun,
     Screenshot,
+)
+from .quality_runs import (
+    is_run_available,
+    quality_run_dto,
+    ready_counts,
+    ready_scene_counts_by_batch,
+    resolve_quality_run,
+    runs_by_batch,
+    runs_with_ready_counts_by_batch,
 )
 from .service import run_comparison
 from .settings import get_settings, save_settings
+from .task_executor import BoundedDaemonExecutor
 from .thumbnails import ThumbnailService
 
 setup_logging()
-Base.metadata.create_all(engine)
-migrate_columns()
+initialize_database()
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     thumbnail_service.start()
+    comparison_executor.start()
     backup_scheduler.start()
     try:
         yield
     finally:
         thumbnail_service.stop()
+        comparison_executor.stop()
         backup_scheduler.stop()
 
 
@@ -84,6 +103,43 @@ app.mount("/images", _CachedStatic(directory=IMAGES_DIR), name="images")
 
 # ---- 缩略图:缓存命中直接返回；未命中立即回退原图并在有界守护线程中生成 ----
 thumbnail_service = ThumbnailService(IMAGES_DIR, THUMB_DIR)
+comparison_executor = BoundedDaemonExecutor(
+    "pixelcomp-compare", "PIXELCOMP_COMPARE_WORKERS", default_workers=2
+)
+
+
+@app.exception_handler(ApiError)
+async def _api_error_handler(_request: Request, error: ApiError):
+    content = {
+        "detail": error.message,  # 兼容现有前端与旧调用方
+        "code": error.code,
+        "message": error.message,
+    }
+    if error.details is not None:
+        content["details"] = error.details
+    return JSONResponse(status_code=error.status_code, content=content)
+
+
+@app.exception_handler(RequestValidationError)
+async def _request_validation_handler(request: Request, error: RequestValidationError):
+    # 新批次 manifest 在进入路由前由 Pydantic 拒绝；为它补稳定错误码。
+    if request.method == "POST" and request.url.path == "/api/batches":
+        details = error.errors()
+        message = str(details[0].get("msg", "manifest 结构非法")) if details else "manifest 结构非法"
+        message = message.removeprefix("Value error, ")
+        if "shading_quality 不能重复" in message:
+            code = "DUPLICATE_SHADING_QUALITY"
+        elif "quality_run_index 不能重复" in message:
+            code = "DUPLICATE_QUALITY_RUN_INDEX"
+        else:
+            code = "INVALID_MANIFEST"
+        return JSONResponse(status_code=422, content={
+            "detail": message,
+            "code": code,
+            "message": message,
+            "details": jsonable_encoder(details),
+        })
+    return await request_validation_exception_handler(request, error)
 
 
 def _thumb_relative_path(path: str) -> Path:
@@ -241,13 +297,30 @@ def batch_dto(
     *,
     scene_count: int | None = None,
     has_map_build_data: bool | object = _UNSET,
+    quality_runs: list[QualityRun] | None = None,
+    run_ready_counts: dict[int, int] | None = None,
 ) -> dict:
+    if quality_runs is None:
+        quality_runs = db.scalars(
+            select(QualityRun)
+            .where(QualityRun.batch_id == b.id)
+            .order_by(QualityRun.shading_quality.desc())
+        ).all()
+    if run_ready_counts is None:
+        run_ready_counts = ready_counts(db, [run.id for run in quality_runs])
+    run_items = [
+        quality_run_dto(run, run_ready_counts.get(run.id, 0))
+        for run in quality_runs
+    ]
     if scene_count is None:
-        scene_count = db.scalar(
-            select(func.count(Screenshot.id)).where(Screenshot.batch_id == b.id)
-        ) or 0
+        scene_count = ready_scene_counts_by_batch(db, [b.id]).get(b.id, 0)
     if has_map_build_data is _UNSET:
         has_map_build_data = db.get(MapBuildSnapshot, b.id) is not None
+    qualities = [item["shading_quality"] for item in run_items]
+    available_qualities = [
+        item["shading_quality"] for item in run_items if item["is_complete"]
+    ]
+    single_quality = qualities[0] if len(qualities) == 1 else None
     return {
         "id": b.id,
         "branch_tag": b.branch_tag,
@@ -257,11 +330,17 @@ def batch_dto(
         "creator": b.creator,
         "batch_url": b.batch_url,
         "resolution": b.resolution,
-        "shading_quality": b.shading_quality if b.shading_quality is not None else _DEFAULT_SHADING_QUALITY,
-        "shading_quality_label": shading_quality_label(b.shading_quality),
+        "shading_quality": single_quality,
+        "shading_quality_label": (
+            shading_quality_label(single_quality) if single_quality is not None
+            else "、".join(shading_quality_label(value) for value in qualities)
+        ),
+        "shading_qualities": qualities,
+        "available_shading_qualities": available_qualities,
+        "quality_runs": run_items,
         "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
         "scene_count": scene_count,
-        "has_screenshots": scene_count > 0,
+        "has_screenshots": bool(available_qualities),
         "has_map_build_data": has_map_build_data,
     }
 
@@ -273,6 +352,8 @@ def _versioned_url(path: str, version: str | int | None) -> str:
 
 def _screenshot_url(shot: Screenshot) -> str:
     # 旧库新增列为空时用稳定行 id；新上传使用随机 cache_version，覆盖后必定变化。
+    if not shot.path:
+        raise ValueError(f"截图 {shot.id} 尚未就绪")
     return _versioned_url(shot.path, shot.cache_version or shot.id)
 
 
@@ -294,6 +375,16 @@ def comparison_dto(c: Comparison, db: Session) -> dict:
             ComparisonItem.baseline_shot_id.isnot(None),
         )
     ) or 0
+    current_quality = (
+        c.current_quality_run.shading_quality
+        if c.current_quality_run is not None else
+        (c.batch.shading_quality if c.batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY)
+    )
+    reference_quality = (
+        c.reference_quality_run.shading_quality
+        if c.reference_quality_run is not None else
+        (c.ref_batch.shading_quality if c.ref_batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY)
+    )
     return {
         "id": c.id,
         "batch_id": c.batch_id,
@@ -303,15 +394,16 @@ def comparison_dto(c: Comparison, db: Session) -> dict:
         "platform": c.batch.platform,
         "creator": c.batch.creator,
         "resolution": c.batch.resolution,
-        "shading_quality": c.batch.shading_quality if c.batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY,
-        "shading_quality_label": shading_quality_label(c.batch.shading_quality),
+        "shading_quality": current_quality,
+        "shading_quality_label": shading_quality_label(current_quality),
         "created_at": c.created_at.strftime("%Y-%m-%d %H:%M"),
         "batch_created_at": c.batch.created_at.strftime("%Y-%m-%d %H:%M"),       # 对比批次的创建时间
         # 参照批次:有基线版本则显示版本号,否则显示批次号
         "ref_batch_id": c.ref_batch_id,
         "ref_label": c.baseline.version if c.baseline else f"#{c.ref_batch_id}",
         "ref_p4_version": c.ref_batch.p4_version,
-        "ref_shading_quality_label": shading_quality_label(c.ref_batch.shading_quality),
+        "ref_shading_quality": reference_quality,
+        "ref_shading_quality_label": shading_quality_label(reference_quality),
         "ref_created_at": c.ref_batch.created_at.strftime("%Y-%m-%d %H:%M"),     # 参照批次的创建时间
         "status": c.status,
         "diff_avg": round(c.diff_avg, 2),
@@ -342,6 +434,48 @@ def item_dto(it: ComparisonItem, with_metrics: bool = False) -> dict:
 
 # ---------------------------------------------------------------- 批次(上报 + 查询)
 
+class ScreenshotPlanIn(BaseModel):
+    scene_name: str
+    source_relative_path: str
+    frame_index: int | None = None
+    camera: dict | None = None
+
+    @model_validator(mode="after")
+    def validate_plan(self):
+        if (not self.scene_name or self.scene_name in (".", "..")
+                or "/" in self.scene_name or "\\" in self.scene_name
+                or "\0" in self.scene_name):
+            raise ValueError("非法的 scene_name")
+        path = PurePosixPath(self.source_relative_path)
+        if (not self.source_relative_path or "\\" in self.source_relative_path
+                or path.is_absolute() or any(
+                    part in ("", ".", "..") or ":" in part for part in path.parts
+                )):
+            raise ValueError("source_relative_path 必须是安全相对路径")
+        return self
+
+
+class QualityRunPlanIn(BaseModel):
+    quality_run_index: int
+    shading_quality: int
+    tex_quality: int | None = None
+    capture_status: Literal["complete"] = "complete"
+    screenshots: list[ScreenshotPlanIn]
+
+    @model_validator(mode="after")
+    def validate_run(self):
+        if self.quality_run_index < 0:
+            raise ValueError("quality_run_index 必须为非负整数")
+        if self.shading_quality not in _SHADING_QUALITY_LABELS:
+            raise ValueError("shading_quality 必须在 0..5")
+        if not self.screenshots:
+            raise ValueError("画质运行至少需要一张截图")
+        names = [shot.scene_name for shot in self.screenshots]
+        if len(names) != len(set(names)):
+            raise ValueError("同一画质运行的 scene_name 不能重复")
+        return self
+
+
 class BatchIn(BaseModel):
     id: str | None = None
     scene_id: str
@@ -356,6 +490,9 @@ class BatchIn(BaseModel):
     levelsequence_name: str | None = None
     levelsequence_path: str | None = None
     shading_quality: int | None = None
+    manifest_format_version: int | None = None
+    source_manifest_sha256: str | None = None
+    quality_runs: list[QualityRunPlanIn] | None = None
     captured_at: str | None = None
     overwrite: bool = False        # 同号批次已存在时:True=删旧建新(级联清对比/热力图),False=409
 
@@ -363,6 +500,108 @@ class BatchIn(BaseModel):
     @classmethod
     def validate_branch_tag(cls, value):
         return normalize_branch_tag(value)
+
+    @model_validator(mode="after")
+    def validate_quality_runs(self):
+        if self.shading_quality is not None and self.shading_quality not in _SHADING_QUALITY_LABELS:
+            raise ValueError("shading_quality 必须在 0..5")
+        if self.source_manifest_sha256 is not None and not re.fullmatch(
+            r"[0-9a-fA-F]{64}", self.source_manifest_sha256
+        ):
+            raise ValueError("source_manifest_sha256 必须是 64 位十六进制 SHA-256")
+        if self.quality_runs is not None:
+            qualities = [run.shading_quality for run in self.quality_runs]
+            indexes = [run.quality_run_index for run in self.quality_runs]
+            if len(qualities) != len(set(qualities)):
+                raise ValueError("同一批次的 shading_quality 不能重复")
+            if len(indexes) != len(set(indexes)):
+                raise ValueError("同一批次的 quality_run_index 不能重复")
+            if self.shading_quality is not None:
+                raise ValueError("多画质请求不能同时设置批次级 shading_quality")
+        return self
+
+
+def _apply_batch_date_filters(
+    stmt,
+    created_from: str | None,
+    created_to: str | None,
+    created_dates: list[str] | None,
+):
+    """统一批次目录、截图网格和场景可用性的本地日期筛选语义。"""
+    if created_from:
+        try:
+            stmt = stmt.where(Batch.created_at >= datetime.fromisoformat(created_from))
+        except ValueError:
+            pass
+    if created_to:
+        try:  # 含当天:截止日 +1 天的零点之前
+            stmt = stmt.where(
+                Batch.created_at < datetime.fromisoformat(created_to) + timedelta(days=1)
+            )
+        except ValueError:
+            pass
+    if created_dates:  # 指定多天(跳着选):按本地日期 IN 匹配
+        stmt = stmt.where(func.date(Batch.created_at).in_(created_dates))
+    return stmt
+
+
+@app.get("/api/scene-availability")
+def scene_availability(
+    capability: Literal["batches", "screenshots"],
+    created_from: str | None = None,
+    created_to: str | None = None,
+    created_dates: list[str] | None = Query(None),
+    branch_tag: str = "main",
+    shading_quality: int | None = None,
+    db: Session = Depends(get_db),
+):
+    """返回除场景本身外、匹配当前筛选条件的场景 ID 集合。"""
+    try:
+        branch_tag = normalize_branch_tag(branch_tag)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+    if capability == "batches":
+        stmt = select(Batch.scene_id).where(Batch.branch_tag == branch_tag)
+        if shading_quality is not None:
+            # 批次管理展示已声明画质；上传中的不完整运行也属于匹配批次。
+            stmt = stmt.where(Batch.quality_runs.any(
+                QualityRun.shading_quality == shading_quality
+            ))
+    else:
+        ready = (
+            select(
+                Screenshot.quality_run_id.label("quality_run_id"),
+                func.count(Screenshot.id).label("ready_count"),
+            )
+            .where(Screenshot.upload_status == "ready")
+            .group_by(Screenshot.quality_run_id)
+            .subquery()
+        )
+        ready_count = func.coalesce(ready.c.ready_count, 0)
+        available_run = or_(
+            and_(QualityRun.capture_status == "legacy", ready_count > 0),
+            and_(
+                QualityRun.capture_status == "complete",
+                QualityRun.expected_screenshot_count > 0,
+                ready_count == QualityRun.expected_screenshot_count,
+            ),
+        )
+        stmt = (
+            select(Batch.scene_id)
+            .join(QualityRun, QualityRun.batch_id == Batch.id)
+            .outerjoin(ready, ready.c.quality_run_id == QualityRun.id)
+            .where(Batch.branch_tag == branch_tag, available_run)
+        )
+        if shading_quality is not None:
+            stmt = stmt.where(QualityRun.shading_quality == shading_quality)
+
+    stmt = _apply_batch_date_filters(stmt, created_from, created_to, created_dates)
+    scene_ids = sorted(
+        set(db.scalars(stmt.distinct()).all()),
+        key=lambda scene_id: (scene_id.casefold(), scene_id),
+    )
+    return {"capability": capability, "scene_ids": scene_ids}
 
 
 @app.get("/api/batches")
@@ -395,28 +634,14 @@ def list_batches(
     if platform:
         stmt = stmt.where(Batch.platform == platform)
     if shading_quality is not None:
-        # 旧数据画质为 NULL,展示时按默认「极致」(4);筛选「极致」时一并匹配 NULL
-        if shading_quality == _DEFAULT_SHADING_QUALITY:
-            stmt = stmt.where(or_(Batch.shading_quality == shading_quality,
-                                  Batch.shading_quality.is_(None)))
-        else:
-            stmt = stmt.where(Batch.shading_quality == shading_quality)
+        stmt = stmt.where(Batch.quality_runs.any(
+            QualityRun.shading_quality == shading_quality
+        ))
     if p4_min is not None:
         stmt = stmt.where(Batch.p4_version >= p4_min)
     if p4_max is not None:
         stmt = stmt.where(Batch.p4_version <= p4_max)
-    if created_from:
-        try:
-            stmt = stmt.where(Batch.created_at >= datetime.fromisoformat(created_from))
-        except ValueError:
-            pass
-    if created_to:
-        try:  # 含当天:截止日 +1 天的零点之前
-            stmt = stmt.where(Batch.created_at < datetime.fromisoformat(created_to) + timedelta(days=1))
-        except ValueError:
-            pass
-    if created_dates:  # 指定多天(跳着选):按本地日期 IN 匹配
-        stmt = stmt.where(func.date(Batch.created_at).in_(created_dates))
+    stmt = _apply_batch_date_filters(stmt, created_from, created_to, created_dates)
     if q:
         stmt = stmt.where(Batch.id.contains(q))
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
@@ -424,13 +649,9 @@ def list_batches(
         stmt = stmt.offset((page - 1) * page_size).limit(page_size)
     batches = db.scalars(stmt).all()
     batch_ids = [batch.id for batch in batches]
-    screenshot_counts = dict(
-        db.execute(
-            select(Screenshot.batch_id, func.count(Screenshot.id))
-            .where(Screenshot.batch_id.in_(batch_ids))
-            .group_by(Screenshot.batch_id)
-        ).all()
-    ) if batch_ids else {}
+    grouped_runs, all_ready_counts, scene_counts = runs_with_ready_counts_by_batch(
+        db, batch_ids
+    )
     map_build_batch_ids = set(
         db.scalars(
             select(MapBuildSnapshot.batch_id).where(
@@ -446,8 +667,10 @@ def list_batches(
             batch_dto(
                 batch,
                 db,
-                scene_count=screenshot_counts.get(batch.id, 0),
+                scene_count=scene_counts.get(batch.id, 0),
                 has_map_build_data=batch.id in map_build_batch_ids,
+                quality_runs=grouped_runs.get(batch.id, []),
+                run_ready_counts=all_ready_counts,
             )
             for batch in batches
         ],
@@ -481,38 +704,76 @@ def _next_batch_id(db: Session) -> str:
 
 @app.post("/api/batches", status_code=201)
 def create_batch(body: BatchIn, db: Session = Depends(get_db)):
-    """其他模块上报批次:先建批次,再逐张上传截图。
+    """原子创建批次、画质运行和截图计划；旧单画质请求保持兼容。
 
     未指定 id 时按已有数字批次号自增生成(1、2、3…)。
     """
     with _BATCH_LOCK:
+        overwritten_ids: list[str] = []
+        overwritten_comparison_ids: list[int] = []
+        normalized_platform = normalize_platform(body.platform)
         if body.id:
             batch_id = safe_segment(body.id, "batch id")
             existing = db.get(Batch, batch_id)
             if existing:
                 if existing.branch_tag != body.branch_tag:
-                    raise HTTPException(
-                        409,
+                    raise ApiError(
+                        409, "BATCH_BRANCH_IMMUTABLE",
                         f"batch {batch_id} belongs to branch {existing.branch_tag}; "
                         "branch_tag is immutable",
                     )
+                if (existing.scene_id != body.scene_id
+                        or existing.platform != normalized_platform):
+                    raise ApiError(
+                        409,
+                        "BATCH_SCOPE_IMMUTABLE",
+                        f"batch {batch_id} scope is immutable "
+                        f"(scene_id={existing.scene_id}, platform={existing.platform})",
+                    )
                 if not body.overwrite:
-                    raise HTTPException(409, f"batch {batch_id} already exists")
-                # 覆盖:级联删旧批次(截图/对比/对比项/由其晋升的基线;计算中相关对比会抛 409),再清孤儿文件
-                _cascade_delete_batches(db, [existing])
-                prune_orphans(db)
-                log.info("覆盖批次 #%s", batch_id)
+                    raise ApiError(
+                        409, "BATCH_ALREADY_EXISTS", f"batch {batch_id} already exists"
+                    )
+                overwritten_comparison_ids = list(db.scalars(
+                    select(Comparison.id).where(or_(
+                        Comparison.batch_id == batch_id,
+                        Comparison.ref_batch_id == batch_id,
+                    ))
+                ))
+                # 请求体已经由 Pydantic 完整校验。数据库删除与新计划创建放在同一事务；
+                # 只有提交成功后才清旧文件和内存任务。
+                _cascade_delete_batches(db, [existing], commit=False, cleanup_runtime=False)
+                overwritten_ids.append(batch_id)
         else:
             batch_id = _next_batch_id(db)
+        # v2 可以省略 quality_runs 表示纯烘培/诊断批次，但绝不能因此落入
+        # “上传一张即完整”的 legacy 兼容分支。只有真正的旧协议才创建 legacy。
+        declared_runs = (
+            []
+            if body.manifest_format_version is not None
+            and body.manifest_format_version >= 2
+            and body.quality_runs is None
+            else body.quality_runs
+        )
+        single_quality = (
+            declared_runs[0].shading_quality
+            if declared_runs is not None and len(declared_runs) == 1
+            else body.shading_quality if declared_runs is None else None
+        )
         batch = Batch(
             id=batch_id, branch_tag=body.branch_tag,
             scene_id=body.scene_id, p4_version=body.p4_version,
-            platform=normalize_platform(body.platform), creator=body.creator,
+            platform=normalized_platform, creator=body.creator,
             batch_url=body.batch_url, resolution=body.resolution,
             capture_type=body.capture_type,
             levelsequence_name=body.levelsequence_name,
             levelsequence_path=body.levelsequence_path,
-            shading_quality=body.shading_quality,
+            shading_quality=single_quality,
+            manifest_format_version=body.manifest_format_version,
+            source_manifest_sha256=(
+                body.source_manifest_sha256.lower()
+                if body.source_manifest_sha256 else None
+            ),
         )
         if body.captured_at:
             try:
@@ -520,9 +781,221 @@ def create_batch(body: BatchIn, db: Session = Depends(get_db)):
             except ValueError:
                 pass  # 解析失败则保留默认 now()
         db.add(batch)
-        db.commit()
+        db.flush()
+        if declared_runs is None:
+            # 未升级客户端没有截图计划/finalize；保留“至少上传一张即可使用”的 legacy 语义。
+            db.add(QualityRun(
+                batch_id=batch_id,
+                quality_run_index=0,
+                shading_quality=body.shading_quality
+                if body.shading_quality is not None else _DEFAULT_SHADING_QUALITY,
+                tex_quality=None,
+                capture_status="legacy",
+                expected_screenshot_count=0,
+            ))
+        else:
+            for run_plan in declared_runs:
+                run = QualityRun(
+                    batch_id=batch_id,
+                    quality_run_index=run_plan.quality_run_index,
+                    shading_quality=run_plan.shading_quality,
+                    tex_quality=run_plan.tex_quality,
+                    capture_status=run_plan.capture_status,
+                    expected_screenshot_count=len(run_plan.screenshots),
+                )
+                db.add(run)
+                db.flush()
+                db.add_all([
+                    Screenshot(
+                        batch_id=batch_id,
+                        quality_run_id=run.id,
+                        scene_name=shot.scene_name,
+                        path=None,
+                        source_relative_path=shot.source_relative_path,
+                        upload_status="pending",
+                        frame_index=shot.frame_index,
+                        camera=shot.camera,
+                    )
+                    for shot in run_plan.screenshots
+                ])
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            raise ApiError(
+                409, "BATCH_PLAN_CONFLICT", "批次画质运行或截图计划与现有数据冲突"
+            ) from exc
+        if overwritten_ids:
+            _cleanup_deleted_batch_runtime(overwritten_ids, overwritten_comparison_ids)
+            prune_orphans(db)
+            log.info("覆盖批次 #%s", batch_id)
         log.info("建批次 #%s 场景=%s 平台=%s", batch_id, batch.scene_id, batch.platform)
         return batch_dto(batch, db)
+
+
+_SCREENSHOT_COMMIT_LOCK = threading.Lock()
+_UPLOAD_MAX_BYTES = max(1, int(os.environ.get("PIXELCOMP_MAX_SCREENSHOT_BYTES", 100 * 1024 * 1024)))
+
+
+def _camera_form(value: str | None) -> dict | None:
+    if value is None or value == "":
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(422, "camera 必须是合法 JSON") from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(422, "camera 必须是 JSON object")
+    return parsed
+
+
+def _stream_upload(file: UploadFile, directory: Path, scene_name: str) -> tuple[Path, str, int]:
+    directory.mkdir(parents=True, exist_ok=True)
+    temp = directory / f".{scene_name}.{uuid.uuid4().hex}.upload"
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with temp.open("xb") as output:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > _UPLOAD_MAX_BYTES:
+                    raise ApiError(413, "SCREENSHOT_TOO_LARGE", "截图文件超过大小限制")
+                digest.update(chunk)
+                output.write(chunk)
+        with temp.open("rb") as source:
+            if source.read(8) != b"\x89PNG\r\n\x1a\n":
+                raise ApiError(422, "INVALID_SCREENSHOT", "截图必须是有效 PNG 文件")
+        return temp, digest.hexdigest(), size
+    except Exception:
+        temp.unlink(missing_ok=True)
+        raise
+
+
+def _store_screenshot(
+    *,
+    batch: Batch,
+    run: QualityRun,
+    scene_name: str,
+    file: UploadFile,
+    camera: str | None,
+    frame_index: int | None,
+    db: Session,
+    idempotent_retry: bool = True,
+):
+    scene_name = safe_segment(scene_name, "scene name")
+    cam = _camera_form(camera)
+    quality_path = None if run.capture_status == "legacy" else str(run.shading_quality)
+    out_dir = IMAGES_DIR / "batches" / batch.id
+    if quality_path is not None:
+        out_dir /= quality_path
+    temp, sha256, byte_size = _stream_upload(file, out_dir, scene_name)
+    relative_path = (
+        f"batches/{batch.id}/{scene_name}.png"
+        if quality_path is None
+        else f"batches/{batch.id}/{quality_path}/{scene_name}.png"
+    )
+    final_path = IMAGES_DIR / relative_path
+    try:
+        with _SCREENSHOT_COMMIT_LOCK:
+            db.expire_all()
+            shot = db.scalar(select(Screenshot).where(
+                Screenshot.quality_run_id == run.id,
+                Screenshot.scene_name == scene_name,
+            ))
+            if run.capture_status != "legacy" and shot is None:
+                raise ApiError(
+                    422, "SCREENSHOT_NOT_IN_PLAN",
+                    f"scene {scene_name} 不在已注册截图计划中",
+                )
+            if shot is not None and shot.upload_status == "ready":
+                if idempotent_retry and shot.sha256 and shot.sha256 == sha256:
+                    temp.unlink(missing_ok=True)
+                    return JSONResponse(status_code=200, content={
+                        "id": shot.id,
+                        "scene_name": scene_name,
+                        "shading_quality": run.shading_quality,
+                        "url": _screenshot_url(shot),
+                        "idempotent": True,
+                    })
+                raise ApiError(
+                    409, "SCREENSHOT_CONTENT_CONFLICT",
+                    f"scene {scene_name} 已存在且内容不同",
+                )
+
+            if shot is None:
+                shot = Screenshot(
+                    batch_id=batch.id,
+                    quality_run_id=run.id,
+                    scene_name=scene_name,
+                    upload_status="pending",
+                )
+                db.add(shot)
+                db.flush()
+            elif run.capture_status != "legacy":
+                if frame_index is not None and shot.frame_index != frame_index:
+                    raise ApiError(
+                        409, "SCREENSHOT_METADATA_CONFLICT",
+                        "截图 frame_index 与 manifest 计划不一致",
+                    )
+                if cam is not None and shot.camera != cam:
+                    raise ApiError(
+                        409, "SCREENSHOT_METADATA_CONFLICT",
+                        "截图 camera 与 manifest 计划不一致",
+                    )
+
+            os.replace(temp, final_path)
+            shot.path = relative_path
+            shot.upload_status = "ready"
+            shot.sha256 = sha256
+            shot.byte_size = byte_size
+            shot.cache_version = uuid.uuid4().hex[:16]
+            if run.capture_status == "legacy":
+                shot.frame_index = frame_index
+                shot.camera = cam
+            try:
+                db.commit()
+            except IntegrityError as exc:
+                db.rollback()
+                final_path.unlink(missing_ok=True)
+                raise ApiError(
+                    409, "SCREENSHOT_UPLOAD_CONFLICT",
+                    f"scene {scene_name} 并发上传冲突",
+                ) from exc
+        thumbnail_service.submit(Path(relative_path))
+        log.info(
+            "截图上报成功 batch=%s quality=%s scene=%s bytes=%s sha256=%s",
+            batch.id, run.shading_quality, scene_name, byte_size, sha256[:12],
+        )
+        return {
+            "id": shot.id,
+            "scene_name": scene_name,
+            "shading_quality": run.shading_quality,
+            "url": _screenshot_url(shot),
+            "idempotent": False,
+        }
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+@app.post("/api/batches/{batch_id}/quality-runs/{shading_quality}/screenshots", status_code=201)
+def upload_quality_screenshot(
+    batch_id: str,
+    shading_quality: int,
+    branch_tag: str = Query("main"),
+    scene_name: str = Form(...),
+    file: UploadFile = File(...),
+    camera: str | None = Form(None),
+    frame_index: int | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    batch = require_batch_branch(db, batch_id, branch_tag)
+    run, _ = resolve_quality_run(db, batch_id, shading_quality)
+    if run is None:
+        raise ApiError(404, "QUALITY_RUN_NOT_FOUND", "quality run not found")
+    return _store_screenshot(
+        batch=batch, run=run, scene_name=scene_name, file=file,
+        camera=camera, frame_index=frame_index, db=db, idempotent_retry=True,
+    )
 
 
 @app.post("/api/batches/{batch_id}/screenshots", status_code=201)
@@ -531,90 +1004,64 @@ def upload_screenshot(
     branch_tag: str = Query("main"),
     scene_name: str = Form(...),
     file: UploadFile = File(...),
-    camera: str | None = Form(None),       # JSON 字符串:{location, rotation}
+    camera: str | None = Form(None),
     frame_index: int | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    original_scene_name = scene_name
-    filename = file.filename or ""
-    try:
-        require_batch_branch(db, batch_id, branch_tag)
-    except HTTPException:
-        log.warning(
-            "截图上报失败 batch=%s scene=%s file=%s reason=batch_or_branch_mismatch",
-            batch_id, original_scene_name, filename,
+    """旧单画质上传接口；多画质批次必须使用显式画质路径。"""
+    batch = require_batch_branch(db, batch_id, branch_tag)
+    run, _ = resolve_quality_run(db, batch_id, None, infer_available=False)
+    if run is None:
+        raise ApiError(
+            422, "AMBIGUOUS_QUALITY_RUN",
+            "批次包含多个或没有画质运行，请使用带画质的截图接口",
         )
-        raise
-    try:
-        scene_name = safe_segment(scene_name, "scene name")
-    except HTTPException:
-        log.warning(
-            "截图上报失败 batch=%s scene=%s file=%s reason=invalid_scene_name",
-            batch_id, original_scene_name, filename,
-        )
-        raise
-    exists = db.scalar(
-        select(Screenshot).where(
-            Screenshot.batch_id == batch_id, Screenshot.scene_name == scene_name
-        )
+    return _store_screenshot(
+        batch=batch, run=run, scene_name=scene_name, file=file,
+        camera=camera, frame_index=frame_index, db=db, idempotent_retry=False,
     )
-    if exists:
-        log.info(
-            "截图已存在,跳过 batch=%s scene=%s file=%s",
-            batch_id, scene_name, filename,
-        )
-        raise HTTPException(409, f"scene {scene_name} already uploaded")
-    out_dir = IMAGES_DIR / "batches" / batch_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    path = f"batches/{batch_id}/{scene_name}.png"
-    data = file.file.read()
-    (IMAGES_DIR / path).write_bytes(data)
-    cam = None
-    if camera:
-        try:
-            cam = json.loads(camera)
-        except json.JSONDecodeError:
-            cam = None
-    shot = Screenshot(
-        batch_id=batch_id, scene_name=scene_name, path=path,
-        camera=cam, frame_index=frame_index,
-    )
-    db.add(shot)
-    try:
-        db.commit()
-    except IntegrityError:
-        # 并发同名上传:唯一约束兜底,视为"已存在"
-        db.rollback()
-        log.info("截图并发同名,跳过 batch=%s scene=%s", batch_id, scene_name)
-        raise HTTPException(409, f"scene {scene_name} already uploaded")
-    # 图片和数据库记录都已提交后再异步预热缩略图。这里只入有界队列，
-    # 不等待远程原图读取或 WebP 编码；队列满/服务退出时返回 False 也不影响上传，
-    # 后续 /thumb 首次访问仍会按原有机制回退原图并重试生成。
-    thumbnail_service.submit(Path(path))
-    log.info(
-        "截图上报成功 batch=%s scene=%s file=%s bytes=%s path=%s",
-        batch_id, scene_name, filename, len(data), path,
-    )
-    return {"id": shot.id, "scene_name": scene_name, "url": _screenshot_url(shot)}
 
 
-@app.get("/api/batches/{batch_id}/screenshots")
-def list_screenshots(batch_id: str, db: Session = Depends(get_db)):
-    """列出某批次的全部截图(用于批次预览画廊),按帧序/名称排序。"""
+def _list_run_screenshots(batch_id: str, shading_quality: int | None, db: Session):
     if not db.get(Batch, batch_id):
         raise HTTPException(404, "batch not found")
+    run, count = resolve_quality_run(db, batch_id, shading_quality)
+    if run is None:
+        raise ApiError(422, "AMBIGUOUS_QUALITY_RUN", "无法唯一确定画质运行")
+    if run.capture_status != "legacy" and not is_run_available(run, count):
+        raise ApiError(409, "QUALITY_RUN_INCOMPLETE", "画质运行尚未完整上传")
     shots = db.scalars(
         select(Screenshot)
-        .where(Screenshot.batch_id == batch_id)
+        .where(
+            Screenshot.quality_run_id == run.id,
+            Screenshot.upload_status == "ready",
+        )
         .order_by(Screenshot.frame_index, Screenshot.scene_name)
     ).all()
     return {
         "total": len(shots),
+        "shading_quality": run.shading_quality,
+        "shading_quality_label": shading_quality_label(run.shading_quality),
         "items": [
-            {"scene_name": s.scene_name, "url": _screenshot_url(s), "frame_index": s.frame_index}
-            for s in shots
+            {"scene_name": shot.scene_name, "url": _screenshot_url(shot),
+             "frame_index": shot.frame_index}
+            for shot in shots
         ],
     }
+
+
+@app.get("/api/batches/{batch_id}/quality-runs/{shading_quality}/screenshots")
+def list_quality_screenshots(
+    batch_id: str,
+    shading_quality: int,
+    db: Session = Depends(get_db),
+):
+    return _list_run_screenshots(batch_id, shading_quality, db)
+
+
+@app.get("/api/batches/{batch_id}/screenshots")
+def list_screenshots(batch_id: str, db: Session = Depends(get_db)):
+    return _list_run_screenshots(batch_id, None, db)
 
 
 # ---------------------------------------------------------------- 场景烘培数据
@@ -627,9 +1074,12 @@ def upload_map_build_data(
     branch_tag: str = Query("main"),
     db: Session = Depends(get_db),
 ):
-    """上报批次随附的 map_build_data；重复上报会原子替换同批快照。"""
+    """上报批次随附的 map_build_data；同内容幂等，不同内容要求整批覆盖。"""
     batch = require_batch_branch(db, batch_id, branch_tag)
-    result = store_map_build_snapshot(db, batch, body, format)
+    try:
+        result = store_map_build_snapshot(db, batch, body, format)
+    except SnapshotContentConflict as exc:
+        raise ApiError(409, "MAP_BUILD_CONTENT_CONFLICT", str(exc)) from exc
     log.info(
         "烘培数据上报成功 batch=%s scene=%s registries=%d updated=%s",
         batch_id,
@@ -730,7 +1180,7 @@ def scene_grid(
     scene_id: str,
     branch_tag: str = "main",
     platform: str | None = None,
-    shading_quality: int | None = None,
+    shading_quality: str | None = None,
     p4_min: int | None = None,
     p4_max: int | None = None,
     created_from: str | None = None,
@@ -747,50 +1197,62 @@ def scene_grid(
         branch_tag = normalize_branch_tag(branch_tag)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+    selected_quality: int | None = None
+    if shading_quality not in (None, "", "all"):
+        try:
+            selected_quality = int(shading_quality)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, "shading_quality 必须为 0..5 或 all") from exc
+        if selected_quality not in _SHADING_QUALITY_LABELS:
+            raise HTTPException(422, "shading_quality 必须为 0..5 或 all")
+
     bstmt = select(Batch).where(
         Batch.scene_id == scene_id,
         Batch.branch_tag == branch_tag,
-        Batch.screenshots.any(),
     )
     if platform:
         bstmt = bstmt.where(Batch.platform == platform)
-    if shading_quality is not None:
-        if shading_quality == _DEFAULT_SHADING_QUALITY:
-            bstmt = bstmt.where(or_(Batch.shading_quality == shading_quality,
-                                    Batch.shading_quality.is_(None)))
-        else:
-            bstmt = bstmt.where(Batch.shading_quality == shading_quality)
+    if selected_quality is not None:
+        bstmt = bstmt.where(Batch.quality_runs.any(
+            QualityRun.shading_quality == selected_quality
+        ))
     if p4_min is not None:
         bstmt = bstmt.where(Batch.p4_version >= p4_min)
     if p4_max is not None:
         bstmt = bstmt.where(Batch.p4_version <= p4_max)
-    if created_from:
-        try:
-            bstmt = bstmt.where(Batch.created_at >= datetime.fromisoformat(created_from))
-        except ValueError:
-            pass
-    if created_to:
-        try:
-            bstmt = bstmt.where(Batch.created_at < datetime.fromisoformat(created_to) + timedelta(days=1))
-        except ValueError:
-            pass
-    if created_dates:  # 指定多天(跳着选):按本地日期 IN 匹配
-        bstmt = bstmt.where(func.date(Batch.created_at).in_(created_dates))
+    bstmt = _apply_batch_date_filters(bstmt, created_from, created_to, created_dates)
     if q:
         bstmt = bstmt.where(Batch.id.contains(q))
     # 批次号升序:左旧右新(与列表视图的降序相反),前端进入时默认滚到最右看最新;
     # 按数值排、末尾 id 兜底全序,免疫 --time 撞车。
     batches = db.scalars(bstmt.order_by(
         cast(Batch.id, Integer).asc(), Batch.created_at.asc(), Batch.id.asc())).all()
-    bids = [b.id for b in batches]
+    batch_map = {batch.id: batch for batch in batches}
+    grouped_runs = runs_by_batch(db, list(batch_map))
+    candidate_runs = [
+        run
+        for batch in batches
+        for run in grouped_runs.get(batch.id, [])
+        if selected_quality is None or run.shading_quality == selected_quality
+    ]
+    candidate_counts = ready_counts(db, [run.id for run in candidate_runs])
+    columns = [
+        (batch_map[run.batch_id], run)
+        for run in candidate_runs
+        if is_run_available(run, candidate_counts.get(run.id, 0))
+    ]
     rowmap: dict = {}
-    if bids:
-        for s in db.scalars(select(Screenshot).where(Screenshot.batch_id.in_(bids))):
+    run_ids = [run.id for _, run in columns]
+    if run_ids:
+        for s in db.scalars(select(Screenshot).where(
+            Screenshot.quality_run_id.in_(run_ids),
+            Screenshot.upload_status == "ready",
+        )):
             r = rowmap.setdefault(
                 s.scene_name,
-                {"scene_name": s.scene_name, "frame_index": s.frame_index, "by_batch": {}},
+                {"scene_name": s.scene_name, "frame_index": s.frame_index, "by_run": {}},
             )
-            r["by_batch"][s.batch_id] = _screenshot_url(s)
+            r["by_run"][s.quality_run_id] = _screenshot_url(s)
             if s.frame_index is not None and (r["frame_index"] is None or s.frame_index < r["frame_index"]):
                 r["frame_index"] = s.frame_index
     rows = sorted(
@@ -800,25 +1262,46 @@ def scene_grid(
     return {
         "scene_id": scene_id,
         "branch_tag": branch_tag,
-        "total": len(batches),
+        "total": len(columns),
         "batches": [
-            {"id": b.id, "scene_id": b.scene_id, "branch_tag": b.branch_tag,
-             "p4_version": b.p4_version,
-             "created_at": b.created_at.strftime("%Y-%m-%d %H:%M"),
-             "platform": b.platform,
+            {"id": batch.id,
+             "column_id": f"{batch.id}:{run.shading_quality}",
+             "quality_run_id": run.id,
+             "scene_id": batch.scene_id, "branch_tag": batch.branch_tag,
+             "p4_version": batch.p4_version,
+             "created_at": batch.created_at.strftime("%Y-%m-%d %H:%M"),
+             "platform": batch.platform,
              "has_screenshots": True,
-             "shading_quality_label": shading_quality_label(b.shading_quality)}
-            for b in batches
+             "shading_quality": run.shading_quality,
+             "shading_quality_label": shading_quality_label(run.shading_quality)}
+            for batch, run in columns
         ],
         "rows": [
             {"scene_name": r["scene_name"], "frame_index": r["frame_index"],
-             "cells": [r["by_batch"].get(b.id) for b in batches]}
+             "cells": [r["by_run"].get(run.id) for _, run in columns]}
             for r in rows
         ],
     }
 
 
-def _cascade_delete_batches(db: Session, batches: list[Batch]) -> int:
+def _cleanup_deleted_batch_runtime(bids: list[str], comp_ids: list[int]) -> None:
+    for tid in [
+        task_id for task_id, info in _TASKS.items()
+        if info.get("comparison_id") in comp_ids
+    ]:
+        _TASKS.pop(tid, None)
+    for bid in bids:
+        thumbnail_service.invalidate_prefix(Path("batches") / bid)
+        shutil.rmtree(THUMB_DIR / "batches" / bid, ignore_errors=True)
+
+
+def _cascade_delete_batches(
+    db: Session,
+    batches: list[Batch],
+    *,
+    commit: bool = True,
+    cleanup_runtime: bool = True,
+) -> int:
     """级联删除一组批次:连带它们参与的对比(作 batch/ref)及对比项、由其晋升的基线、截图。
 
     返回删除的对比数;调用方随后用 prune_orphans 清磁盘文件。
@@ -842,15 +1325,14 @@ def _cascade_delete_batches(db: Session, batches: list[Batch]) -> int:
             db.execute(delete(Baseline).where(Baseline.source_batch_id.in_(bids)))
         for b in batches:                          # 删批次(级联截图)
             db.delete(b)
-        db.commit()
-        for tid in [t for t, info in _TASKS.items() if info.get("comparison_id") in comp_ids]:
-            _TASKS.pop(tid, None)
-    # 连带删除这些批次的缩略图缓存(覆盖 overwrite 也走这里,旧缩略图随之清掉)
-    for bid in bids:
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+    if cleanup_runtime:
         # 先使同批次已排队/运行的任务失效。invalidate 与缩略图最终发布共用锁，
-        # 因而 rmtree 之后旧任务不会重新写回；覆盖后同路径新上传会自动合并重跑。
-        thumbnail_service.invalidate_prefix(Path("batches") / bid)
-        shutil.rmtree(THUMB_DIR / "batches" / bid, ignore_errors=True)
+        # 因而 rmtree 之后旧任务不会重新写回。
+        _cleanup_deleted_batch_runtime(bids, comp_ids)
     return len(comp_ids)
 
 
@@ -900,6 +1382,7 @@ def delete_batches_before(created_before: str = Query(...), db: Session = Depend
 class ComparisonIn(BaseModel):
     batch_id: str       # 当前批次
     ref_batch_id: str   # 参照批次
+    shading_quality: int | None = None
     force: bool = False  # 已对比过时是否强制重新计算
 
 
@@ -965,13 +1448,20 @@ def _set_task(task_id, **fields):
         info.update(fields)
 
 
-def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, settings):
+def _run_compare_task(
+    task_id, comparison_id, batch_id, ref_id,
+    current_run_id, reference_run_id, baseline_id, settings, start_gate=None,
+):
     """后台线程:把结果填进已存在的 comparison 行,过程中更新进度。
 
     计算失败(常见于共享盘瞬时 IO 抖动/读原图/写热力图)自动重试至多
     _COMPARE_MAX_ATTEMPTS 次;重试用尽仍失败,则**删除这条空壳对比**(残留热力图
     随后由 prune_orphans 清),避免留下前端"有对比却没图"的残行。
     """
+    # 多画质自动对比会一次登记多条 comparison。先等所有记录提交完成，
+    # 避免首个后台任务抢占 SQLite 写锁，令同一 HTTP 请求的后续建行失败。
+    if start_gate is not None:
+        start_gate.wait()
     db = SessionLocal()
 
     def on_progress(done, total):
@@ -985,8 +1475,15 @@ def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, set
                 comparison = db.get(Comparison, comparison_id)
                 batch = db.get(Batch, batch_id)
                 ref = db.get(Batch, ref_id)
+                current_run = db.get(QualityRun, current_run_id)
+                reference_run = db.get(QualityRun, reference_run_id)
                 baseline = db.get(Baseline, baseline_id) if baseline_id else None
-                run_comparison(db, comparison, batch, ref, baseline, settings, on_progress=on_progress)
+                if current_run is None or reference_run is None:
+                    raise RuntimeError("对比画质运行已不存在")
+                run_comparison(
+                    db, comparison, batch, ref, current_run, reference_run,
+                    baseline, settings, on_progress=on_progress,
+                )
                 db.commit()
                 ok = True
                 _set_task(task_id, status="done", comparison_id=comparison_id, finished_at=time.monotonic())
@@ -1034,8 +1531,11 @@ def _run_compare_task(task_id, comparison_id, batch_id, ref_id, baseline_id, set
         db.close()
 
 
-@app.post("/api/comparisons", status_code=202)
-def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
+def _create_comparison(
+    body: ComparisonIn,
+    db: Session,
+    start_gate: threading.Event | None = None,
+):
     """发起对比:已对比过直接复用(立即返回);否则起后台任务,前端轮询进度。
 
     同一对批次(batch × ref)至多一条对比记录,重算复用同一行(id 不变,
@@ -1046,17 +1546,43 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
     if not batch or not ref:
         raise HTTPException(404, "batch not found")
     if batch.id == ref.id:
-        raise HTTPException(400, "不能与自身对比")
+        raise ApiError(400, "SELF_COMPARISON", "不能与自身对比")
     if batch.branch_tag != ref.branch_tag:
-        raise HTTPException(400, "两个批次的分支不同,无法对比")
+        raise ApiError(400, "CROSS_BRANCH_COMPARISON", "两个批次的分支不同,无法对比")
     if batch.scene_id != ref.scene_id:
-        raise HTTPException(400, "两个批次的场景ID不同,无法对比")
-    if not batch.screenshots or not ref.screenshots:
-        raise HTTPException(400, "两个批次都必须包含截图才能对比")
+        raise ApiError(400, "CROSS_SCENE_COMPARISON", "两个批次的场景ID不同,无法对比")
+    if batch.platform != ref.platform:
+        raise ApiError(400, "CROSS_PLATFORM_COMPARISON", "两个批次的平台不同,无法对比")
+
+    current_run, current_count = resolve_quality_run(db, batch.id, body.shading_quality)
+    reference_run, reference_count = resolve_quality_run(db, ref.id, body.shading_quality)
+    if current_run is None or reference_run is None:
+        if body.shading_quality is None:
+            raise ApiError(
+                422, "SHADING_QUALITY_REQUIRED",
+                "多画质批次对比必须指定 shading_quality",
+            )
+        raise ApiError(
+            409, "QUALITY_RUN_INCOMPLETE",
+            f"画质 {body.shading_quality} 不存在或未完整上传 "
+            f"(current={current_count}, reference={reference_count})",
+        )
+    if not is_run_available(current_run, current_count) or not is_run_available(
+        reference_run, reference_count
+    ):
+        if body.shading_quality is None:
+            raise ApiError(
+                400, "QUALITY_RUN_INCOMPLETE",
+                "两个批次都必须包含完整截图才能对比",
+            )
+        raise ApiError(409, "QUALITY_RUN_INCOMPLETE", "指定画质运行尚未完整上传")
+    if current_run.shading_quality != reference_run.shading_quality:
+        raise ApiError(400, "CROSS_QUALITY_COMPARISON", "禁止跨画质对比")
 
     baseline = db.scalar(
         select(Baseline).where(
-            Baseline.source_batch_id == ref.id, Baseline.status == "active"
+            Baseline.source_quality_run_id == reference_run.id,
+            Baseline.status == "active",
         )
     )
 
@@ -1067,13 +1593,19 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
         existing = db.scalars(
             select(Comparison)
             .where(or_(
-                and_(Comparison.batch_id == batch.id, Comparison.ref_batch_id == ref.id),
-                and_(Comparison.batch_id == ref.id, Comparison.ref_batch_id == batch.id),
+                and_(
+                    Comparison.current_quality_run_id == current_run.id,
+                    Comparison.reference_quality_run_id == reference_run.id,
+                ),
+                and_(
+                    Comparison.current_quality_run_id == reference_run.id,
+                    Comparison.reference_quality_run_id == current_run.id,
+                ),
             ))
             .order_by(Comparison.created_at.desc())
         ).first()
         # flip:库内方向与本次请求相反(请求的 batch 实际是库里的参照)
-        flip = bool(existing) and existing.batch_id != batch.id
+        flip = bool(existing) and existing.current_quality_run_id != current_run.id
 
         if existing:
             # 空行会在后台任务真正完成前就存在。必须先识别运行任务，再判断
@@ -1104,6 +1636,9 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             # 先建空行拿到稳定 id(按请求方向为规范方向)
             comparison = Comparison(
                 batch_id=batch.id, ref_batch_id=ref.id,
+                current_quality_run_id=current_run.id,
+                reference_quality_run_id=reference_run.id,
+                scope_status="valid",
                 baseline_id=baseline.id if baseline else None,
             )
             db.add(comparison)
@@ -1111,13 +1646,17 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
             # 顺带淘汰过期对比(超保留期),返回的 id 供下面清热力图
             evicted = _evict_old_comparisons(db, keep_id=comparison.id)
             comp_batch_id, comp_ref_id, comp_baseline = batch.id, ref.id, baseline
+            comp_current_run_id, comp_reference_run_id = current_run.id, reference_run.id
         else:
             # force 重算:复用该行,按其库内方向重算(基线取库内参照的 active 基线)
             comparison = existing
             comp_batch_id, comp_ref_id = existing.batch_id, existing.ref_batch_id
+            comp_current_run_id = existing.current_quality_run_id
+            comp_reference_run_id = existing.reference_quality_run_id
             comp_baseline = db.scalar(
                 select(Baseline).where(
-                    Baseline.source_batch_id == comp_ref_id, Baseline.status == "active"
+                    Baseline.source_quality_run_id == comp_reference_run_id,
+                    Baseline.status == "active",
                 )
             )
         cid = comparison.id
@@ -1127,25 +1666,66 @@ def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
         _TASKS[task_id] = {"status": "running", "done": 0, "total": 0, "comparison_id": cid, "error": None}
         _RUNNING[cid] = task_id
         log.info("发起对比 #%s: #%s vs #%s%s", cid, comp_batch_id, comp_ref_id, "(强制重算)" if body.force else "")
-        threading.Thread(
-            target=_run_compare_task,
-            args=(task_id, cid, comp_batch_id, comp_ref_id, comp_baseline.id if comp_baseline else None, get_settings(db)),
-            daemon=True,
-        ).start()
+        submitted = comparison_executor.submit(
+            _run_compare_task,
+            task_id, cid, comp_batch_id, comp_ref_id,
+            comp_current_run_id, comp_reference_run_id,
+            comp_baseline.id if comp_baseline else None, get_settings(db), start_gate,
+        )
+        if not submitted:
+            _RUNNING.pop(cid, None)
+            _TASKS.pop(task_id, None)
+            if existing is None:
+                db.delete(comparison)
+                db.commit()
+            raise HTTPException(503, "对比任务队列已满，请稍后重试")
     # 锁外清理被淘汰对比的热力图目录(已无 DB 记录,成孤儿)
     if evicted:
         prune_orphans(db)
     return {"task_id": task_id, "status": "running", "done": 0, "total": 0, "flip": flip}
 
 
+@app.post("/api/comparisons", status_code=202)
+def create_comparison(body: ComparisonIn, db: Session = Depends(get_db)):
+    """发起单个画质对比；后台任务会立即开始。"""
+    return _create_comparison(body, db)
+
+
 @app.get("/api/comparisons/lookup")
-def lookup_comparison(batch_id: str, ref_batch_id: str, db: Session = Depends(get_db)):
+def lookup_comparison(
+    batch_id: str,
+    ref_batch_id: str,
+    shading_quality: int | None = None,
+    db: Session = Depends(get_db),
+):
     """只读:给定一对批次(忽略方向)返回已存在的对比及各检查点热力图;
     不存在则 exists=false,绝不触发计算。供列表图热力图列命中缓存直接展示。"""
+    current_run, _ = resolve_quality_run(
+        db, batch_id, shading_quality, require_available=True
+    )
+    reference_run, _ = resolve_quality_run(
+        db, ref_batch_id, shading_quality, require_available=True
+    )
+    if current_run is None or reference_run is None:
+        if shading_quality is None:
+            raise ApiError(
+                422, "SHADING_QUALITY_REQUIRED",
+                "多画质批次查询对比必须指定 shading_quality",
+            )
+        return {
+            "exists": False, "status": "missing", "ready": False,
+            "task_id": None, "done": 0, "total": 0,
+        }
     existing = db.scalars(
         select(Comparison).where(or_(
-            and_(Comparison.batch_id == batch_id, Comparison.ref_batch_id == ref_batch_id),
-            and_(Comparison.batch_id == ref_batch_id, Comparison.ref_batch_id == batch_id),
+            and_(
+                Comparison.current_quality_run_id == current_run.id,
+                Comparison.reference_quality_run_id == reference_run.id,
+            ),
+            and_(
+                Comparison.current_quality_run_id == reference_run.id,
+                Comparison.reference_quality_run_id == current_run.id,
+            ),
         )).order_by(Comparison.created_at.desc())
     ).first()
     if not existing:
@@ -1201,61 +1781,84 @@ def lookup_comparison(batch_id: str, ref_batch_id: str, db: Session = Depends(ge
 
 @app.post("/api/batches/{batch_id}/auto-compare", status_code=202)
 def auto_compare_batch(batch_id: str, db: Session = Depends(get_db)):
-    """自动对比:在"同场景 + 同平台 + 同画质"里挑一个**更早的版本**作参照并发起对比。
-
-    "更早"优先按 P4 版本号(changelist 单调递增)判断——免疫上报时间相同
-    (如 --time 用了固定值)导致配不上对;P4 相同则回退按上报时间,本批次无
-    P4 版本号时也回退按上报时间。供上报脚本补齐截图后调用,找不到则返回
-    {"matched": false},不报错。(画质为空的旧数据按默认「极致」等价匹配。)
-    """
+    """为批次中的每个完整画质分别选择同画质历史参照并发起对比。"""
     batch = db.get(Batch, batch_id)
     if not batch:
         raise HTTPException(404, "batch not found")
-    if not batch.screenshots:
+    runs = db.scalars(
+        select(QualityRun)
+        .where(QualityRun.batch_id == batch.id)
+        .order_by(QualityRun.shading_quality.desc())
+    ).all()
+    counts = ready_counts(db, [run.id for run in runs])
+    runs = [run for run in runs if is_run_available(run, counts.get(run.id, 0))]
+    if not runs:
         raise HTTPException(400, "当前批次没有截图,无法自动对比")
-    bq = batch.shading_quality if batch.shading_quality is not None else _DEFAULT_SHADING_QUALITY
 
-    # 同场景 + 同平台 + 同画质的候选基底(画质为空按默认等价)
-    base = select(Batch).where(
-        Batch.id != batch.id,
-        Batch.branch_tag == batch.branch_tag,
-        Batch.scene_id == batch.scene_id,
-        Batch.platform == batch.platform,
-        Batch.screenshots.any(),
-    )
-    if bq == _DEFAULT_SHADING_QUALITY:
-        base = base.where(or_(Batch.shading_quality == bq, Batch.shading_quality.is_(None)))
-    else:
-        base = base.where(Batch.shading_quality == bq)
-
-    ref = None
-    if batch.p4_version is not None:
-        # 优先:P4 版本更小(更早的 changelist)中最接近的一个
-        ref = db.scalars(
-            base.where(Batch.p4_version.is_not(None), Batch.p4_version < batch.p4_version)
-                .order_by(Batch.p4_version.desc(), Batch.created_at.desc())
-        ).first()
-        if ref is None:
-            # 同 P4 版本重复上报:回退到同版本里上报时间更早的一条
-            ref = db.scalars(
-                base.where(Batch.p4_version == batch.p4_version,
-                           Batch.created_at < batch.created_at)
+    results = []
+    start_gate = threading.Event()
+    try:
+        for run in runs:
+            base = select(Batch).where(
+                Batch.id != batch.id,
+                Batch.branch_tag == batch.branch_tag,
+                Batch.scene_id == batch.scene_id,
+                Batch.platform == batch.platform,
+                Batch.quality_runs.any(QualityRun.shading_quality == run.shading_quality),
+            )
+            if batch.p4_version is not None:
+                candidates = db.scalars(
+                    base.where(or_(
+                        and_(Batch.p4_version.is_not(None), Batch.p4_version < batch.p4_version),
+                        and_(Batch.p4_version == batch.p4_version,
+                             Batch.created_at < batch.created_at),
+                    )).order_by(Batch.p4_version.desc(), Batch.created_at.desc())
+                ).all()
+            else:
+                candidates = db.scalars(
+                    base.where(Batch.created_at < batch.created_at)
                     .order_by(Batch.created_at.desc())
-            ).first()
-    else:
-        # 本批次未带 P4 版本号:回退按上报时间找更早的
-        ref = db.scalars(
-            base.where(Batch.created_at < batch.created_at)
-                .order_by(Batch.created_at.desc())
-        ).first()
-
-    if ref is None:
-        log.info("自动对比 #%s:无同场景/平台/画质的更早版本,跳过", batch.id)
-        return {"matched": False}
-    log.info("自动对比 #%s -> 参照 #%s(本批 P4=%s,参照 P4=%s)",
-             batch.id, ref.id, batch.p4_version, ref.p4_version)
-    result = create_comparison(ComparisonIn(batch_id=batch.id, ref_batch_id=ref.id), db)
-    return {"matched": True, "ref_batch_id": ref.id, **result}
+                ).all()
+            ref = next((candidate for candidate in candidates if resolve_quality_run(
+                db, candidate.id, run.shading_quality, require_available=True
+            )[0] is not None), None)
+            if ref is None:
+                results.append({"matched": False, "shading_quality": run.shading_quality})
+                continue
+            try:
+                result = _create_comparison(ComparisonIn(
+                    batch_id=batch.id,
+                    ref_batch_id=ref.id,
+                    shading_quality=run.shading_quality,
+                ), db, start_gate)
+            except HTTPException as error:
+                if error.status_code != 503:
+                    raise
+                # 各画质自动对比彼此独立。队列容量不足时必须把该档失败
+                # 明确写进 202 响应，不能令客户端收到整次失败、同时已登记
+                # 的其他档位却在后台继续执行。
+                log.warning(
+                    "自动对比队列已满 batch=%s quality=%s",
+                    batch.id, run.shading_quality,
+                )
+                results.append({
+                    "matched": False,
+                    "shading_quality": run.shading_quality,
+                    "error": "queue_full",
+                })
+                continue
+            results.append({
+                "matched": True,
+                "shading_quality": run.shading_quality,
+                "ref_batch_id": ref.id,
+                **result,
+            })
+    finally:
+        # 成功、异常或队列满都必须放行已经登记的任务，避免工作线程永久等待。
+        start_gate.set()
+    if len(results) == 1:
+        return results[0]
+    return {"matched": any(item["matched"] for item in results), "results": results}
 
 
 @app.get("/api/comparisons/tasks/{task_id}")
@@ -1545,13 +2148,27 @@ def get_meta(db: Session = Depends(get_db)):
         scene_data_flags[branch_tag][scene_id] = {
             "has_screenshots": False,
             "has_map_build_data": False,
+            "screenshot_qualities": [],
         }
-    for branch_tag, scene_id in db.execute(
-        select(Batch.branch_tag, Batch.scene_id)
-        .join(Screenshot, Screenshot.batch_id == Batch.id)
-        .distinct()
-    ):
-        scene_data_flags[branch_tag][scene_id]["has_screenshots"] = True
+    all_runs = db.scalars(select(QualityRun)).all()
+    all_counts = ready_counts(db, [run.id for run in all_runs])
+    batches_by_id = {
+        batch.id: batch for batch in db.scalars(select(Batch)).all()
+    }
+    for run in all_runs:
+        if not is_run_available(run, all_counts.get(run.id, 0)):
+            continue
+        batch = batches_by_id.get(run.batch_id)
+        if batch is None:
+            continue
+        flags = scene_data_flags[batch.branch_tag][batch.scene_id]
+        flags["has_screenshots"] = True
+        flags["screenshot_qualities"].append(run.shading_quality)
+    for branch_flags in scene_data_flags.values():
+        for flags in branch_flags.values():
+            flags["screenshot_qualities"] = sorted(
+                set(flags["screenshot_qualities"]), reverse=True
+            )
     for branch_tag, scene_id in db.execute(
         select(Batch.branch_tag, Batch.scene_id)
         .join(MapBuildSnapshot, MapBuildSnapshot.batch_id == Batch.id)

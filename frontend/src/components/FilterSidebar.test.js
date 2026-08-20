@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { defineComponent, nextTick } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
@@ -9,15 +10,22 @@ import { useProjectStore } from '../stores/projectStore'
 import FilterSidebar from './FilterSidebar.vue'
 
 const SlotStub = defineComponent({ template: '<div><slot/></div>' })
+const ButtonStub = defineComponent({
+  emits: ['click'],
+  template: '<button @click="$emit(\'click\')"><slot/></button>',
+})
 const SelectStub = defineComponent({
   props: ['modelValue'],
   emits: ['update:modelValue', 'change'],
   template: '<div><slot/></div>',
 })
 
+let router
+
 function mountSidebar() {
   return mount(FilterSidebar, {
     global: {
+      plugins: [router],
       stubs: {
         'a-select': SelectStub,
         'a-option': SlotStub,
@@ -25,42 +33,95 @@ function mountSidebar() {
         'a-radio': SlotStub,
         'a-range-picker': SlotStub,
         'a-date-picker': SlotStub,
-        'a-button': SlotStub,
+        'a-button': ButtonStub,
         'a-tag': SlotStub,
       },
     },
   })
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   setActivePinia(createPinia())
+  router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/batches', component: SlotStub }],
+  })
+  await router.push('/batches')
+  await router.isReady()
 })
 
 describe('FilterSidebar scene data availability', () => {
-  it('批次目录只将当前分支完全没有批次的场景置灰，并保持选项可选', async () => {
+  it('批次目录按当前筛选聚合结果置灰，并保持选项可选', async () => {
     const project = useProjectStore()
     const store = useBatchCatalogStore()
     project.meta.scene_ids = ['ShotScene', 'BuildOnlyScene', 'CatalogOnlyScene']
-    project.meta.scene_data_flags = {
-      main: {
-        ShotScene: { has_screenshots: true, has_map_build_data: false },
-        BuildOnlyScene: { has_screenshots: false, has_map_build_data: true },
-      },
-      'engine-ue5': {
-        ShotScene: { has_screenshots: false, has_map_build_data: true },
-        BuildOnlyScene: { has_screenshots: true, has_map_build_data: false },
-      },
-    }
+    store.availableSceneIds = ['ShotScene', 'BuildOnlyScene']
 
     const wrapper = mountSidebar()
     const names = wrapper.findAll('.scene-option-name')
     expect(names.map((name) => name.classes('is-data-empty'))).toEqual([false, false, true])
-    expect(names[2].attributes('title')).toBe('当前分支没有批次数据')
+    expect(names[2].attributes('title')).toBe('当前筛选范围内没有批次数据')
 
-    store.filters.branch_tag = 'engine-ue5'
+    store.availableSceneIds = ['BuildOnlyScene']
     await nextTick()
     expect(wrapper.findAll('.scene-option-name').map(
       (name) => name.classes('is-data-empty'),
-    )).toEqual([false, false, true])
+    )).toEqual([true, false, true])
+  })
+
+  it('切换场景时把当前筛选写入路由且不直接修改 Store', async () => {
+    const store = useBatchCatalogStore()
+    const project = useProjectStore()
+    project.meta.scene_ids = ['SceneA', 'SceneB']
+    store.filters = {
+      branch_tag: 'main',
+      scene_id: 'SceneA',
+      shading_quality: 3,
+      dateMode: 'range',
+      created_from: '2026-08-14',
+      created_to: '2026-08-20',
+      created_dates: [],
+    }
+    const push = vi.spyOn(router, 'push')
+    const wrapper = mountSidebar()
+
+    wrapper.findAllComponents(SelectStub)[1].vm.$emit('change', 'SceneB')
+    await nextTick()
+
+    expect(push).toHaveBeenCalledWith({
+      path: '/batches',
+      query: {
+        branch_tag: 'main',
+        scene_id: 'SceneB',
+        quality: '3',
+        date_mode: 'range',
+        from: '2026-08-14',
+        to: '2026-08-20',
+      },
+    })
+    expect(store.filters.scene_id).toBe('SceneA')
+  })
+
+  it('清空筛选写入 main、全部场景和全部画质', async () => {
+    const store = useBatchCatalogStore()
+    store.filters.branch_tag = 'engine-ue5'
+    store.filters.scene_id = 'SceneA'
+    store.filters.shading_quality = 4
+    const replace = vi.spyOn(router, 'replace')
+    const wrapper = mountSidebar()
+
+    wrapper.findAllComponents(ButtonStub).find(
+      (button) => button.text() === '清空',
+    ).vm.$emit('click')
+    await nextTick()
+
+    expect(replace).toHaveBeenCalledWith(expect.objectContaining({
+      path: '/batches',
+      query: expect.objectContaining({
+        branch_tag: 'main',
+        quality: 'all',
+      }),
+    }))
+    expect(replace.mock.calls[0][0].query).not.toHaveProperty('scene_id')
   })
 })

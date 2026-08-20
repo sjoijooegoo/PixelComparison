@@ -15,7 +15,7 @@ const storeHolder = vi.hoisted(() => ({
     },
     grid: {
       batches: [{
-        id: '1', created_at: '2026-07-14 12:00:00', p4_version: 1,
+        id: '1', column_id: '1:5', shading_quality: 5, created_at: '2026-07-14 12:00:00', p4_version: 1,
         shading_quality_label: '电影', scene_id: 'SceneA',
       }],
       rows: [],
@@ -97,7 +97,7 @@ class ControlledImage {
 function defaultGrid() {
   return {
     batches: [{
-      id: '1', created_at: '2026-07-14 12:00:00', p4_version: 1,
+      id: '1', column_id: '1:5', shading_quality: 5, created_at: '2026-07-14 12:00:00', p4_version: 1,
       shading_quality_label: '电影', scene_id: 'SceneA',
     }],
     rows: [],
@@ -107,7 +107,7 @@ function defaultGrid() {
 function previewGrid() {
   return {
     batches: ['1', '2', '3'].map((id) => ({
-      id, created_at: '2026-07-14 12:00:00', p4_version: 1,
+      id, column_id: `${id}:5`, shading_quality: 5, created_at: '2026-07-14 12:00:00', p4_version: 1,
       shading_quality_label: '电影', scene_id: 'SceneA',
     })),
     rows: [
@@ -210,13 +210,14 @@ describe('BatchGrid comparison feedback', () => {
 
   it('对比在用户切换角色后被取消时不误报完成', async () => {
     const baseline = { ...defaultGrid().batches[0], id: '1' }
-    const current = { ...defaultGrid().batches[0], id: '2' }
+    const current = { ...defaultGrid().batches[0], id: '2', column_id: '2:5' }
     storeMock.grid = { batches: [baseline, current], rows: [] }
     storeMock.baselineBatch = baseline
     storeMock.currentBatch = current
     storeMock.canCompare = true
     storeMock.gridHeatmaps = {
-      baseline_id: '1', current_id: '2', exists: false, ready: false, status: 'missing', map: {},
+      baseline_id: '1', current_id: '2', baseline_column_id: '1:5', current_column_id: '2:5',
+      exists: false, ready: false, status: 'missing', map: {},
     }
     storeMock.runComparison.mockResolvedValue(null)
     mountGrid()
@@ -256,7 +257,7 @@ describe('BatchGrid original image preloading', () => {
     grid.rows[0].cells[1] = ''
     grid.rows[2].cells[1] = '/images/right.png'
     storeMock.grid = grid
-    storeMock.gridCollapsed = new Set(['1'])
+    storeMock.gridCollapsed = new Set(['1:5'])
     mountGrid()
 
     const currentThumb = wrapper.findAll('.thumb').find((node) => node.attributes('src') === '/images/current.png')
@@ -409,6 +410,8 @@ describe('BatchGrid original image preloading', () => {
     storeMock.gridHeatmaps = {
       baseline_id: '1',
       current_id: '2',
+      baseline_column_id: '1:5',
+      current_column_id: '2:5',
       exists: true,
       ready: true,
       status: 'done',

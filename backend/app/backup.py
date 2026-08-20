@@ -155,6 +155,61 @@ def create_daily_backup(
                     _cleanup_temp_files(temp)
 
 
+def create_migration_backup(
+    migration_name: str,
+    db_path: Path = DB_PATH,
+    backup_root: Path = BACKUP_ROOT,
+    now: datetime | None = None,
+) -> Path:
+    """在任何 schema 写入前创建不可覆盖的迁移快照。
+
+    每日备份同一天只保留一份；迁移快照必须带版本和时间，便于失败回滚与审计。
+    """
+    if not re.fullmatch(r"[a-z0-9._-]{1,64}", migration_name):
+        raise ValueError("非法迁移名称")
+    db_path = Path(db_path).resolve()
+    now = now or datetime.now()
+    stamp = now.strftime("%Y%m%dT%H%M%S%f")
+    target = (
+        Path(backup_root).resolve()
+        / f"{now:%Y-%m-%d}"
+        / "db"
+        / f"{db_path.stem}.pre-{migration_name}.{stamp}{db_path.suffix}"
+    )
+
+    with _BACKUP_LOCK:
+        if not db_path.is_file():
+            raise FileNotFoundError(f"数据库不存在: {db_path}")
+        db_dir_resolved = _ensure_backup_target_parent(target, backup_root)
+        temp = target.parent / f".{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        source = destination = None
+        try:
+            if temp.resolve().parent != db_dir_resolved:
+                raise OSError(f"数据库迁移备份临时路径越界: {temp}")
+            source = sqlite3.connect(f"{db_path.as_uri()}?mode=ro", uri=True, timeout=30)
+            destination = sqlite3.connect(temp, timeout=30)
+            source.backup(destination, pages=256, sleep=0.05)
+            _validate_destination(destination)
+            destination.close()
+            destination = None
+            source.close()
+            source = None
+            if target.exists():
+                raise FileExistsError(f"迁移备份目标已存在: {target}")
+            os.replace(temp, target)
+            return target
+        finally:
+            try:
+                if destination is not None:
+                    destination.close()
+            finally:
+                try:
+                    if source is not None:
+                        source.close()
+                finally:
+                    _cleanup_temp_files(temp)
+
+
 _BACKUP_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 

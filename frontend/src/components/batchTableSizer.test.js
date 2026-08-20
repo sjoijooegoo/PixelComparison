@@ -51,7 +51,7 @@ describe('batch table page sizing', () => {
     expect(sizer.observe(wrap)).toBe(true)
     expect(observer.observe).toHaveBeenCalledWith(wrap)
     expect(store.batchPageSize).toBe(19)
-    expect(store.batchPage).toBe(1)
+    expect(store.batchPage).toBe(7)
     expect(store.loadBatches).toHaveBeenCalledTimes(1)
 
     expect(sizer.observe(wrap)).toBe(false)
@@ -61,7 +61,7 @@ describe('batch table page sizing', () => {
     wrap.clientHeight = 636
     resizeCallback()
     expect(store.batchPageSize).toBe(15)
-    expect(store.batchPage).toBe(1)
+    expect(store.batchPage).toBe(7)
     expect(store.loadBatches).toHaveBeenCalledTimes(2)
 
     sizer.observe(null)
@@ -107,7 +107,25 @@ describe('batch table page sizing', () => {
     wrap.clientHeight = 796
     resizeCallback()
     expect(store.batchPageSize).toBe(19)
-    expect(store.batchPage).toBe(1)
+    expect(store.batchPage).toBe(4)
+    expect(store.loadBatches).toHaveBeenCalledTimes(1)
+  })
+
+  it('页大小变化时保留 URL 恢复的页码', () => {
+    const store = {
+      batchPageSize: 10,
+      batchPage: 3,
+      loadBatches: vi.fn().mockResolvedValue(null),
+    }
+    const observer = { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() }
+    const sizer = createBatchTableSizer(store, {
+      createObserver: () => observer,
+    })
+
+    sizer.observe(tableWrap())
+
+    expect(store.batchPageSize).toBe(19)
+    expect(store.batchPage).toBe(3)
     expect(store.loadBatches).toHaveBeenCalledTimes(1)
   })
 })

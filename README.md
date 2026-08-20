@@ -6,7 +6,7 @@ PixelComparison 是面向游戏截图与场景烘培数据的回归平台。采�
 
 ## 主要能力
 
-- 管理批次及其场景、平台、画质、P4 版本、采集时间和截图数据。
+- 管理批次及其场景、平台、多个画质运行、P4 版本、采集时间和截图数据；同一批次可一次上报电影、精美、流畅等多档截图。
 - 在批次管理表格中维护全部批次，并在独立“截图对比”工作区浏览同一场景的多个版本。
 - 任意选择两个同场景批次进行异步比较，并复用已有结果。
 - 输出差异率、SSIM、PSNR、通道差异、RGB 直方图和 WebP 热力图。
@@ -161,6 +161,9 @@ backend/data/
 | `PIXELCOMP_THUMB_DIR` | `<PIXELCOMP_DB_PATH 所在目录>/thumbs` | 可重建的 WebP 缩略图缓存；建议放本地磁盘 |
 | `PIXELCOMP_THUMB_WORKERS` | `2` | 后台生成缩略图的守护线程数，范围 1～8 |
 | `PIXELCOMP_THUMB_QUEUE_SIZE` | `64` | 等待生成的缩略图任务上限；队列满时不阻塞请求 |
+| `PIXELCOMP_MAX_SCREENSHOT_BYTES` | `104857600` | 单张截图上传上限（字节），默认 100 MiB |
+| `PIXELCOMP_COMPARE_WORKERS` | `2` | 后台图片对比工作线程数，范围 1～4 |
+| `PIXELCOMP_COMPARE_WORKERS_QUEUE` | `COMPARE_WORKERS × 8` | 等待执行的对比任务上限，范围为工作线程数～128 |
 | `PIXELCOMP_BACKUP_ENABLED` | `1` | 设为 `0`、`false`、`no` 或 `off` 时禁用自动备份 |
 | `PIXELCOMP_BACKUP_RETENTION_DAYS` | `30` | 数据库备份保留天数；`0` 表示永久保留 |
 | `PIXELCOMP_BACKUP_CHECK_INTERVAL_SECONDS` | `3600` | 自动备份检查间隔，最小 60 秒 |
@@ -204,18 +207,18 @@ backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 
 | 路径 | 功能 |
 |---|---|
-| `/batches` | 筛选、预览和维护全部批次；页面只展示表格 |
+| `/batches?branch_tag=main&quality=all&date_mode=range&from=2026-08-14&to=2026-08-20` | 筛选、预览和维护全部批次；场景可用 `scene_id`、分页可用 `page` 恢复 |
 | `/screenshot?branch_tag=main` | 打开截图对比空工作区，等待选择场景 |
 | `/screenshot/:sceneId?branch_tag=main&quality=4&date_mode=range&from=2026-08-06&to=2026-08-19` | 打开指定场景并恢复画质与日期筛选；可追加 `baseline`、`current` 恢复对比角色 |
 | `/batches/:sceneId` | 兼容旧链接，自动重定向到 `/screenshot/:sceneId` |
 | `/map-build?branch_tag=main` | 所选分支的烘培数据分块网格、选中项细则和按天历史趋势 |
 | `/settings` | 对比算法与默认筛选设置 |
 
-截图对比按照“左旧右新”排列批次。场景、画质和日期筛选会同步到 URL，切换场景以及刷新、复制链接或浏览器前进后退时均可恢复；指定日期使用 `date_mode=days&dates=2026-08-01,2026-08-03`。选择基线和对比批次后，已有结果会直接显示热力图；没有缓存时可在当前工作区发起计算，不会跳页。旧 `/comparison` 地址不再提供历史或详情页面，会返回批次管理；对比记录及热力图仍在后端保留 14 天，重新选择同一批次对即可恢复。
+批次管理的分支、场景、画质、日期和页码会同步到 URL；无参数 `/batches` 默认使用 `main`、全部场景、全部画质和项目默认日期范围。截图对比按照“左旧右新”排列批次，其场景、画质和日期筛选也会同步到 URL；指定日期使用 `date_mode=days&dates=2026-08-01,2026-08-03`。选择基线和对比批次后，已有结果会直接显示热力图；没有缓存时可在当前工作区发起计算，不会跳页。旧 `/comparison` 地址不再提供历史或详情页面，会返回批次管理；对比记录及热力图仍在后端保留 14 天，重新选择同一批次对即可恢复。
 
 ## 比较规则
 
-- 两个批次必须具有相同 `branch_tag`、相同 `scene_id`，并且两侧都包含截图；平台可以不同。
+- 两个批次必须具有相同 `branch_tag`、相同 `scene_id` 和相同 `shading_quality`，且该画质在两侧都已完整上传；平台可以不同。
 - 批次内的 `scene_name` 是检查点唯一键，两个版本按该字段配对。
 - 两侧都有截图时计算像素差异；只有当前侧时为 `added`，只有参照侧时为 `missing`。
 - 任一 `fail` 或 `missing` 使整体状态为失败；否则任一 `warn` 或 `added` 使整体状态为警告；其余为通过。
@@ -240,6 +243,10 @@ backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 1. 前端顶栏“手动上报”，拖入包含 `manifest.json`，以及截图、烘培数据或两者的目录。
 2. 直接调用批次、截图、`map-build-data` 和自动对比 API。
 3. 使用 `mock_uploads/upload.py` 上传仓库内演示数据。
+
+推荐使用 `format_version: 2` 的 manifest：顶层 `quality_runs` 为每个画质声明唯一的 `quality_run_index`、`shading_quality`、仅作采集参数保存的 `tex_quality`、`status: "complete"` 和完整截图计划。后端先在一个事务中创建批次、画质运行与所有待上传槽位，再通过带画质的截图接口写入；截图网格把一个批次的每档完整画质展开成独立列，对比不会跨画质。旧单画质 manifest 和旧截图接口继续兼容。
+
+同名批次默认返回 `409 BATCH_ALREADY_EXISTS`，不会合并或补传；只有显式使用上报脚本的 `--overwrite`（或浏览器勾选“覆盖”）才会整批替换。详细 v2 示例、幂等规则和错误码见[上报接入指南](docs/上报接入指南.md)。
 
 分支写在 manifest 的 `pipeline_data` 中：
 

@@ -3,6 +3,7 @@ import { ref, reactive } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 import { api } from '../api'
 import { readMapBuildArtifact } from '../mapBuildManifest'
+import { qualityLabel } from '../qualityRuns'
 import { p4Label } from '../store'
 
 const props = defineProps({ visible: { type: Boolean, default: false } })
@@ -21,6 +22,7 @@ const manualP4 = ref(null)       // 数据包未带 P4 时,用户手填的版本
 const parsed = reactive({
   body: null,
   shots: [],
+  qualityRuns: [],
   missing: [],
   mapBuildData: null,
   mapBuildFormat: null,
@@ -36,6 +38,7 @@ function reset() {
   autoCompare.value = true
   parsed.body = null
   parsed.shots = []
+  parsed.qualityRuns = []
   parsed.missing = []
   parsed.mapBuildData = null
   parsed.mapBuildFormat = null
@@ -49,6 +52,101 @@ function close() {
   if (stage.value === 'uploading') return   // 上报中不允许关闭
   emit('update:visible', false)
   reset()
+}
+
+function normalizeShot(raw, quality, runLabel) {
+  if (!raw || typeof raw !== 'object' || !raw.name || !raw.image) {
+    throw new Error(`${runLabel} 的截图缺少 name/image`)
+  }
+  const sourcePath = String(raw.image).replace(/\\/g, '/')
+  if (sourcePath.startsWith('/') || sourcePath.split('/').some(
+    (part) => !part || part === '.' || part === '..' || part.includes(':'),
+  )) {
+    throw new Error(`${runLabel} 的截图路径不是安全相对路径: ${sourcePath}`)
+  }
+  return {
+    scene_name: String(raw.name),
+    source_relative_path: sourcePath,
+    frame_index: raw.index ?? null,
+    camera: raw.camera ?? null,
+    shadingQuality: quality,
+  }
+}
+
+function normalizeQualityRuns(manifest) {
+  const ue = manifest.ue_data || {}
+  const rawRuns = manifest.quality_runs
+  if (rawRuns == null) {
+    const rawShots = manifest.screenshots || []
+    if (!Array.isArray(rawShots)) throw new Error('screenshots 必须是数组')
+    if (!rawShots.length) return { plans: [], shots: [] }
+    const quality = ue.shading_quality == null || ue.shading_quality === ''
+      ? 4 : Number(ue.shading_quality)
+    if (!Number.isInteger(quality) || quality < 0 || quality > 5) {
+      throw new Error('shading_quality 必须在 0..5')
+    }
+    const shots = rawShots.map((shot) => normalizeShot(shot, quality, 'legacy'))
+    const names = shots.map((shot) => shot.scene_name)
+    if (new Set(names).size !== names.length) throw new Error(`画质 ${quality} 的截图名称重复`)
+    return {
+      plans: [{
+        quality_run_index: 0,
+        shading_quality: quality,
+        tex_quality: ue.tex_quality ?? null,
+        capture_status: 'complete',
+        screenshots: shots.map(({ shadingQuality: _quality, ...shot }) => shot),
+      }],
+      shots,
+    }
+  }
+  if (!Array.isArray(rawRuns)) throw new Error('quality_runs 必须是数组')
+  const qualities = new Set()
+  const indexes = new Set()
+  const plans = []
+  const shots = []
+  const texLevels = []
+  for (const raw of rawRuns) {
+    if (!raw || typeof raw !== 'object') throw new Error('quality_runs 条目必须是 object')
+    const index = raw.quality_run_index
+    const quality = raw.shading_quality
+    if (!Number.isInteger(index) || index < 0 || indexes.has(index)) {
+      throw new Error('quality_run_index 必须是唯一非负整数')
+    }
+    if (!Number.isInteger(quality) || quality < 0 || quality > 5) {
+      throw new Error('shading_quality 必须在 0..5')
+    }
+    if (qualities.has(quality)) throw new Error('同一批次的 shading_quality 不能重复')
+    if (raw.status !== 'complete') throw new Error(`画质 ${quality} 未完整采集，拒绝上报`)
+    if (!Array.isArray(raw.screenshots) || !raw.screenshots.length) {
+      throw new Error(`画质 ${quality} 没有截图`)
+    }
+    if (raw.screenshot_count !== raw.screenshots.length) {
+      throw new Error(`画质 ${quality} screenshot_count 与数组长度不一致`)
+    }
+    const runShots = raw.screenshots.map(
+      (shot) => normalizeShot(shot, quality, `quality=${quality}`),
+    )
+    const names = runShots.map((shot) => shot.scene_name)
+    if (new Set(names).size !== names.length) throw new Error(`画质 ${quality} 的截图名称重复`)
+    plans.push({
+      quality_run_index: index,
+      shading_quality: quality,
+      tex_quality: raw.tex_quality ?? null,
+      capture_status: 'complete',
+      screenshots: runShots.map(({ shadingQuality: _quality, ...shot }) => shot),
+    })
+    shots.push(...runShots)
+    qualities.add(quality)
+    indexes.add(index)
+    texLevels.push(raw.tex_quality ?? null)
+  }
+  if (rawRuns.length && ue.tex_quality_levels != null) {
+    if (!Array.isArray(ue.tex_quality_levels)
+      || JSON.stringify(ue.tex_quality_levels) !== JSON.stringify(texLevels)) {
+      throw new Error('ue_data.tex_quality_levels 与 quality_runs 顺序不一致')
+    }
+  }
+  return { plans, shots }
 }
 
 // ---- 收集文件夹内全部文件 -> Map<相对路径, File> ----
@@ -110,6 +208,8 @@ async function parsePackage(map) {
     const batchId = pipeline.id ?? pipeline.batch_id
     const p4raw = ue.p4_version
     const p4 = (p4raw === undefined || p4raw === null || p4raw === '') ? null : parseInt(p4raw, 10)
+    const normalized = normalizeQualityRuns(manifest)
+    parsed.qualityRuns = normalized.plans
     parsed.body = {
       id: batchId != null ? String(batchId) : null,
       branch_tag: String(pipeline.branch_tag || 'main').trim().toLowerCase(),
@@ -122,7 +222,8 @@ async function parsePackage(map) {
       capture_type: manifest.capture_type ?? null,
       levelsequence_name: ue.levelsequence_name ?? null,
       levelsequence_path: ue.levelsequence_path ?? null,
-      shading_quality: ue.shading_quality ?? null,
+      manifest_format_version: Number(manifest.format_version || 1),
+      quality_runs: normalized.plans,
       captured_at: pipeline.captured_at ?? null,
     }
     if (!parsed.body.scene_id || !parsed.body.platform) {
@@ -131,11 +232,21 @@ async function parsePackage(map) {
       return
     }
 
-    for (const s of manifest.screenshots || []) {
-      const rel = (s.image || '').replace(/\\/g, '/')
-      const file = map.get(manifestDir + rel)
-      if (file) parsed.shots.push({ name: s.name, file, camera: s.camera, index: s.index })
-      else parsed.missing.push(s.image || s.name)
+    for (const shot of normalized.shots) {
+      const file = map.get(manifestDir + shot.source_relative_path)
+      if (file) parsed.shots.push({
+        name: shot.scene_name,
+        file,
+        camera: shot.camera,
+        index: shot.frame_index,
+        shadingQuality: shot.shadingQuality,
+      })
+      else parsed.missing.push(shot.source_relative_path)
+    }
+    if (parsed.missing.length) {
+      error.value = `数据包缺少 manifest 声明的 ${parsed.missing.length} 张截图，拒绝创建不完整批次`
+      parsed.body = null
+      return
     }
 
     const mapBuild = await readMapBuildArtifact(manifest, map, manifestDir)
@@ -166,16 +277,17 @@ async function parsePackage(map) {
   }
 }
 
-// 点击「开始上报」:ID 已存在则先弹确认,说明会变成补传/合并
+// 点击「开始上报」:同号批次只允许显式整批覆盖，不支持合并/补传。
 function onStart() {
   if (idExists.value) {
-    const content = overwrite.value
-      ? `将删除批次 #${parsed.body.id} 的旧截图与其对比记录(及热力图)并用本次数据重建。是否继续?`
-      : '该批次号已存在,继续不会新建批次,而是把截图补传/合并进已有批次(同名截图会跳过)。是否继续?'
+    if (!overwrite.value) {
+      Message.warning(`批次 #${parsed.body.id} 已存在，请勾选“覆盖同号批次”后再上报`)
+      return
+    }
     Modal.confirm({
       title: `批次 #${parsed.body.id} 已存在`,
-      content,
-      okText: overwrite.value ? '覆盖重建' : '继续上报',
+      content: `将删除批次 #${parsed.body.id} 的旧截图、烘培数据及其对比记录，并用本次数据重建。是否继续?`,
+      okText: '覆盖重建',
       cancelText: '取消',
       onOk: () => startUpload(),
     })
@@ -185,7 +297,7 @@ function onStart() {
 }
 
 // 单张截图上传:最多 3 次机会。网络错误/5xx 视为偶发,重试(退避);
-// 409=已存在按"跳过"原样抛出;其他 4xx 重试无意义,直接抛。
+// 409=同一计划槽位出现不同内容，不能跳过；其他 4xx 同样直接失败。
 async function uploadShot(batchId, s, attempts = 3) {
   for (let i = 1; i <= attempts; i++) {
     const fd = new FormData()
@@ -194,8 +306,9 @@ async function uploadShot(batchId, s, attempts = 3) {
     if (s.index != null) fd.append('frame_index', String(s.index))
     fd.append('file', s.file, s.file.name)
     try {
-      return await api.uploadScreenshot(
+      return await api.uploadQualityScreenshot(
         batchId,
+        s.shadingQuality,
         fd,
         { sceneName: s.name, fileName: s.file.name },
         parsed.body.branch_tag,
@@ -220,15 +333,9 @@ async function startUpload() {
   progress.total = parsed.shots.length + (parsed.mapBuildData ? 1 : 0)
   let batchId = parsed.body.id
   try {
-    try {
-      const created = await api.createBatch(parsed.body)
-      batchId = created.id   // 后端可能自动生成批次号,以返回值为准
-      parsed.body.id = batchId
-    } catch (e) {
-      // 只有预检确认是当前分支中的同号批次，409 才表示可继续补传；
-      // 其他 409 可能是全局同号但分支不同，必须中止，不能误报成功。
-      if (e.status !== 409 || !idExists.value) throw e
-    }
+    const created = await api.createBatch(parsed.body)
+    batchId = created.id   // 后端可能自动生成批次号,以返回值为准
+    parsed.body.id = batchId
 
     let mapBuildFailed = false
     if (parsed.mapBuildData) {
@@ -251,7 +358,8 @@ async function startUpload() {
       try {
         await uploadShot(batchId, s)
       } catch (e) {
-        if (e.status !== 409) { failed++; console.warn('上传失败(已重试 3 次)', s.name, e) }
+        failed++
+        console.warn('上传失败(已重试 3 次)', s.name, e)
       }
       progress.done++
     }
@@ -260,7 +368,11 @@ async function startUpload() {
     if (autoCompare.value && parsed.shots.length && !failed) {
       try {
         const r = await api.autoCompare(batchId)
-        compMsg = r?.matched ? `,已与 #${r.ref_batch_id} 发起对比` : ',无同类历史批次,未对比'
+        const matchedRuns = Array.isArray(r?.results)
+          ? r.results.filter((item) => item.matched) : []
+        if (matchedRuns.length) compMsg = `,已发起 ${matchedRuns.length} 个画质对比`
+        else if (r?.matched) compMsg = `,已与 #${r.ref_batch_id} 发起对比`
+        else compMsg = ',无同类历史批次,未对比'
       } catch { /* 自动对比失败忽略 */ }
     }
 
@@ -324,7 +436,9 @@ async function startUpload() {
       </a-descriptions>
       <div class="count">
         共 <b>{{ parsed.shots.length }}</b> 张截图
-        <span v-if="parsed.missing.length" class="miss">(缺失 {{ parsed.missing.length }} 张,将跳过)</span>
+        <span v-if="parsed.qualityRuns.length">
+          · {{ parsed.qualityRuns.map((run) => qualityLabel(run.shading_quality)).join(' / ') }}
+        </span>
       </div>
       <div v-if="parsed.mapBuildData" class="artifact-ok">
         <span class="artifact-dot"></span>
@@ -334,8 +448,7 @@ async function startUpload() {
         manifest 已声明烘培数据，但未找到 {{ parsed.mapBuildMissing }}，本次将只上报截图。
       </a-alert>
       <a-alert v-if="idExists" type="warning" style="margin-top:12px">
-        批次 <b>#{{ parsed.body.id }}</b> 已存在!默认会把截图补传/合并进该批次(同名截图跳过);
-        勾选下方「覆盖」则删除旧数据后重建。
+        批次 <b>#{{ parsed.body.id }}</b> 已存在，不能合并或补传；勾选下方“覆盖”后才能整批重建。
       </a-alert>
       <a-checkbox v-if="idExists" v-model="overwrite" style="margin-top:10px; display:block; color: rgb(var(--red-6))">
         覆盖同号批次(删除旧截图与其对比/热力图后重建)
@@ -369,7 +482,6 @@ async function startUpload() {
 .drop .big { font-size: 34px; color: var(--color-text-3); line-height: 1; margin-bottom: 8px; }
 .drop .sub { font-size: 12px; color: var(--color-text-3); margin-top: 6px; }
 .count { margin-top: 12px; font-size: 13px; }
-.count .miss { color: rgb(var(--orange-6)); margin-left: 6px; }
 .artifact-ok {
   display: flex; align-items: center; gap: 7px; margin-top: 9px;
   color: var(--color-text-2); font-size: 12px;

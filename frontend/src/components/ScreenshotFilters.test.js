@@ -78,6 +78,23 @@ afterEach(() => {
 })
 
 describe('ScreenshotFilters route state', () => {
+  it('按当前筛选的完整截图聚合结果显示场景灰色状态', async () => {
+    const store = useScreenshotComparisonStore()
+    store.availableSceneIds = ['SceneA']
+    mountFilters()
+
+    const names = wrapper.findAll('.scene-option-name')
+    expect(names.map((name) => name.classes('is-data-empty'))).toEqual([false, true])
+    expect(names[1].attributes('title')).toBe('当前筛选范围内没有完整截图')
+
+    store.availableSceneIds = ['SceneB']
+    await nextTick()
+    expect(wrapper.findAll('.scene-option-name').map(
+      (name) => name.classes('is-data-empty'),
+    )).toEqual([true, false])
+    expect(store.filters.scene_id).toBe('SceneA')
+  })
+
   it('切换场景时把当前画质和日期一起写入新路由', async () => {
     const push = vi.spyOn(router, 'push')
     mountFilters()

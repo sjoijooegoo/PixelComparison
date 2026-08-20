@@ -46,6 +46,19 @@ describe('screenshot route state', () => {
     })
   })
 
+  it('序列化并恢复基线和对比的画质身份', () => {
+    const location = screenshotLocation({
+      branchTag: 'main', sceneId: 'SceneA', shadingQuality: 'all',
+      baselineId: '10', baselineQuality: 5,
+      currentId: '20', currentQuality: 5,
+    })
+    expect(location.query).toMatchObject({
+      baseline: '10', baseline_quality: '5', current: '20', current_quality: '5',
+    })
+    expect(parseScreenshotRoute({ params: { sceneId: 'SceneA' }, query: location.query }))
+      .toMatchObject({ baselineId: '10', baselineQuality: '5', currentId: '20', currentQuality: '5' })
+  })
+
   it('区分旧链接缺省筛选与显式全部画质', () => {
     const oldLink = parseScreenshotRoute({ params: {}, query: {} })
     expect(screenshotRouteKey(oldLink)).not.toBe(screenshotRouteKey({

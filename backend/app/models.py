@@ -25,7 +25,7 @@ def _new_cache_version() -> str:
 
 
 class Batch(Base):
-    """一次截图采集运行:项目 + 分支 + 平台,产出一组截图。"""
+    """一次采集批次；截图按画质运行分组，烘培快照仍属于批次。"""
     __tablename__ = "batches"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)  # 例 20240524_1530
@@ -44,8 +44,13 @@ class Batch(Base):
     levelsequence_name: Mapped[str | None] = mapped_column(String, nullable=True)
     levelsequence_path: Mapped[str | None] = mapped_column(String, nullable=True)
     shading_quality: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 画质档位 0-5,旧数据为空
+    manifest_format_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     screenshots: Mapped[list["Screenshot"]] = relationship(
+        back_populates="batch", cascade="all, delete-orphan"
+    )
+    quality_runs: Mapped[list["QualityRun"]] = relationship(
         back_populates="batch", cascade="all, delete-orphan"
     )
     map_build_snapshot: Mapped[MapBuildSnapshot | None] = relationship(
@@ -53,16 +58,49 @@ class Batch(Base):
     )
 
 
-class Screenshot(Base):
-    """截图只属于批次;基线图即基线批次里的截图。"""
-    __tablename__ = "screenshots"
-    # 同一批次内检查点名唯一:防并发同名上传产生重复行(应用层 409 兜底)
-    __table_args__ = (UniqueConstraint("batch_id", "scene_name", name="uq_screenshot_batch_scene"),)
+class QualityRun(Base):
+    """同一批次内一个唯一 shading_quality 的截图采集运行。"""
+
+    __tablename__ = "quality_runs"
+    __table_args__ = (
+        UniqueConstraint("batch_id", "shading_quality", name="uq_quality_run_batch_quality"),
+        UniqueConstraint("batch_id", "quality_run_index", name="uq_quality_run_batch_index"),
+        Index("ix_quality_runs_quality_batch", "shading_quality", "batch_id"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"), index=True)
+    quality_run_index: Mapped[int] = mapped_column(Integer)
+    shading_quality: Mapped[int] = mapped_column(Integer)
+    tex_quality: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    capture_status: Mapped[str] = mapped_column(String, default="complete")
+    expected_screenshot_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    batch: Mapped[Batch] = relationship(back_populates="quality_runs")
+    screenshots: Mapped[list["Screenshot"]] = relationship(back_populates="quality_run")
+
+
+class Screenshot(Base):
+    """manifest 截图计划；ready 后才具备可读取的原图。"""
+    __tablename__ = "screenshots"
+    __table_args__ = (
+        UniqueConstraint("quality_run_id", "scene_name", name="uq_screenshot_run_scene"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"), index=True)
+    quality_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quality_runs.id"), nullable=True, index=True
+    )
     scene_name: Mapped[str] = mapped_column(String, index=True)
-    path: Mapped[str] = mapped_column(String)  # 相对 IMAGES_DIR
+    path: Mapped[str | None] = mapped_column(String, nullable=True)  # 相对 IMAGES_DIR
+    source_relative_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    upload_status: Mapped[str] = mapped_column(
+        String, default="ready", server_default="ready", index=True
+    )
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    byte_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 图片 URL 的缓存破坏标记。旧库迁移后为空时由接口回退到行 id；新上传使用随机值，
     # 因而覆盖同号批次即使复用了相同路径和 SQLite id，URL 仍会变化。
     cache_version: Mapped[str | None] = mapped_column(
@@ -73,6 +111,7 @@ class Screenshot(Base):
     camera: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     batch: Mapped[Batch] = relationship(back_populates="screenshots")
+    quality_run: Mapped[QualityRun | None] = relationship(back_populates="screenshots")
     # 图片 URL 统一由数据库 cache_version 生成缓存版本；不读取远程文件 mtime。
     # 不在模型上提供裸 /images/<path> 属性, 防覆盖后浏览器/CDN 服务旧图。
 
@@ -164,10 +203,14 @@ class Baseline(Base):
     scene_id: Mapped[str] = mapped_column(String)
     platform: Mapped[str] = mapped_column(String)
     source_batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"))
+    source_quality_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quality_runs.id"), nullable=True
+    )
     status: Mapped[str] = mapped_column(String, default="active")  # active/retired
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
 
     source_batch: Mapped[Batch] = relationship()
+    source_quality_run: Mapped[QualityRun | None] = relationship()
 
 
 class Comparison(Base):
@@ -181,6 +224,15 @@ class Comparison(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"), index=True)
     ref_batch_id: Mapped[str] = mapped_column(ForeignKey("batches.id"), index=True)
+    current_quality_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quality_runs.id"), nullable=True, index=True
+    )
+    reference_quality_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quality_runs.id"), nullable=True, index=True
+    )
+    scope_status: Mapped[str] = mapped_column(
+        String, default="valid", server_default="valid"
+    )
     baseline_id: Mapped[int | None] = mapped_column(
         ForeignKey("baselines.id"), nullable=True
     )
@@ -190,6 +242,12 @@ class Comparison(Base):
 
     batch: Mapped[Batch] = relationship(foreign_keys=[batch_id])
     ref_batch: Mapped[Batch] = relationship(foreign_keys=[ref_batch_id])
+    current_quality_run: Mapped[QualityRun | None] = relationship(
+        foreign_keys=[current_quality_run_id]
+    )
+    reference_quality_run: Mapped[QualityRun | None] = relationship(
+        foreign_keys=[reference_quality_run_id]
+    )
     baseline: Mapped[Baseline | None] = relationship()
     items: Mapped[list["ComparisonItem"]] = relationship(
         back_populates="comparison", cascade="all, delete-orphan"

@@ -79,3 +79,40 @@ def test_auto_compare_treats_null_quality_as_extreme(client, png_bytes):
     r = client.post("/api/batches/newq4/auto-compare")
     assert r.json()["matched"] is True
     assert r.json()["ref_batch_id"] == "legacy"
+
+
+def test_running_comparison_does_not_hold_sqlite_write_lock(
+    client, png_bytes, monkeypatch,
+):
+    """像素计算可以很慢，但期间必须允许新的上报批次建档。"""
+    import threading
+
+    import app.service as service
+
+    compare_started = threading.Event()
+    allow_compare_to_finish = threading.Event()
+
+    def blocked_compare(*_args, **_kwargs):
+        compare_started.set()
+        assert allow_compare_to_finish.wait(timeout=10)
+        return {"diff_pct": 0.0}
+
+    monkeypatch.setattr(service, "compare_images", blocked_compare)
+    _batch(client, "lock-old", "2024-01-01T10:00:00")
+    _batch(client, "lock-new", "2024-02-01T10:00:00")
+    assert _shot(client, "lock-old", png_bytes).status_code == 201
+    assert _shot(client, "lock-new", png_bytes).status_code == 201
+
+    started = client.post("/api/comparisons", json={
+        "batch_id": "lock-new", "ref_batch_id": "lock-old",
+    })
+    assert started.status_code == 202
+    assert compare_started.wait(timeout=2)
+    try:
+        created = client.post("/api/batches", json={
+            "id": "during-compare", "scene_id": "OtherScene",
+            "platform": "Windows", "shading_quality": 4,
+        })
+        assert created.status_code == 201, created.text
+    finally:
+        allow_compare_to_finish.set()

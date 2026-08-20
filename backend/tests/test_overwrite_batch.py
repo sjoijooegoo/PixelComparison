@@ -69,3 +69,24 @@ def test_overwrite_replaces_batch_and_cascades(client, png_bytes):
     assert client.get("/api/comparisons").json()["total"] == 0
     # 热力图目录已清
     assert not heat_dir.exists()
+
+
+def test_overwrite_cannot_change_batch_scene_or_platform(client):
+    assert _batch(client, "scope").status_code == 201
+
+    changed_scene = client.post("/api/batches", json={
+        "id": "scope", "scene_id": "OtherScene", "platform": "Windows",
+        "overwrite": True,
+    })
+    assert changed_scene.status_code == 409
+    assert changed_scene.json()["code"] == "BATCH_SCOPE_IMMUTABLE"
+
+    changed_platform = client.post("/api/batches", json={
+        "id": "scope", "scene_id": "S", "platform": "Android",
+        "overwrite": True,
+    })
+    assert changed_platform.status_code == 409
+    assert changed_platform.json()["code"] == "BATCH_SCOPE_IMMUTABLE"
+
+    detail = client.get("/api/batches/scope").json()
+    assert (detail["scene_id"], detail["platform"]) == ("S", "Windows")

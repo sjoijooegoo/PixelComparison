@@ -92,7 +92,12 @@ def test_exact_batch_returns_capabilities_without_branch_filter(client, png_byte
     response = client.get("/api/batches/engine-exact")
 
     assert response.status_code == 200, response.text
-    assert response.json() == {
+    body = response.json()
+    assert {key: body[key] for key in (
+        "id", "branch_tag", "scene_id", "p4_version", "platform", "creator",
+        "batch_url", "resolution", "shading_quality", "shading_quality_label",
+        "created_at", "scene_count", "has_screenshots", "has_map_build_data",
+    )} == {
         "id": "engine-exact",
         "branch_tag": "engine-ue5",
         "scene_id": "ExactScene",
@@ -108,6 +113,9 @@ def test_exact_batch_returns_capabilities_without_branch_filter(client, png_byte
         "has_screenshots": True,
         "has_map_build_data": False,
     }
+    assert body["shading_qualities"] == [4]
+    assert body["available_shading_qualities"] == [4]
+    assert body["quality_runs"][0]["capture_status"] == "legacy"
     assert client.get("/api/batches/missing-batch").status_code == 404
 
 
@@ -168,14 +176,17 @@ def test_capability_flags_and_grid_only_include_screenshot_batches(client, png_b
     assert flags["ShotScene"] == {
         "has_screenshots": True,
         "has_map_build_data": False,
+        "screenshot_qualities": [4],
     }
     assert flags["BuildScene"] == {
         "has_screenshots": False,
         "has_map_build_data": True,
+        "screenshot_qualities": [],
     }
     assert flags["EmptyScene"] == {
         "has_screenshots": False,
         "has_map_build_data": False,
+        "screenshot_qualities": [],
     }
 
     grid = client.get(

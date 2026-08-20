@@ -14,7 +14,7 @@ from datetime import datetime
 
 from .db import IMAGES_DIR, Base, SessionLocal, engine
 from .imagegen import generate_scene
-from .models import Batch, Screenshot
+from .models import Batch, Comparison, QualityRun, Screenshot
 from .service import promote_baseline, run_comparison
 
 AREAS = ["废弃都市", "工业区", "地下设施", "森林边境"]
@@ -37,15 +37,32 @@ def create_batch(db, batch_id, p4_version, platform, creator, created, scene_spe
     batch = Batch(
         id=batch_id, scene_id="Lv_Starfall", p4_version=p4_version,
         platform=platform, creator=creator,
+        shading_quality=5,
         created_at=datetime.strptime(created, "%Y-%m-%d %H:%M"),
     )
     db.add(batch)
+    db.flush()
+    quality_run = QualityRun(
+        batch_id=batch_id,
+        quality_run_index=0,
+        shading_quality=5,
+        capture_status="complete",
+        expected_screenshot_count=len(scene_specs),
+    )
+    db.add(quality_run)
+    db.flush()
     out_dir = IMAGES_DIR / "batches" / batch_id
     out_dir.mkdir(parents=True, exist_ok=True)
     for name, seed, night, variant in scene_specs:
         path = f"batches/{batch_id}/{name}.png"
         generate_scene(str(IMAGES_DIR / path), seed, night, variant=variant)
-        db.add(Screenshot(batch_id=batch_id, scene_name=name, path=path))
+        db.add(Screenshot(
+            batch_id=batch_id,
+            quality_run_id=quality_run.id,
+            scene_name=name,
+            path=path,
+            upload_status="ready",
+        ))
     db.flush()
     return batch
 
@@ -73,9 +90,9 @@ def seed() -> None:
     bl_win = create_batch(db, "1", 249050, "Windows", "CI机器人", "2024-05-10 09:00", baseline_specs)
     bl_ps5 = create_batch(db, "2", 249055, "iOS", "CI机器人", "2024-05-10 09:30", baseline_specs)
     bl_old = create_batch(db, "3", 248100, "Windows", "CI机器人", "2024-04-26 18:00", baseline_specs)
-    v115_win = promote_baseline(db, bl_win, "v1.1.5")
-    v115_ps5 = promote_baseline(db, bl_ps5, "v1.1.5")
-    v114_win = promote_baseline(db, bl_old, "v1.1.4")
+    v115_win = promote_baseline(db, bl_win, bl_win.quality_runs[0], "v1.1.5")
+    v115_ps5 = promote_baseline(db, bl_ps5, bl_ps5.quality_runs[0], "v1.1.5")
+    v114_win = promote_baseline(db, bl_old, bl_old.quality_runs[0], "v1.1.4")
 
     # ---- 2. 新批次 ----
     print("生成新批次…")
@@ -96,7 +113,20 @@ def seed() -> None:
         (b2, bl_ps5, v115_ps5),
         (b3, bl_old, v114_win),
     ):
-        comparison = run_comparison(db, batch, ref_batch, baseline)
+        current_run = batch.quality_runs[0]
+        reference_run = ref_batch.quality_runs[0]
+        comparison = Comparison(
+            batch_id=batch.id,
+            ref_batch_id=ref_batch.id,
+            current_quality_run_id=current_run.id,
+            reference_quality_run_id=reference_run.id,
+            baseline_id=baseline.id,
+        )
+        db.add(comparison)
+        db.flush()
+        comparison = run_comparison(
+            db, comparison, batch, ref_batch, current_run, reference_run, baseline,
+        )
         comparison.created_at = batch.created_at
         db.flush()  # autoflush 关闭,flush 后 items 惰性加载才可见
         by_status: dict[str, int] = {}

@@ -65,7 +65,7 @@ async function save() {
     await store.saveSettings({ ...form })
     await store.loadMeta()
     sync()
-    Message.success('已保存;算法配置对新对比生效,筛选默认值在下次进入或点「清空」时套用')
+    Message.success('已保存;算法配置对新对比生效,筛选默认值将在相应页面下次进入或点「清空」时套用')
   } catch (e) {
     Message.error(e.message || '保存失败')
   } finally {
@@ -181,7 +181,7 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
             <a-select v-model="form.default_shading_quality" size="large">
               <a-option v-for="o in defaultQualityOptions" :key="o.value" :value="o.value">{{ o.label }}</a-option>
             </a-select>
-            <span class="hint">进入页面或点「清空」时,画质筛选默认选中此项(「全部画质」为不筛选)</span>
+            <span class="hint">进入「截图对比」或在该页点「清空」时默认选中此项；「批次管理」始终默认全部画质</span>
           </div>
           <div class="field">
             <label>默认日期范围(最近 N 天)</label>

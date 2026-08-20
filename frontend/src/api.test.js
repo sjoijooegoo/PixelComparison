@@ -22,6 +22,26 @@ describe('thumbUrl', () => {
 })
 
 describe('api request encoding', () => {
+  it('场景可用性接口保留数组日期和调用方取消信号', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ scene_ids: [] }))
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+
+    await api.sceneAvailability({
+      capability: 'screenshots',
+      branch_tag: 'main',
+      shading_quality: 5,
+      created_dates: ['2026-08-01', '2026-08-03'],
+    }, { signal: controller.signal })
+
+    const requestUrl = new URL(fetchMock.mock.calls[0][0], 'http://pixelcomparison.local')
+    expect(requestUrl.pathname).toBe('/api/scene-availability')
+    expect(requestUrl.searchParams.getAll('created_dates')).toEqual([
+      '2026-08-01', '2026-08-03',
+    ])
+    expect(fetchMock.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('把数组筛选编码为重复查询参数并忽略空值', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ items: [], total: 0 }))
     vi.stubGlobal('fetch', fetchMock)
@@ -96,6 +116,35 @@ describe('api request encoding', () => {
       method: 'POST',
       body: JSON.stringify({ worldAggregate: {} }),
     }))
+  })
+
+  it('把截图写入显式画质接口并保留稳定错误码', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse({ id: 1 }))
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 409,
+        json: vi.fn().mockResolvedValue({
+          detail: 'content differs',
+          code: 'BATCH_ALREADY_EXISTS',
+          message: 'content differs',
+        }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+    const form = new FormData()
+    form.append('scene_name', 'Shot')
+
+    await api.uploadQualityScreenshot('batch 7', 5, form, {}, 'engine-ue5')
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/batches/batch%207/quality-runs/5/screenshots?branch_tag=engine-ue5',
+    )
+
+    const error = await api.createBatch({ id: 'batch 7' }).catch((value) => value)
+    expect(error).toMatchObject({
+      status: 409,
+      code: 'BATCH_ALREADY_EXISTS',
+      message: 'content differs',
+    })
   })
 
   it('接口超过统一时限后中止请求并返回可重试的中文错误', async () => {

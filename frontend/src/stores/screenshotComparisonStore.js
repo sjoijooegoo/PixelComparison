@@ -2,17 +2,18 @@ import { defineStore } from 'pinia'
 
 import { api, isRequestCancelled } from '../api'
 import {
-  SHADING_QUALITY_OPTIONS,
+  cloneRequestParams,
   defaultDateRange,
-  inclusiveDateRangeDays,
   isDateRangeAllowed,
+  normalizeSelectedDates,
+  normalizeShadingQuality,
 } from '../store'
 import { useProjectStore } from './projectStore'
+import { qualityColumnKey, sameQualityColumn } from '../qualityRuns'
 
 const GRID_CACHE_LIMIT = 8
 const gridCache = new Map()
 const runtimes = new WeakMap()
-const shadingQualities = new Set(SHADING_QUALITY_OPTIONS.map((option) => option.value))
 
 function emptyGrid() {
   return { batches: [], rows: [], total: 0 }
@@ -22,6 +23,7 @@ function runtime(store) {
   if (!runtimes.has(store)) {
     runtimes.set(store, {
       route: { sequence: 0, controller: null },
+      availability: { sequence: 0, controller: null, promise: null },
       grid: { sequence: 0, key: '', controller: null, promise: null },
       lookup: { sequence: 0, key: '', controller: null, promise: null },
       creation: { sequence: 0, key: '', controller: null, promise: null },
@@ -40,14 +42,8 @@ function abortChannel(store, channel) {
   state.sequence += 1
 }
 
-function cloneParams(params) {
-  return Object.fromEntries(
-    Object.entries(params).map(([key, value]) => [key, Array.isArray(value) ? [...value] : value]),
-  )
-}
-
 function cacheKey(sceneId, filters) {
-  return JSON.stringify({ scene_id: sceneId, ...cloneParams(filters) })
+  return JSON.stringify({ scene_id: sceneId, ...cloneRequestParams(filters) })
 }
 
 function rememberGrid(key, data) {
@@ -61,27 +57,6 @@ function queryId(value) {
   return selected == null || selected === '' ? '' : String(selected)
 }
 
-function normalizeQuality(value, fallback) {
-  if (value === undefined || value === null) return fallback
-  if (value === '' || String(value).trim().toLowerCase() === 'all') return ''
-  const quality = Number(value)
-  return Number.isInteger(quality) && shadingQualities.has(quality) ? quality : fallback
-}
-
-function validDate(value) {
-  return inclusiveDateRangeDays(value, value) === 1
-}
-
-function normalizeDates(value) {
-  const values = Array.isArray(value) ? value : [value]
-  return [...new Set(
-    values
-      .flatMap((item) => String(item ?? '').split(','))
-      .map((item) => item.trim())
-      .filter(validDate),
-  )].sort()
-}
-
 function routeFilters(project, branchTag, sceneId, requested) {
   const quality = project.settings.default_shading_quality
   const defaults = {
@@ -92,12 +67,15 @@ function routeFilters(project, branchTag, sceneId, requested) {
     ...defaultDateRange(project.settings.default_date_range_days ?? 7),
     created_dates: [],
   }
-  defaults.shading_quality = normalizeQuality(requested.shadingQuality, defaults.shading_quality)
+  defaults.shading_quality = normalizeShadingQuality(
+    requested.shadingQuality,
+    defaults.shading_quality,
+  )
   if (requested.dateMode === 'days') {
     const requestedDates = Array.isArray(requested.createdDates)
       ? requested.createdDates
       : [requested.createdDates].filter((value) => value != null && value !== '')
-    const dates = normalizeDates(requestedDates)
+    const dates = normalizeSelectedDates(requestedDates)
     // `dates=` 是用户尚未选择日期的合法空态；只有实际传入但全部非法时才回退默认范围。
     if (!requestedDates.length || dates.length) {
       defaults.dateMode = 'days'
@@ -113,18 +91,41 @@ function routeFilters(project, branchTag, sceneId, requested) {
   return defaults
 }
 
-function normalizedRoute(filters, baselineId = '', currentId = '') {
+function normalizedRoute(filters, baseline = null, current = null) {
   return {
     branchTag: filters.branch_tag || 'main',
     sceneId: filters.scene_id || '',
-    baselineId,
-    currentId,
+    baselineId: baseline?.id == null ? '' : String(baseline.id),
+    baselineQuality: baseline?.shading_quality ?? '',
+    currentId: current?.id == null ? '' : String(current.id),
+    currentQuality: current?.shading_quality ?? '',
     shadingQuality: filters.shading_quality,
     dateMode: filters.dateMode,
     createdFrom: filters.created_from,
     createdTo: filters.created_to,
     createdDates: [...filters.created_dates],
   }
+}
+
+function routeQuality(value) {
+  if (value === undefined || value === null || value === '') return null
+  const quality = normalizeShadingQuality(value, null)
+  return quality === '' ? null : quality
+}
+
+function findRouteColumn(columns, batchId, requestedQuality) {
+  if (!batchId) return null
+  const candidates = columns.filter((column) => String(column.id) === String(batchId))
+  const quality = routeQuality(requestedQuality)
+  if (quality != null) {
+    return candidates.find((column) => Number(column.shading_quality) === quality) || null
+  }
+  // 旧链接没有角色画质时，只允许对单画质批次做无歧义恢复。
+  return candidates.length === 1 ? candidates[0] : null
+}
+
+function comparisonPairKey(current, baseline) {
+  return `${qualityColumnKey(current)}|${qualityColumnKey(baseline)}`
 }
 
 function wait(ms, signal) {
@@ -154,6 +155,8 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
     gridCollapsed: new Set(),
     gridLoading: false,
     gridError: '',
+    availableSceneIds: null,
+    sceneAvailabilityError: '',
     baselineBatch: null,
     currentBatch: null,
     gridHeatmaps: null,
@@ -177,11 +180,13 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
     canCompare: (state) => Boolean(
       state.currentBatch
       && state.baselineBatch
-      && String(state.currentBatch.id) !== String(state.baselineBatch.id)
+      && !sameQualityColumn(state.currentBatch, state.baselineBatch)
       && state.currentBatch.has_screenshots !== false
       && state.baselineBatch.has_screenshots !== false
       && (state.currentBatch.branch_tag || 'main') === (state.baselineBatch.branch_tag || 'main')
-      && state.currentBatch.scene_id === state.baselineBatch.scene_id,
+      && state.currentBatch.scene_id === state.baselineBatch.scene_id
+      && state.currentBatch.platform === state.baselineBatch.platform
+      && Number(state.currentBatch.shading_quality) === Number(state.baselineBatch.shading_quality)
     ),
   },
 
@@ -199,18 +204,11 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
       }
     },
 
-    async resolveBatch(id, signal) {
-      if (!id) return null
-      try {
-        return await api.batch(id, { signal })
-      } catch (error) {
-        if (error?.status === 404) return null
-        throw error
-      }
-    },
-
     async applyRoute(requested = {}) {
-      const { branchTag = 'main', sceneId = '', baselineId = '', currentId = '' } = requested
+      const {
+        branchTag = 'main', sceneId = '', baselineId = '', baselineQuality = '',
+        currentId = '', currentQuality = '',
+      } = requested
       const project = useProjectStore()
       const state = runtime(this).route
       state.controller?.abort()
@@ -228,42 +226,33 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
       this.currentBatch = null
       this.gridHeatmaps = null
 
+      const availability = this.loadSceneAvailability()
+
       if (!scene) {
         this.grid = emptyGrid()
+        await availability
+        if (!isLatest()) return null
         this.initialized = true
         return normalizedRoute(this.filters)
       }
 
-      const rawBaselineId = queryId(baselineId)
-      const rawCurrentId = queryId(currentId)
-      let [baseline, current] = await Promise.all([
-        this.resolveBatch(rawBaselineId, state.controller.signal),
-        this.resolveBatch(rawCurrentId, state.controller.signal),
-      ])
+      await Promise.all([this.loadGrid(), availability])
       if (!isLatest()) return null
-      const valid = (batch) => Boolean(
-        batch
-        && batch.has_screenshots
-        && (batch.branch_tag || 'main') === branch
-        && batch.scene_id === scene,
+      this.baselineBatch = findRouteColumn(
+        this.grid.batches, queryId(baselineId), baselineQuality,
       )
-      if (!valid(baseline)) baseline = null
-      if (!valid(current)) current = null
-      if (baseline && current && String(baseline.id) === String(current.id)) baseline = null
-
-      await this.loadGrid()
-      if (!isLatest()) return null
-
-      const visible = new Map(this.grid.batches.map((batch) => [String(batch.id), batch]))
-      this.baselineBatch = baseline ? visible.get(String(baseline.id)) || null : null
-      this.currentBatch = current ? visible.get(String(current.id)) || null : null
+      this.currentBatch = findRouteColumn(
+        this.grid.batches, queryId(currentId), currentQuality,
+      )
+      if (sameQualityColumn(this.baselineBatch, this.currentBatch)) this.baselineBatch = null
+      if (this.baselineBatch && this.currentBatch
+        && (Number(this.baselineBatch.shading_quality) !== Number(this.currentBatch.shading_quality)
+          || this.baselineBatch.platform !== this.currentBatch.platform)) {
+        this.currentBatch = null
+      }
       this.initialized = true
       await this.loadGridHeatmaps()
-      return normalizedRoute(
-        this.filters,
-        this.baselineBatch ? String(this.baselineBatch.id) : '',
-        this.currentBatch ? String(this.currentBatch.id) : '',
-      )
+      return normalizedRoute(this.filters, this.baselineBatch, this.currentBatch)
     },
 
     async loadGrid({ force = false } = {}) {
@@ -275,7 +264,7 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
         this._clearRolesOutsideGrid()
         return this.grid
       }
-      const params = cloneParams(this.requestFilters)
+      const params = cloneRequestParams(this.requestFilters)
       const key = cacheKey(sceneId, params)
       const state = runtime(this).grid
       if (!force && state.promise && state.key === key) return await state.promise
@@ -312,8 +301,49 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
       return await operation
     },
 
+    async loadSceneAvailability() {
+      const state = runtime(this).availability
+      state.controller?.abort()
+      const controller = new AbortController()
+      const requestId = ++state.sequence
+      state.controller = controller
+      this.availableSceneIds = null
+      this.sceneAvailabilityError = ''
+      if (this.hasEmptyDateSelection) {
+        this.availableSceneIds = []
+        state.controller = null
+        state.promise = null
+        return { scene_ids: [] }
+      }
+      const filters = cloneRequestParams(this.requestFilters)
+      delete filters.scene_id
+      const operation = (async () => {
+        try {
+          const result = await api.sceneAvailability({
+            capability: 'screenshots',
+            ...filters,
+          }, { signal: controller.signal })
+          if (state.sequence !== requestId) return null
+          this.availableSceneIds = result.scene_ids || []
+          return result
+        } catch (error) {
+          if (isRequestCancelled(error) || state.sequence !== requestId) return null
+          this.availableSceneIds = null
+          this.sceneAvailabilityError = error?.message || '场景可用性加载失败'
+          return null
+        } finally {
+          if (state.sequence === requestId) {
+            state.controller = null
+            state.promise = null
+          }
+        }
+      })()
+      state.promise = operation
+      return await operation
+    },
+
     async applyFilters() {
-      await this.loadGrid()
+      await Promise.all([this.loadGrid(), this.loadSceneAvailability()])
       await this.loadGridHeatmaps()
     },
 
@@ -324,14 +354,17 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
     },
 
     async refresh() {
-      await this.loadGrid({ force: true })
+      await Promise.all([
+        this.loadGrid({ force: true }),
+        this.loadSceneAvailability(),
+      ])
       await this.loadGridHeatmaps()
     },
 
     _clearRolesOutsideGrid() {
-      const visible = new Set(this.grid.batches.map((batch) => String(batch.id)))
-      if (this.baselineBatch && !visible.has(String(this.baselineBatch.id))) this.baselineBatch = null
-      if (this.currentBatch && !visible.has(String(this.currentBatch.id))) this.currentBatch = null
+      const visible = new Set(this.grid.batches.map(qualityColumnKey))
+      if (this.baselineBatch && !visible.has(qualityColumnKey(this.baselineBatch))) this.baselineBatch = null
+      if (this.currentBatch && !visible.has(qualityColumnKey(this.currentBatch))) this.currentBatch = null
     },
 
     setRole(batch, role) {
@@ -339,10 +372,16 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
       if (!batch || batch.has_screenshots === false) return
       abortChannel(this, 'creation')
       if (role === 'baseline') {
-        if (String(this.currentBatch?.id) === String(batch.id)) this.currentBatch = null
+        if (sameQualityColumn(this.currentBatch, batch)) this.currentBatch = null
         this.baselineBatch = batch
+        if (this.currentBatch
+          && (Number(this.currentBatch.shading_quality) !== Number(batch.shading_quality)
+            || this.currentBatch.platform !== batch.platform)) this.currentBatch = null
       } else {
-        if (String(this.baselineBatch?.id) === String(batch.id)) this.baselineBatch = null
+        if (this.baselineBatch
+          && (Number(this.baselineBatch.shading_quality) !== Number(batch.shading_quality)
+            || this.baselineBatch.platform !== batch.platform)) return
+        if (sameQualityColumn(this.baselineBatch, batch)) this.baselineBatch = null
         this.currentBatch = batch
       }
       void this.loadGridHeatmaps()
@@ -358,7 +397,8 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
     async loadGridHeatmaps() {
       const current = this.currentBatch
       const baseline = this.baselineBatch
-      if (!current || !baseline || String(current.id) === String(baseline.id)) {
+      if (!current || !baseline || sameQualityColumn(current, baseline)
+        || Number(current.shading_quality) !== Number(baseline.shading_quality)) {
         abortChannel(this, 'lookup')
         abortChannel(this, 'polling')
         this.gridHeatmaps = null
@@ -367,7 +407,7 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
         this.running = false
         return null
       }
-      const key = `${current.id}|${baseline.id}`
+      const key = comparisonPairKey(current, baseline)
       const state = runtime(this).lookup
       if (state.promise && state.key === key) return await state.promise
       state.controller?.abort()
@@ -381,13 +421,16 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
 
       const operation = (async () => {
         try {
-          const response = await api.comparisonLookup(current.id, baseline.id, {
+          const response = await api.comparisonLookup(
+            current.id, baseline.id, current.shading_quality, {
             signal: controller.signal,
           })
           if (state.sequence !== requestId || !this._isCurrentPair(key)) return null
           this.gridHeatmaps = {
             current_id: current.id,
             baseline_id: baseline.id,
+            current_column_id: qualityColumnKey(current),
+            baseline_column_id: qualityColumnKey(baseline),
             exists: Boolean(response.exists),
             ready: Boolean(response.ready ?? response.exists),
             status: response.status || (response.exists ? 'done' : 'missing'),
@@ -419,7 +462,7 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
     },
 
     _isCurrentPair(key) {
-      return key === `${this.currentBatch?.id || ''}|${this.baselineBatch?.id || ''}`
+      return key === comparisonPairKey(this.currentBatch, this.baselineBatch)
     },
 
     async pollComparison(taskId, pairKey) {
@@ -456,7 +499,7 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
       if (!this.canCompare || this.running) return null
       const current = this.currentBatch
       const baseline = this.baselineBatch
-      const pairKey = `${current.id}|${baseline.id}`
+      const pairKey = comparisonPairKey(current, baseline)
       const state = runtime(this).creation
       state.controller?.abort()
       const controller = new AbortController()
@@ -470,6 +513,7 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
         const response = await api.createComparison({
           batch_id: current.id,
           ref_batch_id: baseline.id,
+          shading_quality: current.shading_quality,
           force,
         }, { signal: controller.signal })
         if (state.sequence !== requestId || !this._isCurrentPair(pairKey)) return null
@@ -480,6 +524,8 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
         this.gridHeatmaps = {
           current_id: current.id,
           baseline_id: baseline.id,
+          current_column_id: qualityColumnKey(current),
+          baseline_column_id: qualityColumnKey(baseline),
           exists: true,
           ready: false,
           status: 'running',
@@ -517,6 +563,7 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
     },
 
     cancelDataRequests() {
+      abortChannel(this, 'availability')
       abortChannel(this, 'grid')
       this.cancelGridHeatmapRequest()
     },

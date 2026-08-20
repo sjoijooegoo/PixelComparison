@@ -8,6 +8,7 @@ const apiMock = vi.hoisted(() => ({
   createBatch: vi.fn(),
   uploadMapBuildData: vi.fn(),
   uploadScreenshot: vi.fn(),
+  uploadQualityScreenshot: vi.fn(),
   autoCompare: vi.fn(),
 }))
 const messageMock = vi.hoisted(() => ({
@@ -72,6 +73,7 @@ describe('ManualUpload', () => {
     apiMock.createBatch.mockResolvedValue({ id: '77' })
     apiMock.uploadMapBuildData.mockResolvedValue({ registry_count: 1 })
     apiMock.uploadScreenshot.mockResolvedValue({ id: 1 })
+    apiMock.uploadQualityScreenshot.mockResolvedValue({ id: 1 })
     apiMock.autoCompare.mockResolvedValue({ matched: false })
   })
 
@@ -120,7 +122,7 @@ describe('ManualUpload', () => {
       'map-build-data/v2',
       'main',
     )
-    expect(apiMock.uploadScreenshot).toHaveBeenCalledTimes(1)
+    expect(apiMock.uploadQualityScreenshot).toHaveBeenCalledTimes(1)
     expect(messageMock.warning).toHaveBeenCalledWith('批次 #77 上报完成，但烘培数据失败')
     expect(wrapper.emitted('done')).toHaveLength(1)
     expect(wrapper.emitted('update:visible')).toContainEqual([false])
@@ -167,6 +169,7 @@ describe('ManualUpload', () => {
       'engine-ue5',
     )
     expect(apiMock.uploadScreenshot).not.toHaveBeenCalled()
+    expect(apiMock.uploadQualityScreenshot).not.toHaveBeenCalled()
     expect(apiMock.autoCompare).not.toHaveBeenCalled()
   })
 
@@ -184,5 +187,103 @@ describe('ManualUpload', () => {
 
     expect(wrapper.text()).toContain('数据包内既没有可上传的截图，也没有烘培数据')
     expect(wrapper.findAll('button').some((button) => button.text() === '开始上报')).toBe(false)
+  })
+
+  it('按 v2 画质运行原子建计划并上传到显式画质接口', async () => {
+    const manifest = {
+      format_version: 2,
+      pipeline_data: { id: 'multi-1', branch_tag: 'main' },
+      ue_data: {
+        world_name: 'Coral_WP', platform: 'WindowsEditor',
+        tex_quality_levels: [0, 2],
+      },
+      quality_runs: [
+        {
+          quality_run_index: 0, shading_quality: 5, tex_quality: 0,
+          status: 'complete', screenshot_count: 1,
+          screenshots: [{ name: 'Shot', image: 'Screenshot/0/Shot.png', index: 0 }],
+        },
+        {
+          quality_run_index: 1, shading_quality: 3, tex_quality: 2,
+          status: 'complete', screenshot_count: 1,
+          screenshots: [{ name: 'Shot', image: 'Screenshot/1/Shot.png', index: 0 }],
+        },
+      ],
+    }
+    const files = [
+      packageFile('manifest.json', JSON.stringify(manifest), 'application/json'),
+      packageFile('Screenshot/0/Shot.png', 'movie', 'image/png'),
+      packageFile('Screenshot/1/Shot.png', 'pretty', 'image/png'),
+    ]
+    const wrapper = mountUpload()
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('电影 / 精美')
+    const start = wrapper.findAll('button').find((button) => button.text() === '开始上报')
+    await start.trigger('click')
+    await flushPromises()
+
+    expect(apiMock.createBatch).toHaveBeenCalledWith(expect.objectContaining({
+      manifest_format_version: 2,
+      quality_runs: [
+        expect.objectContaining({ shading_quality: 5, tex_quality: 0 }),
+        expect.objectContaining({ shading_quality: 3, tex_quality: 2 }),
+      ],
+    }))
+    expect(apiMock.uploadQualityScreenshot).toHaveBeenCalledTimes(2)
+    expect(apiMock.uploadQualityScreenshot.mock.calls.map((call) => call[1])).toEqual([5, 3])
+  })
+
+  it('v2 数据包缺图时在创建批次前失败', async () => {
+    const manifest = {
+      format_version: 2,
+      ue_data: { world_name: 'Coral_WP', platform: 'WindowsEditor' },
+      quality_runs: [{
+        quality_run_index: 0, shading_quality: 5, tex_quality: 0,
+        status: 'complete', screenshot_count: 1,
+        screenshots: [{ name: 'Shot', image: 'Screenshot/0/missing.png', index: 0 }],
+      }],
+    }
+    const files = [packageFile('manifest.json', JSON.stringify(manifest), 'application/json')]
+    const wrapper = mountUpload()
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('拒绝创建不完整批次')
+    expect(apiMock.createBatch).not.toHaveBeenCalled()
+  })
+
+  it('同号批次未勾选覆盖时不会继续补传', async () => {
+    apiMock.batches.mockResolvedValueOnce({ items: [{ id: 'dup' }] })
+    const manifest = {
+      pipeline_data: { id: 'dup', branch_tag: 'main' },
+      ue_data: { world_name: 'Coral_WP', platform: 'WindowsEditor' },
+      artifacts: {
+        map_build_data: { path: 'map.json', format: 'map-build-data/v2' },
+      },
+    }
+    const files = [
+      packageFile('manifest.json', JSON.stringify(manifest), 'application/json'),
+      packageFile('map.json', JSON.stringify({ worldAggregate: {}, registries: [] }), 'application/json'),
+    ]
+    const wrapper = mountUpload()
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: files })
+    await input.trigger('change')
+    await flushPromises()
+
+    const start = wrapper.findAll('button').find((button) => button.text() === '开始上报')
+    await start.trigger('click')
+    await flushPromises()
+
+    expect(messageMock.warning).toHaveBeenCalledWith(
+      '批次 #dup 已存在，请勾选“覆盖同号批次”后再上报',
+    )
+    expect(apiMock.createBatch).not.toHaveBeenCalled()
   })
 })

@@ -5,6 +5,7 @@ import { p4Label } from '../store'
 import { useScreenshotComparisonStore } from '../stores/screenshotComparisonStore'
 import { thumbUrl } from '../api'
 import { splitCheckpointName } from './checkpointName'
+import { qualityColumnKey, sameQualityColumn } from '../qualityRuns'
 
 // 缩略图加载失败时回退原图(只回退一次,防循环)
 function onThumbErr(e, orig) {
@@ -41,7 +42,10 @@ const bothSelected = computed(() =>
 // gridHeatmaps 是否正属于当前这对批次(异步返回期间避免错位)
 const heatForPair = computed(() => {
   const h = store.gridHeatmaps
-  return h && h.current_id === currentBatch.value?.id && h.baseline_id === baselineBatch.value?.id ? h : null
+  return h
+    && h.current_column_id === qualityColumnKey(currentBatch.value)
+    && h.baseline_column_id === qualityColumnKey(baselineBatch.value)
+    ? h : null
 })
 const heatExists = computed(() => !!(heatForPair.value?.exists && heatForPair.value?.ready))
 const heatNoCache = computed(() => heatForPair.value?.status === 'missing')
@@ -96,7 +100,7 @@ function onPanUp() {
 }
 
 // 折叠的批次列(放在 store,按批次 id;跨刷新/改筛选/切场景保留)
-const isCollapsed = (id) => store.gridCollapsed.has(id)
+const isCollapsed = (column) => store.gridCollapsed.has(qualityColumnKey(column))
 const retryGrid = () => store.loadGrid().catch(() => {})
 let columnAnchorRun = 0
 // 折叠时按可视图片区就近选择左右锚点；展开复用同一批次记录，避免方向翻转。
@@ -130,7 +134,8 @@ function keepColumnAnchored(head, side, anchorPosition) {
   })
 }
 
-function toggle(id, event) {
+function toggle(column, event) {
+  const id = qualityColumnKey(column)
   stopAutoPin()
   const head = event?.currentTarget?.closest('.head')
   const s = store.gridCollapsed
@@ -221,7 +226,7 @@ function cellOk(r, c) {
   if (isHeatCol(c)) return heatExists.value && !!previewUrlAt(r, c)
   if (!previewUrlAt(r, c)) return false
   const b = cols.value[c]
-  return !!b && !isCollapsed(b.id)
+  return !!b && !isCollapsed(b)
 }
 
 // 与方向键共用同一寻址规则：跳过空格和折叠列，找到该方向最近的有效图片。
@@ -428,26 +433,43 @@ function onKey(e) {
 }
 
 // 基线/对比批次选择(复用 store,与列表视图同一套状态)
-function roleOf(id) {
-  if (store.currentBatch?.id === id) return 'current'
-  if (store.baselineBatch?.id === id) return 'baseline'
+function roleOf(column) {
+  if (sameQualityColumn(store.currentBatch, column)) return 'current'
+  if (sameQualityColumn(store.baselineBatch, column)) return 'baseline'
   return null
 }
 // 列头单按钮(按全局选择状态决定):未选基线→设为基线;已选基线未选对比→设为对比;
 // 已是基线/对比→再点取消;两者都选→未选列点击重设基线。
-function roleBtnText(id) {
-  const r = roleOf(id)
+function roleBtnText(column) {
+  const r = roleOf(column)
   if (r === 'baseline') return '基线'
   if (r === 'current') return '对比'
   return store.baselineBatch ? '设为对比' : '设为基线'   // 有基线 → 其余列都「设为对比」
 }
-function roleBtnKind(id) {            // 着色:base / cur
-  const r = roleOf(id)
+function roleBtnKind(column) {            // 着色:base / cur
+  const r = roleOf(column)
   if (r) return r === 'baseline' ? 'base' : 'cur'
   return store.baselineBatch ? 'cur' : 'base'
 }
+function roleDisabled(column) {
+  return Boolean(
+    store.baselineBatch
+    && !roleOf(column)
+    && (Number(store.baselineBatch.shading_quality) !== Number(column.shading_quality)
+      || store.baselineBatch.platform !== column.platform)
+  )
+}
+function roleDisabledReason(column) {
+  if (!store.baselineBatch || roleOf(column)) return ''
+  if (Number(store.baselineBatch.shading_quality) !== Number(column.shading_quality)) {
+    return '基线与对比必须使用相同画质'
+  }
+  if (store.baselineBatch.platform !== column.platform) return '基线与对比必须使用相同平台'
+  return ''
+}
 function onRoleBtn(b) {
-  const r = roleOf(b.id)
+  if (roleDisabled(b)) return
+  const r = roleOf(b)
   if (r) return store.clearRole(r)                          // 已选 → 取消
   if (!store.baselineBatch) return store.setRole(b, 'baseline')
   return store.setRole(b, 'current')                        // 有基线 → 设为对比(含替换原对比)
@@ -564,7 +586,7 @@ onUnmounted(() => {
   window.removeEventListener('mouseup', onPanUp, true)
 })
 watch(cols, () => {
-  const visibleIds = new Set(cols.value.map((batch) => batch.id))
+  const visibleIds = new Set(cols.value.map(qualityColumnKey))
   for (const id of columnAnchorSides.keys()) {
     if (!visibleIds.has(id)) columnAnchorSides.delete(id)
   }
@@ -603,7 +625,7 @@ watch(() => [
 }, { deep: true })
 const gridStyle = computed(() => ({
   gridTemplateColumns: `${FIRST_COL}px ` +
-    cols.value.map((b) => (isCollapsed(b.id) ? COLLAPSED_W : colW.value) + 'px').join(' ') +
+    cols.value.map((b) => (isCollapsed(b) ? COLLAPSED_W : colW.value) + 'px').join(' ') +
     ` ${colW.value}px`,   // 末列:差异热力图(吸附右侧)
 }))
 </script>
@@ -629,14 +651,14 @@ const gridStyle = computed(() => ({
           <span class="corner-batch">批次</span>
           <span class="corner-checkpoint">检查点</span>
         </div>
-        <div v-for="b in cols" :key="b.id" class="cell head"
-          :class="{ collapsed: isCollapsed(b.id), 'role-base': roleOf(b.id) === 'baseline', 'role-cur': roleOf(b.id) === 'current' }">
-          <button v-if="isCollapsed(b.id)" class="expand" :title="'展开 #' + b.id" @click="toggle(b.id, $event)">
+        <div v-for="b in cols" :key="qualityColumnKey(b)" class="cell head"
+          :class="{ collapsed: isCollapsed(b), 'role-base': roleOf(b) === 'baseline', 'role-cur': roleOf(b) === 'current' }">
+          <button v-if="isCollapsed(b)" class="expand" :title="'展开 #' + b.id + ' · ' + b.shading_quality_label" @click="toggle(b, $event)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
               stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg>
           </button>
           <template v-else>
-            <button class="collapse-btn" title="折叠此列" @click="toggle(b.id, $event)">
+            <button class="collapse-btn" title="折叠此列" @click="toggle(b, $event)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
                 stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14" /></svg>
             </button>
@@ -647,8 +669,10 @@ const gridStyle = computed(() => ({
               </div>
               <div class="bsub"><span class="mono">#{{ b.id }}</span> · {{ p4Label(b.p4_version) }} · {{ b.shading_quality_label }}</div>
               <div class="roles">
-                <button class="role-btn" :class="[roleBtnKind(b.id), { on: !!roleOf(b.id) }]"
-                  @click="onRoleBtn(b)">{{ roleBtnText(b.id) }}</button>
+                <button class="role-btn" :class="[roleBtnKind(b), { on: !!roleOf(b) }]"
+                  :disabled="roleDisabled(b)"
+                  :title="roleDisabledReason(b)"
+                  @click="onRoleBtn(b)">{{ roleBtnText(b) }}</button>
               </div>
             </div>
           </template>
@@ -699,9 +723,9 @@ const gridStyle = computed(() => ({
             <span v-if="r.checkpointName.index" class="rowhead-index mono">{{ r.checkpointName.index }}</span>
             <span v-else class="rowhead-name">{{ r.checkpointName.name }}</span>
           </div>
-          <div v-for="(url, i) in r.cells" :key="cols[i].id" class="cell imgcell"
-            :class="{ collapsed: isCollapsed(cols[i].id) }">
-            <template v-if="!isCollapsed(cols[i].id)">
+          <div v-for="(url, i) in r.cells" :key="qualityColumnKey(cols[i])" class="cell imgcell"
+            :class="{ collapsed: isCollapsed(cols[i]) }">
+            <template v-if="!isCollapsed(cols[i])">
               <img v-if="url" class="thumb" :src="thumbUrl(url)" :alt="r.scene_name" draggable="false"
                 loading="lazy" decoding="async" :style="{ height: imgH + 'px' }"
                 @error="onThumbErr($event, url)" @click="openPreview(rowIndex, i)" />
@@ -864,6 +888,7 @@ const gridStyle = computed(() => ({
 .role-btn.cur { color: rgb(var(--batch-cur)); }
 .role-btn.base.on { background: rgb(var(--batch-base)); border-color: rgb(var(--batch-base)); color: #fff; }
 .role-btn.cur.on { background: rgb(var(--batch-cur)); border-color: rgb(var(--batch-cur)); color: #fff; }
+.role-btn:disabled { cursor: not-allowed; opacity: .35; color: var(--color-text-4); }
 
 /* contain:折叠动画逐帧改列宽时,把每个图片格的布局/重绘隔离在格内,
    避免重排/重绘扩散到整张矩阵,显著降低折叠时的卡顿 */

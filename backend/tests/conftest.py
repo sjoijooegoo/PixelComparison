@@ -14,6 +14,7 @@ def client(tmp_path, monkeypatch):
     import app.db
     import app.backup
     import app.models
+    import app.quality_runs
     import app.map_build
     import app.service
     import app.settings
@@ -23,6 +24,7 @@ def client(tmp_path, monkeypatch):
     importlib.reload(app.db)
     importlib.reload(app.backup)
     importlib.reload(app.models)
+    importlib.reload(app.quality_runs)
     importlib.reload(app.map_build)
     importlib.reload(app.service)
     importlib.reload(app.settings)

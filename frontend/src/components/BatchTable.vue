@@ -2,10 +2,12 @@
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useRouter } from 'vue-router'
+import { batchLocation, batchStateFromFilters } from '../batchRoute'
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
 import Pager from './Pager.vue'
 import BatchPreview from './BatchPreview.vue'
 import { createBatchTableSizer } from './batchTableSizer'
+import { qualityLabel } from '../qualityRuns'
 
 const store = useBatchCatalogStore()
 const router = useRouter()
@@ -15,8 +17,7 @@ function retryBatches() {
 }
 
 function changePage(page) {
-  store.batchPage = page
-  store.loadBatches().catch(() => {})
+  return router.push(batchLocation(batchStateFromFilters(store.filters, page)))
 }
 
 // 批次图片预览弹窗
@@ -57,7 +58,7 @@ const columns = [
   { title: '分支', dataIndex: 'branch_tag', slotName: 'branch', width: 120 },
   { title: '场景ID', dataIndex: 'scene_id', slotName: 'scene', width: 220, ellipsis: true, tooltip: true },
   { title: '平台', dataIndex: 'platform', slotName: 'platform', width: 100 },
-  { title: '画质', dataIndex: 'shading_quality_label', slotName: 'quality', width: 90 },
+  { title: '画质', dataIndex: 'shading_quality_label', slotName: 'quality', width: 160 },
   { title: 'P4版本', dataIndex: 'p4_version', slotName: 'p4', width: 110 },
   { title: '检查点数', dataIndex: 'scene_count', width: 100 },
   { title: '数据', slotName: 'data', width: 120 },
@@ -71,6 +72,11 @@ const platformColor = (p) => PLATFORM_COLOR[p] || 'gray'
 // 画质档位:高→低对应一条由暖到冷的色带
 const QUALITY_COLOR = { 电影: 'purple', 极致: 'magenta', 精美: 'arcoblue', 均衡: 'cyan', 流畅: 'green', 节能: 'gray' }
 const qualityColor = (q) => QUALITY_COLOR[q] || 'gray'
+const qualityValues = (record) => (
+  Array.isArray(record.shading_qualities) && record.shading_qualities.length
+    ? record.shading_qualities
+    : [record.shading_quality].filter((value) => value != null)
+)
 
 // 批次详情外链:优先用上报带来的真实流水线链接,旧数据回退到占位地址
 const batchLink = (record) => record.batch_url || `https://p4web.example.com/batch/${record.id}`
@@ -137,7 +143,12 @@ async function onDelete(record) {
           <a-tag :color="platformColor(record.platform)" size="small">{{ record.platform }}</a-tag>
         </template>
         <template #quality="{ record }">
-          <a-tag :color="qualityColor(record.shading_quality_label)" size="small">{{ record.shading_quality_label }}</a-tag>
+          <span class="quality-tags">
+            <a-tag v-for="quality in qualityValues(record)" :key="quality"
+              :color="qualityColor(qualityLabel(quality))" size="small">
+              {{ qualityLabel(quality) }}
+            </a-tag>
+          </span>
         </template>
         <template #p4="{ record }">
           <span class="mono">{{ record.p4_version ?? '——' }}</span>
@@ -186,6 +197,7 @@ async function onDelete(record) {
 .batch-link { color: rgb(var(--arcoblue-6)); text-decoration: none; }
 .batch-link:hover { text-decoration: underline; }
 .branch-label { color: var(--color-text-2); font-size: 12px; }
+.quality-tags { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
 
 /* 行内边距适度紧凑,同样高度能多放几行 */
 :deep(.arco-table-td) { padding-top: 4px; padding-bottom: 4px; }

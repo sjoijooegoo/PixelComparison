@@ -5,6 +5,7 @@ const apiMock = vi.hoisted(() => ({
   batch: vi.fn(),
   batches: vi.fn(),
   sceneGrid: vi.fn(),
+  sceneAvailability: vi.fn(),
   comparisonLookup: vi.fn(),
   comparisonTask: vi.fn(),
   createComparison: vi.fn(),
@@ -36,8 +37,10 @@ function deferred() {
 function batch(id, overrides = {}) {
   return {
     id,
+    column_id: `${id}:5`,
     branch_tag: 'main',
     scene_id: 'SceneA',
+    platform: 'Windows',
     shading_quality: 5,
     created_at: '2026-08-01 10:00',
     has_screenshots: true,
@@ -64,6 +67,7 @@ function prepareProject() {
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
+  apiMock.sceneAvailability.mockResolvedValue({ scene_ids: [] })
   apiMock.comparisonLookup.mockResolvedValue({
     exists: false,
     status: 'missing',
@@ -107,7 +111,9 @@ describe('screenshot comparison route hydration', () => {
       branchTag: 'main',
       sceneId: 'SceneA',
       baselineId: '10',
+      baselineQuality: '5',
       currentId: '20',
+      currentQuality: '5',
       shadingQuality: '5',
       dateMode: 'range',
       createdFrom: '2026-08-01',
@@ -130,7 +136,8 @@ describe('screenshot comparison route hydration', () => {
     expect(store.baselineBatch.id).toBe('10')
     expect(store.currentBatch.id).toBe('20')
     expect(normalized).toMatchObject({
-      branchTag: 'main', sceneId: 'SceneA', baselineId: '10', currentId: '20',
+      branchTag: 'main', sceneId: 'SceneA', baselineId: '10', baselineQuality: 5,
+      currentId: '20', currentQuality: 5,
       shadingQuality: 5,
       dateMode: 'range',
       createdFrom: '2026-08-01',
@@ -236,6 +243,53 @@ describe('screenshot comparison route hydration', () => {
 
     expect(normalized.dateMode).toBe('range')
     expect(store.filters.created_dates).toEqual([])
+  })
+})
+
+describe('screenshot scene availability', () => {
+  it('只发送分支、画质和日期，不让当前场景缩窄下拉菜单', async () => {
+    const store = useScreenshotComparisonStore()
+    store.filters = {
+      branch_tag: 'main',
+      scene_id: 'SceneA',
+      shading_quality: 5,
+      dateMode: 'days',
+      created_from: '2026-08-01',
+      created_to: '2026-08-07',
+      created_dates: ['2026-08-01', '2026-08-03'],
+    }
+    apiMock.sceneAvailability.mockResolvedValue({ scene_ids: ['SceneB'] })
+
+    await store.loadSceneAvailability()
+
+    expect(store.availableSceneIds).toEqual(['SceneB'])
+    expect(apiMock.sceneAvailability).toHaveBeenCalledWith({
+      capability: 'screenshots',
+      branch_tag: 'main',
+      shading_quality: 5,
+      created_dates: ['2026-08-01', '2026-08-03'],
+    }, { signal: expect.any(AbortSignal) })
+  })
+
+  it('快速切换画质时取消旧请求且只接受最新响应', async () => {
+    const first = deferred()
+    const second = deferred()
+    apiMock.sceneAvailability
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+    const store = useScreenshotComparisonStore()
+
+    store.filters.shading_quality = 5
+    const oldLoad = store.loadSceneAvailability()
+    store.filters.shading_quality = 3
+    const newLoad = store.loadSceneAvailability()
+    second.resolve({ scene_ids: ['PrettyScene'] })
+    await newLoad
+    first.resolve({ scene_ids: ['MovieScene'] })
+    await oldLoad
+
+    expect(store.availableSceneIds).toEqual(['PrettyScene'])
+    expect(apiMock.sceneAvailability.mock.calls[0][1].signal.aborted).toBe(true)
   })
 })
 
@@ -398,23 +452,86 @@ describe('screenshot comparison request coordination', () => {
     expect(store.gridHeatmaps.map.shot_01).toBe('/images/new.png')
   })
 
-  it('离开页面会使尚未完成的角色元数据恢复失效', async () => {
-    const roleRequest = deferred()
-    apiMock.batch.mockReturnValue(roleRequest.promise)
+  it('离开页面会使尚未完成的角色网格恢复失效', async () => {
+    const gridRequest = deferred()
+    apiMock.sceneGrid.mockReturnValue(gridRequest.promise)
     const store = useScreenshotComparisonStore()
 
     const applying = store.applyRoute({
-      branchTag: 'main', sceneId: 'SceneA', baselineId: '10',
+      branchTag: 'main', sceneId: 'SceneB', baselineId: '10',
+      dateMode: 'days', createdDates: ['2026-07-31'],
     })
     await Promise.resolve()
-    const signal = apiMock.batch.mock.calls[0][1].signal
+    await Promise.resolve()
+    const signal = apiMock.sceneGrid.mock.calls[0][2].signal
 
     store.deactivate()
-    roleRequest.resolve(batch('10'))
+    gridRequest.resolve({ total: 1, batches: [batch('10')], rows: [] })
 
     await expect(applying).resolves.toBeNull()
     expect(signal.aborted).toBe(true)
-    expect(apiMock.sceneGrid).not.toHaveBeenCalled()
+    expect(store.baselineBatch).toBeNull()
+  })
+
+  it('多画质角色用列身份恢复，旧链接在有歧义时不猜测画质', async () => {
+    const movie = batch('10')
+    const high = batch('10', { column_id: '10:3', shading_quality: 3 })
+    const current = batch('20')
+    apiMock.sceneGrid.mockResolvedValue({ total: 3, batches: [movie, high, current], rows: [] })
+    const store = useScreenshotComparisonStore()
+
+    let normalized = await store.applyRoute({
+      branchTag: 'main', sceneId: 'SceneA', baselineId: '10', currentId: '20',
+      currentQuality: '5',
+      dateMode: 'days', createdDates: ['2026-07-30'], shadingQuality: 'all',
+    })
+    expect(store.baselineBatch).toBeNull()
+    expect(normalized.baselineId).toBe('')
+
+    normalized = await store.applyRoute({
+      branchTag: 'main', sceneId: 'SceneA', baselineId: '10', baselineQuality: '5',
+      currentId: '20', currentQuality: '5',
+      dateMode: 'days', createdDates: ['2026-07-30'], shadingQuality: 'all',
+    })
+    expect(store.baselineBatch.column_id).toBe('10:5')
+    expect(normalized.baselineQuality).toBe(5)
+  })
+
+  it('禁止跨画质角色对比并把画质传给 lookup 和创建接口', async () => {
+    const baseline = batch('10')
+    const otherQuality = batch('20', { column_id: '20:3', shading_quality: 3 })
+    const current = batch('30')
+    const store = useScreenshotComparisonStore()
+    store.grid = { total: 3, batches: [baseline, otherQuality, current], rows: [] }
+    store.setRole(baseline, 'baseline')
+    store.setRole(otherQuality, 'current')
+    expect(store.currentBatch).toBeNull()
+    expect(store.canCompare).toBe(false)
+
+    store.setRole(current, 'current')
+    await store.loadGridHeatmaps()
+    expect(apiMock.comparisonLookup).toHaveBeenLastCalledWith(
+      '30', '10', 5, expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+    apiMock.createComparison.mockResolvedValue({ status: 'done' })
+    await store.runComparison()
+    expect(apiMock.createComparison).toHaveBeenCalledWith(
+      expect.objectContaining({ batch_id: '30', ref_batch_id: '10', shading_quality: 5 }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('禁止选择跨平台对比列', () => {
+    const baseline = batch('10', { platform: 'Windows' })
+    const android = batch('20', { platform: 'Android' })
+    const store = useScreenshotComparisonStore()
+    store.grid = { total: 2, batches: [baseline, android], rows: [] }
+
+    store.setRole(baseline, 'baseline')
+    store.setRole(android, 'current')
+
+    expect(store.currentBatch).toBeNull()
+    expect(store.canCompare).toBe(false)
   })
 
   it('离开页面后创建任务的迟到响应不会重启轮询', async () => {

@@ -27,9 +27,8 @@ const dayPickerOpen = ref(false)
 const selectedDateSet = computed(() => new Set(store.filters.created_dates))
 
 function sceneHasScreenshotData(sceneId) {
-  const flags = project.meta.scene_data_flags?.[store.filters.branch_tag]
-  if (!flags) return null
-  return flags[sceneId]?.has_screenshots === true
+  if (store.availableSceneIds === null) return null
+  return store.availableSceneIds.includes(sceneId)
 }
 
 function dateToYmd(date) {
@@ -123,7 +122,7 @@ function reset() {
           <span class="scene-option">
             <span class="scene-option-name"
               :class="{ 'is-data-empty': sceneHasScreenshotData(scene) === false }"
-              :title="sceneHasScreenshotData(scene) === false ? '当前分支没有截图数据' : undefined">
+              :title="sceneHasScreenshotData(scene) === false ? '当前筛选范围内没有完整截图' : undefined">
               {{ scene }}
             </span>
             <span v-if="unlistedSceneIds.has(scene)" class="unlisted">未配置</span>

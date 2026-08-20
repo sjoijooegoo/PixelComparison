@@ -1,6 +1,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import { useRouter } from 'vue-router'
+import { batchLocation, batchStateFromFilters } from '../batchRoute'
 import {
   MAX_DATE_RANGE_DAYS,
   defaultDateRange,
@@ -12,18 +14,15 @@ import { useProjectStore } from '../stores/projectStore'
 
 const store = useBatchCatalogStore()
 const project = useProjectStore()
+const router = useRouter()
 
 // 画质下拉选项:跟随项目设置「筛选框显示的画质」
 const qualityOptions = computed(() => visibleQualityOptions(project.settings))
 const unlistedSceneIds = computed(() => new Set(project.meta.unlisted_scene_ids || []))
 
 function sceneHasBatchData(sceneId) {
-  const flagsByBranch = project.meta.scene_data_flags
-  const branchTag = store.filters.branch_tag || 'main'
-  if (!flagsByBranch || !Object.prototype.hasOwnProperty.call(flagsByBranch, branchTag)) {
-    return null
-  }
-  return Object.prototype.hasOwnProperty.call(flagsByBranch[branchTag] || {}, sceneId)
+  if (store.availableSceneIds === null) return null
+  return store.availableSceneIds.includes(sceneId)
 }
 
 // 创建时间范围:绑定到 filters.created_from/created_to(YYYY-MM-DD)
@@ -47,21 +46,27 @@ function isDaySelected(date) {
   return selectedDateSet.value.has(dateToYmd(date))
 }
 
-// 任意筛选项变更即自动应用(静默)
-async function applyNow() {
-  try {
-    await store.applyFilters()
-  } catch (error) {
-    Message.error(error?.message || '筛选数据加载失败，请重试')
-  }
+function contextTarget(overrides = {}, page = 1) {
+  return batchLocation(batchStateFromFilters({
+    ...store.filters,
+    ...overrides,
+  }, page))
 }
 
-async function onBranchChange(value) {
-  try {
-    await store.changeBranch(value)
-  } catch (error) {
-    Message.error(error?.message || '分支数据加载失败，请重试')
-  }
+function onBranchChange(branchTag) {
+  return router.push(contextTarget({ branch_tag: branchTag || 'main' }))
+}
+
+function onSceneChange(sceneId) {
+  return router.push(contextTarget({ scene_id: sceneId || '' }))
+}
+
+function replaceFilters(overrides = {}) {
+  return router.replace(contextTarget(overrides))
+}
+
+function onQualityChange(quality) {
+  void replaceFilters({ shading_quality: quality ?? '' })
 }
 
 function onDateChange(v) {
@@ -70,21 +75,17 @@ function onDateChange(v) {
       Message.warning(`连续范围最多选择 ${MAX_DATE_RANGE_DAYS} 天；如需跨较长时间，请使用「指定日期」`)
       return
     }
-    store.filters.created_from = v[0]
-    store.filters.created_to = v[1]
+    void replaceFilters({ created_from: v[0], created_to: v[1] })
   } else {
     // 不允许清空成全部时间,恢复默认日期范围(跟随项目设置)
-    Object.assign(store.filters, defaultDateRange(project.settings.default_date_range_days))
+    void replaceFilters(defaultDateRange(project.settings.default_date_range_days))
   }
-  applyNow()
 }
 
 // 切换 范围 / 指定日期 模式
-function onModeChange() {
-  if (store.filters.dateMode !== 'days') {
-    dayPickerOpen.value = false
-  }
-  applyNow()
+function onModeChange(mode) {
+  if (mode !== 'days') dayPickerOpen.value = false
+  void replaceFilters({ dateMode: mode })
 }
 
 // 切换一个指定日期:未选中则加入,已选中则移除;面板保持展开
@@ -93,9 +94,8 @@ function toggleDay(d) {
   const set = new Set(store.filters.created_dates)
   if (set.has(d)) set.delete(d)
   else set.add(d)
-  store.filters.created_dates = [...set].sort()
   dayPick.value = null
-  applyNow()
+  void replaceFilters({ created_dates: [...set].sort() })
 }
 
 function onDayPickerVisibleChange(visible) {
@@ -103,19 +103,16 @@ function onDayPickerVisibleChange(visible) {
 }
 
 function removeDay(d) {
-  store.filters.created_dates = store.filters.created_dates.filter((x) => x !== d)
-  applyNow()
+  void replaceFilters({
+    created_dates: store.filters.created_dates.filter((value) => value !== d),
+  })
 }
 
-async function reset() {
-  // 恢复到项目设置里的默认筛选(默认画质 + 默认日期范围);不放出全部时间数据
+function reset() {
+  // 批次管理清空后固定回到 main、全部场景、全部画质和项目默认日期范围。
   dayPick.value = null
   dayPickerOpen.value = false
-  try {
-    await store.resetFilters()
-  } catch (error) {
-    Message.error(error?.message || '筛选数据加载失败，请重试')
-  }
+  void router.replace(batchLocation(batchStateFromFilters(store.defaultFilters())))
 }
 </script>
 
@@ -123,7 +120,7 @@ async function reset() {
   <div class="filter-bar card">
     <div class="field">
       <span class="label">分支</span>
-      <a-select v-model="store.filters.branch_tag" size="small" style="width: 150px"
+      <a-select :model-value="store.filters.branch_tag" size="small" style="width: 150px"
         @change="onBranchChange">
         <a-option v-for="branch in project.meta.branch_tags" :key="branch" :value="branch">
           {{ branch }}
@@ -132,13 +129,13 @@ async function reset() {
     </div>
     <div class="field">
       <span class="label">场景ID</span>
-      <a-select v-model="store.filters.scene_id" placeholder="全部场景" allow-clear allow-search size="small"
-        style="width: 320px" @change="applyNow">
+      <a-select :model-value="store.filters.scene_id" placeholder="全部场景" allow-clear allow-search
+        size="small" style="width: 320px" @change="onSceneChange">
         <a-option v-for="s in project.meta.scene_ids" :key="s" :value="s">
           <span class="scene-option">
             <span class="scene-option-name"
               :class="{ 'is-data-empty': sceneHasBatchData(s) === false }"
-              :title="sceneHasBatchData(s) === false ? '当前分支没有批次数据' : undefined">
+              :title="sceneHasBatchData(s) === false ? '当前筛选范围内没有批次数据' : undefined">
               {{ s }}
             </span>
             <span v-if="unlistedSceneIds.has(s)" class="unlisted">未配置</span>
@@ -148,14 +145,15 @@ async function reset() {
     </div>
     <div class="field">
       <span class="label">画质</span>
-      <a-select v-model="store.filters.shading_quality" placeholder="全部画质" allow-clear size="small"
-        style="width: 130px" @change="applyNow">
+      <a-select :model-value="store.filters.shading_quality" placeholder="全部画质" allow-clear
+        size="small" style="width: 130px" @change="onQualityChange">
         <a-option v-for="o in qualityOptions" :key="o.value" :value="o.value">{{ o.label }}</a-option>
       </a-select>
     </div>
     <div class="field">
       <span class="label">创建时间</span>
-      <a-radio-group v-model="store.filters.dateMode" type="button" size="small" @change="onModeChange">
+      <a-radio-group :model-value="store.filters.dateMode" type="button" size="small"
+        @change="onModeChange">
         <a-radio value="range">范围</a-radio>
         <a-radio value="days">指定日期</a-radio>
       </a-radio-group>

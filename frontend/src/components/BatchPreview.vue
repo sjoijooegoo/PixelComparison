@@ -4,6 +4,7 @@ import { Message } from '@arco-design/web-vue'
 import { api, isRequestCancelled } from '../api'
 import { p4Label } from '../store'
 import { batchPreviewImage } from './batchPreviewImages'
+import { completeQualityRuns, preferredPreviewQuality, qualityLabel } from '../qualityRuns'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -13,6 +14,7 @@ const emit = defineEmits(['update:visible'])
 
 const loading = ref(false)
 const shots = ref([])
+const selectedQuality = ref(null)
 const previewVisible = ref(false)
 const previewCurrent = ref(0)
 const thumbnailRetryNonce = ref({})
@@ -26,6 +28,7 @@ const previewShots = computed(() => shots.value.map((shot) => ({
   ...batchPreviewImage(shot.url),
 })))
 const originalUrls = computed(() => previewShots.value.map((shot) => shot.originalUrl))
+const qualityRuns = computed(() => completeQualityRuns(props.batch))
 
 function clearThumbnailTimers() {
   for (const timer of thumbnailTimers) clearTimeout(timer)
@@ -36,13 +39,18 @@ function clearThumbnailTimers() {
 }
 
 // 同时监听批次 ID；关闭、切批次或卸载会 abort，序号再阻止已经到达的旧响应回写。
-watch(() => [props.visible, props.batch?.id], async ([open, batchId]) => {
+watch(() => [props.visible, props.batch?.id], ([open]) => {
+  if (open) selectedQuality.value = preferredPreviewQuality(props.batch)
+  else selectedQuality.value = null
+}, { immediate: true })
+
+watch(() => [props.visible, props.batch?.id, selectedQuality.value], async ([open, batchId, quality]) => {
   const requestId = ++shotsRequestId
   shotsController?.abort()
   shotsController = null
   previewVisible.value = false
   clearThumbnailTimers()
-  if (!open || !batchId) {
+  if (!open || !batchId || quality == null) {
     loading.value = false
     shots.value = []
     return
@@ -53,8 +61,11 @@ watch(() => [props.visible, props.batch?.id], async ([open, batchId]) => {
   loading.value = true
   shots.value = []
   try {
-    const { items } = await api.batchScreenshots(batchId, { signal: controller.signal })
-    if (requestId !== shotsRequestId || props.batch?.id !== batchId || !props.visible) return
+    const { items } = await api.qualityRunScreenshots(batchId, quality, {
+      signal: controller.signal,
+    })
+    if (requestId !== shotsRequestId || props.batch?.id !== batchId
+      || Number(selectedQuality.value) !== Number(quality) || !props.visible) return
     shots.value = items
   } catch (error) {
     if (!isRequestCancelled(error) && requestId === shotsRequestId) {
@@ -66,7 +77,7 @@ watch(() => [props.visible, props.batch?.id], async ([open, batchId]) => {
       if (shotsController === controller) shotsController = null
     }
   }
-})
+}, { immediate: true })
 
 onUnmounted(() => {
   ++shotsRequestId
@@ -130,10 +141,20 @@ function retryThumbnailNow(shot) {
         <span class="dot">·</span>{{ batch.scene_id }}
         <span class="dot">·</span>{{ batch.platform }}
         <span class="dot">·</span>{{ p4Label(batch.p4_version) }}
-        <span class="dot">·</span>{{ batch.shading_quality_label }}
+        <span class="dot">·</span>{{ qualityLabel(selectedQuality) }}
         <span class="dot">·</span>{{ shots.length }} 张
       </span>
     </template>
+
+    <div v-if="qualityRuns.length > 1" class="quality-tabs">
+      <span class="quality-tabs-label">画质</span>
+      <a-radio-group v-model="selectedQuality" type="button" size="small">
+        <a-radio v-for="run in qualityRuns" :key="run.shading_quality"
+          :value="run.shading_quality">
+          {{ qualityLabel(run.shading_quality) }} · {{ run.ready_screenshot_count }} 张
+        </a-radio>
+      </a-radio-group>
+    </div>
 
     <a-spin :loading="loading" style="display:block; min-height: 120px">
       <a-image-preview-group v-if="shots.length" infinite
@@ -157,6 +178,11 @@ function retryThumbnailNow(shot) {
 <style scoped>
 .title { font-size: 14px; }
 .title .dot { color: var(--color-text-4); margin: 0 6px; }
+.quality-tabs {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+  padding-bottom: 10px; border-bottom: 1px solid var(--color-border-2);
+}
+.quality-tabs-label { color: var(--color-text-3); font-size: 12px; }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));

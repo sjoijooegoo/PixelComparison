@@ -53,6 +53,36 @@ export const SHADING_QUALITY_OPTIONS = [
   { value: 0, label: '节能' },
 ]
 
+const SHADING_QUALITY_VALUES = new Set(
+  SHADING_QUALITY_OPTIONS.map((option) => option.value),
+)
+
+export function cloneRequestParams(params) {
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? [...value] : value,
+    ]),
+  )
+}
+
+export function normalizeShadingQuality(value, fallback = '') {
+  if (value === undefined || value === null) return fallback
+  if (value === '' || String(value).trim().toLowerCase() === 'all') return ''
+  const quality = Number(value)
+  return Number.isInteger(quality) && SHADING_QUALITY_VALUES.has(quality) ? quality : fallback
+}
+
+export function normalizeSelectedDates(value) {
+  const values = Array.isArray(value) ? value : [value]
+  return [...new Set(
+    values
+      .flatMap((item) => String(item ?? '').split(','))
+      .map((item) => item.trim())
+      .filter((item) => inclusiveDateRangeDays(item, item) === 1),
+  )].sort()
+}
+
 export function visibleQualityOptions(settings) {
   const configured = new Set(settings?.filter_shading_qualities ?? [5, 4, 3, 2, 1, 0])
   const options = SHADING_QUALITY_OPTIONS.filter((option) => configured.has(option.value))

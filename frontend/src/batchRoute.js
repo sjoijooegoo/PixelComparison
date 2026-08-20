@@ -10,58 +10,50 @@ function dateValues(value) {
     .filter(Boolean)
 }
 
-export function parseScreenshotRoute(route) {
+export function parseBatchRoute(route) {
   return {
     branchTag: firstValue(route.query.branch_tag) || 'main',
-    sceneId: firstValue(route.params.sceneId) || '',
-    baselineId: firstValue(route.query.baseline) || '',
-    baselineQuality: firstValue(route.query.baseline_quality),
-    currentId: firstValue(route.query.current) || '',
-    currentQuality: firstValue(route.query.current_quality),
+    sceneId: firstValue(route.query.scene_id) || '',
     shadingQuality: firstValue(route.query.quality),
     dateMode: firstValue(route.query.date_mode),
     createdFrom: firstValue(route.query.from),
     createdTo: firstValue(route.query.to),
     createdDates: dateValues(route.query.dates),
+    page: firstValue(route.query.page),
   }
 }
 
-export function screenshotStateFromFilters(filters, roles = {}) {
+export function batchStateFromFilters(filters, page = 1) {
   return {
     branchTag: filters.branch_tag || 'main',
     sceneId: filters.scene_id || '',
-    baselineId: roles.baselineId || '',
-    baselineQuality: roles.baselineQuality ?? '',
-    currentId: roles.currentId || '',
-    currentQuality: roles.currentQuality ?? '',
     shadingQuality: filters.shading_quality == null ? '' : filters.shading_quality,
     dateMode: filters.dateMode,
     createdFrom: filters.created_from,
     createdTo: filters.created_to,
     createdDates: [...(filters.created_dates || [])],
+    page,
   }
 }
 
-export function screenshotRouteKey(state) {
+export function batchRouteKey(state) {
   return JSON.stringify({
     branchTag: state.branchTag || 'main',
     sceneId: state.sceneId || '',
-    baselineId: state.baselineId || '',
-    baselineQuality: state.baselineQuality ?? '',
-    currentId: state.currentId || '',
-    currentQuality: state.currentQuality ?? '',
-    shadingQuality: state.shadingQuality,
+    shadingQuality: state.shadingQuality == null
+      ? state.shadingQuality
+      : String(state.shadingQuality),
     dateMode: state.dateMode,
     createdFrom: state.createdFrom,
     createdTo: state.createdTo,
     createdDates: [...(state.createdDates || [])],
+    page: state.page == null ? state.page : String(state.page),
   })
 }
 
-export function screenshotLocation(state) {
-  const query = {
-    branch_tag: state.branchTag || 'main',
-  }
+export function batchLocation(state) {
+  const query = { branch_tag: state.branchTag || 'main' }
+  if (state.sceneId) query.scene_id = state.sceneId
   if (state.shadingQuality !== undefined) {
     query.quality = state.shadingQuality === '' ? 'all' : String(state.shadingQuality)
   }
@@ -73,20 +65,7 @@ export function screenshotLocation(state) {
       query.to = state.createdTo || ''
     }
   }
-  if (state.baselineId) {
-    query.baseline = String(state.baselineId)
-    if (state.baselineQuality !== '' && state.baselineQuality != null) {
-      query.baseline_quality = String(state.baselineQuality)
-    }
-  }
-  if (state.currentId) {
-    query.current = String(state.currentId)
-    if (state.currentQuality !== '' && state.currentQuality != null) {
-      query.current_quality = String(state.currentQuality)
-    }
-  }
-  return {
-    path: state.sceneId ? `/screenshot/${encodeURIComponent(state.sceneId)}` : '/screenshot',
-    query,
-  }
+  const page = Number(state.page)
+  if (Number.isInteger(page) && page > 1) query.page = String(page)
+  return { path: '/batches', query }
 }

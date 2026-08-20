@@ -16,7 +16,7 @@ export function createBatchTableSizer(store, {
     const fit = measureBatchPageSize(observedWrap)
     if (fit == null || fit === store.batchPageSize) return false
     store.batchPageSize = fit
-    store.batchPage = 1
+    // 页码属于 URL 状态。视口变化只调整每页行数，不能把刷新恢复出的页码重置掉。
     void store.loadBatches().catch(() => {})
     return true
   }

@@ -10,7 +10,7 @@ import threading
 from datetime import date, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import Integer, cast, delete, func, or_, select
+from sqlalchemy import Integer, cast, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .models import Batch, MapBuildRegistry, MapBuildSnapshot
@@ -20,6 +20,12 @@ MAX_REGISTRIES = 5000
 MAX_TREND_POINTS = 2000
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 LEGACY_DEFAULT_SHADING_QUALITY = 4
+
+
+class SnapshotContentConflict(ValueError):
+    """同一批次已经保存了不同的烘培快照。"""
+
+
 QUALITY_LABELS = {5: "电影", 4: "极致", 3: "精美", 2: "均衡", 1: "流畅", 0: "节能"}
 
 _WRITE_LOCK = threading.Lock()
@@ -192,9 +198,26 @@ def store_snapshot(
     """幂等替换一个批次的完整烘培快照，所有规范化行在同一事务提交。"""
 
     world = payload.world_aggregate
+    normalized_payload = payload.model_dump(by_alias=True)
     with _WRITE_LOCK:
         snapshot = db.get(MapBuildSnapshot, batch.id)
         updated = snapshot is not None
+        if snapshot is not None:
+            if (
+                snapshot.format_version == format_version
+                and snapshot.raw_payload == normalized_payload
+            ):
+                return {
+                    "batch_id": batch.id,
+                    "scene_id": batch.scene_id,
+                    "format": format_version,
+                    "registry_count": len(payload.registries),
+                    "updated": False,
+                    "idempotent": True,
+                }
+            raise SnapshotContentConflict(
+                "该批次已存在不同的烘培数据；改变内容请使用 --overwrite 整批重建"
+            )
         if snapshot is None:
             snapshot = MapBuildSnapshot(batch_id=batch.id)
             db.add(snapshot)
@@ -204,15 +227,10 @@ def store_snapshot(
         snapshot.world_all_mips_bytes = world.all_mips_bytes
         snapshot.world_cook_estimate_bytes = world.cook_estimate_bytes
         snapshot.world_texture_count = world.texture_count
-        snapshot.raw_payload = payload.model_dump(by_alias=True)
+        snapshot.raw_payload = normalized_payload
         snapshot.uploaded_at = datetime.now()
         # 先显式删除并 flush，再插入相同 path 的新行。只做 relationship 替换时，
         # SQLAlchemy 可能先 INSERT 后 DELETE，从而撞上 (batch_id, path) 唯一约束。
-        if updated:
-            db.execute(
-                delete(MapBuildRegistry).where(MapBuildRegistry.batch_id == batch.id)
-            )
-            db.flush()
         db.add_all([_registry_row(batch.id, item) for item in payload.registries])
         try:
             db.commit()

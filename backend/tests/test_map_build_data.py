@@ -417,18 +417,22 @@ def test_unindexed_reflection_block_is_selectable_in_overview_and_trend(client):
     assert "registry_path" in invalid.json()["detail"]
 
 
-def test_map_build_upload_is_idempotent_and_preserves_single_snapshot(client):
+def test_map_build_upload_is_idempotent_and_rejects_different_content(client):
     _batch(client, "201", "2026-08-01T09:00:00")
-    assert _upload(client, "201", _payload(1)).json()["updated"] is False
-    replaced = _upload(client, "201", _payload(3), format="map-build-data/v2.1")
-    assert replaced.status_code == 201, replaced.text
-    assert replaced.json()["updated"] is True
-    assert replaced.json()["registry_count"] == 4
-    assert replaced.json()["format"] == "map-build-data/v2.1"
+    payload = _payload(1)
+    assert _upload(client, "201", payload).json()["updated"] is False
+    retry = _upload(client, "201", payload)
+    assert retry.status_code == 201, retry.text
+    assert retry.json()["updated"] is False
+    assert retry.json()["idempotent"] is True
+
+    conflict = _upload(client, "201", _payload(3), format="map-build-data/v2.1")
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["code"] == "MAP_BUILD_CONTENT_CONFLICT"
 
     overview = client.get("/api/map-build/scenes/MapScene/overview").json()
-    assert overview["world"]["metrics"]["total_bytes"] == 300
-    assert overview["world"]["self_metrics"]["total_bytes"] == 30
+    assert overview["world"]["metrics"]["total_bytes"] == 100
+    assert overview["world"]["self_metrics"]["total_bytes"] == 10
     assert len(overview["blocks"][0]["sub_blocks"]) == 2
     assert "previous_batch" not in overview
     assert "delta" not in overview["world"]["metrics"]
@@ -757,19 +761,12 @@ def test_concurrent_map_build_retries_leave_one_complete_snapshot(client):
 
     with ThreadPoolExecutor(max_workers=6) as executor:
         responses = list(
-            executor.map(lambda scale: _upload(client, "701", _payload(scale)), range(1, 7))
+            executor.map(lambda _: _upload(client, "701", _payload(1)), range(1, 7))
         )
 
     assert all(response.status_code == 201 for response in responses)
     overview = client.get("/api/map-build/scenes/MapScene/overview").json()
-    assert overview["world"]["metrics"]["total_bytes"] in {
-        100,
-        200,
-        300,
-        400,
-        500,
-        600,
-    }
+    assert overview["world"]["metrics"]["total_bytes"] == 100
     assert len(overview["blocks"]) == 1
     assert len(overview["blocks"][0]["sub_blocks"]) == 2
 

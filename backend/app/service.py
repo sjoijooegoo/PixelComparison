@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .compare import compare_images
 from .db import IMAGES_DIR
-from .models import Baseline, Batch, Comparison, ComparisonItem, Screenshot
+from .models import Baseline, Batch, Comparison, ComparisonItem, QualityRun, Screenshot
 from .settings import DEFAULT_SETTINGS
 
 
@@ -23,6 +23,7 @@ def classify(diff_pct: float, fail_threshold: float, warn_threshold: float) -> s
 
 def run_comparison(
     db: Session, comparison: Comparison, batch: Batch, ref_batch: Batch,
+    current_run: QualityRun, reference_run: QualityRun,
     baseline: Baseline | None = None, settings: dict | None = None,
     on_progress=None,
 ) -> Comparison:
@@ -35,17 +36,18 @@ def run_comparison(
     cfg = settings or DEFAULT_SETTINGS
     current_shots = {
         s.scene_name: s
-        for s in db.scalars(select(Screenshot).where(Screenshot.batch_id == batch.id))
+        for s in db.scalars(select(Screenshot).where(
+            Screenshot.quality_run_id == current_run.id,
+            Screenshot.upload_status == "ready",
+        ))
     }
     baseline_shots = {
         s.scene_name: s
-        for s in db.scalars(select(Screenshot).where(Screenshot.batch_id == ref_batch.id))
+        for s in db.scalars(select(Screenshot).where(
+            Screenshot.quality_run_id == reference_run.id,
+            Screenshot.upload_status == "ready",
+        ))
     }
-
-    # 复用同一行:刷新基线关联并清掉旧明细(重算时 comparison.id 保持不变)
-    comparison.baseline_id = baseline.id if baseline else None
-    db.execute(delete(ComparisonItem).where(ComparisonItem.comparison_id == comparison.id))
-    db.flush()
 
     heat_dir = IMAGES_DIR / "heatmaps" / str(comparison.id)
     if heat_dir.exists():
@@ -86,6 +88,13 @@ def run_comparison(
                 if on_progress:
                     on_progress(done, total)
 
+    # 像素计算和热力图写盘可能持续数秒，这一阶段不能提前取得 SQLite
+    # 写锁，否则所有上报和前端写操作都会被阻塞。只在纯计算结束后开启
+    # 短事务，集中替换当前对比的数据库明细。
+    comparison.baseline_id = baseline.id if baseline else None
+    db.execute(delete(ComparisonItem).where(ComparisonItem.comparison_id == comparison.id))
+    db.flush()
+
     diffs: list[float] = []
     has_fail = has_warn = False
 
@@ -124,13 +133,18 @@ def run_comparison(
     return comparison
 
 
-def promote_baseline(db: Session, batch: Batch, version: str) -> Baseline:
+def promote_baseline(
+    db: Session, batch: Batch, quality_run: QualityRun, version: str
+) -> Baseline:
     """把批次晋升为基线;同分支、平台、版本的旧基线退役。"""
     old = db.scalars(
-        select(Baseline).where(
+        select(Baseline)
+        .join(QualityRun, Baseline.source_quality_run_id == QualityRun.id)
+        .where(
             Baseline.branch_tag == batch.branch_tag,
             Baseline.scene_id == batch.scene_id,
             Baseline.platform == batch.platform,
+            QualityRun.shading_quality == quality_run.shading_quality,
             Baseline.version == version,
             Baseline.status == "active",
         )
@@ -140,6 +154,7 @@ def promote_baseline(db: Session, batch: Batch, version: str) -> Baseline:
     baseline = Baseline(
         version=version, branch_tag=batch.branch_tag, scene_id=batch.scene_id,
         platform=batch.platform, source_batch_id=batch.id,
+        source_quality_run_id=quality_run.id,
     )
     db.add(baseline)
     db.flush()

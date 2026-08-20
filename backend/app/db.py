@@ -79,6 +79,8 @@ _NEW_COLUMNS = {
         "levelsequence_name": "VARCHAR",
         "levelsequence_path": "VARCHAR",
         "shading_quality": "INTEGER",
+        "manifest_format_version": "INTEGER",
+        "source_manifest_sha256": "VARCHAR(64)",
     },
     "screenshots": {
         "frame_index": "INTEGER",
@@ -87,6 +89,12 @@ _NEW_COLUMNS = {
     },
     "baselines": {
         "branch_tag": "VARCHAR NOT NULL DEFAULT 'main'",
+        "source_quality_run_id": "INTEGER",
+    },
+    "comparisons": {
+        "current_quality_run_id": "INTEGER",
+        "reference_quality_run_id": "INTEGER",
+        "scope_status": "VARCHAR NOT NULL DEFAULT 'valid'",
     },
     "comparison_items": {
         "cache_version": "VARCHAR",
@@ -243,21 +251,191 @@ def migrate_columns() -> None:
                 "CREATE INDEX IF NOT EXISTS ix_baselines_branch_tag "
                 "ON baselines(branch_tag)"
             ))
-    # 同一对(batch, ref)至多一条对比;防并发重复(应用层加锁兜底)
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_comparison_pair "
-                "ON comparisons(batch_id, ref_batch_id)"
-            ))
-    except Exception:
-        pass  # 历史遗留重复数据时跳过,不阻断启动
-    # 同一批次内 scene_name 唯一;防并发同名上传重复(应用层 409 兜底)
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_screenshot_batch_scene "
-                "ON screenshots(batch_id, scene_name)"
-            ))
-    except Exception:
-        pass  # 历史遗留重复数据时跳过,不阻断启动
+    with engine.begin() as conn:
+        tables = set(conn.scalars(text(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )))
+        if "screenshots" in tables:
+            columns = {
+                row[1] for row in conn.execute(text("PRAGMA table_info(screenshots)"))
+            }
+            if "quality_run_id" in columns:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_screenshot_run_scene "
+                    "ON screenshots(quality_run_id, scene_name)"
+                ))
+
+
+CURRENT_SCHEMA_VERSION = 2
+
+
+def _database_state() -> tuple[int, set[str]]:
+    with engine.connect() as conn:
+        version = int(conn.scalar(text("PRAGMA user_version")) or 0)
+        tables = set(conn.scalars(text(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )))
+    return version, tables
+
+
+def _rebuild_screenshots_for_quality_runs() -> None:
+    """把旧截图唯一键升级为 (quality_run_id, scene_name)，保留行 id/路径。"""
+    with engine.begin() as conn:
+        columns = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(screenshots)"))
+        }
+        if not columns or "quality_run_id" in columns:
+            return
+        conn.execute(text("""
+            CREATE TABLE _screenshots_multi_quality (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                batch_id VARCHAR NOT NULL,
+                quality_run_id INTEGER,
+                scene_name VARCHAR NOT NULL,
+                path VARCHAR,
+                source_relative_path VARCHAR,
+                upload_status VARCHAR NOT NULL DEFAULT 'ready',
+                sha256 VARCHAR(64),
+                byte_size BIGINT,
+                cache_version VARCHAR,
+                frame_index INTEGER,
+                camera JSON,
+                FOREIGN KEY(batch_id) REFERENCES batches (id),
+                FOREIGN KEY(quality_run_id) REFERENCES quality_runs (id),
+                CONSTRAINT uq_screenshot_run_scene UNIQUE (quality_run_id, scene_name)
+            )
+        """))
+        conn.execute(text("""
+            INSERT INTO _screenshots_multi_quality (
+                id, batch_id, quality_run_id, scene_name, path,
+                source_relative_path, upload_status, sha256, byte_size,
+                cache_version, frame_index, camera
+            )
+            SELECT s.id, s.batch_id, q.id, s.scene_name, s.path,
+                   NULL, 'ready', NULL, NULL,
+                   s.cache_version, s.frame_index, s.camera
+            FROM screenshots AS s
+            JOIN quality_runs AS q ON q.batch_id = s.batch_id
+        """))
+        old_count = int(conn.scalar(text("SELECT COUNT(*) FROM screenshots")) or 0)
+        new_count = int(conn.scalar(text(
+            "SELECT COUNT(*) FROM _screenshots_multi_quality"
+        )) or 0)
+        if old_count != new_count:
+            raise RuntimeError(
+                f"截图迁移数量不一致: old={old_count} new={new_count}"
+            )
+        conn.execute(text("DROP TABLE screenshots"))
+        conn.execute(text(
+            "ALTER TABLE _screenshots_multi_quality RENAME TO screenshots"
+        ))
+        conn.execute(text(
+            "CREATE INDEX ix_screenshots_batch_id ON screenshots(batch_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX ix_screenshots_quality_run_id ON screenshots(quality_run_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX ix_screenshots_scene_name ON screenshots(scene_name)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX ix_screenshots_upload_status ON screenshots(upload_status)"
+        ))
+
+
+def _migrate_multi_quality() -> None:
+    """把旧单画质批次映射到唯一 legacy QualityRun，并回填引用。"""
+    with engine.begin() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS uq_comparison_pair"))
+        conn.execute(text("""
+            INSERT INTO quality_runs (
+                batch_id, quality_run_index, shading_quality, tex_quality,
+                capture_status, expected_screenshot_count, created_at
+            )
+            SELECT b.id, 0, COALESCE(b.shading_quality, 4), NULL,
+                   'legacy', COUNT(s.id), b.created_at
+            FROM batches AS b
+            JOIN screenshots AS s ON s.batch_id = b.id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM quality_runs AS q WHERE q.batch_id = b.id
+            )
+            GROUP BY b.id
+        """))
+
+    _rebuild_screenshots_for_quality_runs()
+
+    with engine.begin() as conn:
+        conn.execute(text("""
+            UPDATE baselines
+            SET source_quality_run_id = (
+                SELECT q.id FROM quality_runs AS q
+                WHERE q.batch_id = baselines.source_batch_id
+                ORDER BY q.id LIMIT 1
+            )
+            WHERE source_quality_run_id IS NULL
+        """))
+        conn.execute(text("""
+            UPDATE comparisons
+            SET current_quality_run_id = (
+                    SELECT q.id FROM quality_runs AS q
+                    WHERE q.batch_id = comparisons.batch_id
+                    ORDER BY q.id LIMIT 1
+                ),
+                reference_quality_run_id = (
+                    SELECT q.id FROM quality_runs AS q
+                    WHERE q.batch_id = comparisons.ref_batch_id
+                    ORDER BY q.id LIMIT 1
+                )
+        """))
+        conn.execute(text("""
+            UPDATE comparisons
+            SET scope_status = CASE
+                WHEN current_quality_run_id IS NOT NULL
+                 AND reference_quality_run_id IS NOT NULL
+                 AND (SELECT shading_quality FROM quality_runs
+                      WHERE id = current_quality_run_id) =
+                     (SELECT shading_quality FROM quality_runs
+                      WHERE id = reference_quality_run_id)
+                THEN 'valid' ELSE 'legacy_incompatible' END
+        """))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_comparison_quality_pair
+            ON comparisons(current_quality_run_id, reference_quality_run_id)
+            WHERE current_quality_run_id IS NOT NULL
+              AND reference_quality_run_id IS NOT NULL
+        """))
+        violations = list(conn.execute(text("PRAGMA foreign_key_check")))
+        if violations:
+            raise RuntimeError(f"数据库迁移外键检查失败: {violations[:5]}")
+        check = conn.execute(text("PRAGMA quick_check")).fetchone()
+        if not check or check[0] != "ok":
+            raise RuntimeError(f"数据库迁移完整性检查失败: {check}")
+
+
+def initialize_database() -> None:
+    """创建/迁移数据库；任何既有库迁移前必须先生成已校验快照。"""
+    version, tables = _database_state()
+    needs_multi_quality = "batches" in tables and version < CURRENT_SCHEMA_VERSION
+    if needs_multi_quality:
+        from .backup import create_migration_backup
+
+        backup = create_migration_backup("multi-quality-v2")
+        logging.getLogger("pixelcomp").info("数据库迁移前备份完成: %s", backup)
+
+    Base.metadata.create_all(engine)
+    migrate_columns()
+    if needs_multi_quality:
+        _migrate_multi_quality()
+    with engine.begin() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS uq_comparison_pair"))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_comparison_quality_pair
+            ON comparisons(current_quality_run_id, reference_quality_run_id)
+            WHERE current_quality_run_id IS NOT NULL
+              AND reference_quality_run_id IS NOT NULL
+        """))
+        conn.execute(text(f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"))
+    logging.getLogger("pixelcomp").info(
+        "数据库 schema 已就绪: version=%s", CURRENT_SCHEMA_VERSION
+    )

@@ -1,5 +1,11 @@
 <script setup>
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  batchLocation,
+  batchRouteKey,
+  parseBatchRoute,
+} from '../batchRoute'
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
 import { useProjectStore } from '../stores/projectStore'
 import FilterSidebar from '../components/FilterSidebar.vue'
@@ -10,30 +16,67 @@ defineOptions({ name: 'BatchView' })
 
 const project = useProjectStore()
 const store = useBatchCatalogStore()
+const route = useRoute()
+const router = useRouter()
 let unregisterPageRefresh = null
 let pageActive = false
+let writingUrl = false
+let routeRun = 0
+let synchronizedRouteKey = ''
 
-async function retryInit() {
+const routeState = () => parseBatchRoute(route)
+
+async function replaceUrl(state) {
+  synchronizedRouteKey = batchRouteKey(state)
+  const target = batchLocation(state)
+  if (route.fullPath === router.resolve(target).fullPath) return
+  writingUrl = true
   try {
-    await project.init()
-    if (!pageActive) return
-    await store.init()
-  } catch {
-    // 错误状态保留在页面，供用户继续重试。
+    await router.replace(target)
+  } finally {
+    writingUrl = false
   }
 }
 
-onMounted(async () => {
-  pageActive = true
-  await retryInit()
+async function applyRoute() {
   if (!pageActive) return
+  const run = ++routeRun
+  try {
+    await project.init()
+    if (run !== routeRun || !pageActive) return
+    const normalized = await store.applyRoute(routeState())
+    if (run !== routeRun || !pageActive || !normalized) return
+    synchronizedRouteKey = batchRouteKey(normalized)
+    await replaceUrl(normalized)
+  } catch {
+    // 项目或批次错误状态由对应 Store 保留，页面提供原位重试。
+  }
+}
+
+function registerRefresh() {
+  unregisterPageRefresh?.()
   unregisterPageRefresh = registerPageRefresh(async () => {
     await store.refresh({ refreshMeta: false })
   })
+}
+
+watch(() => route.fullPath, () => {
+  if (writingUrl || route.path !== '/batches') return
+  const requested = routeState()
+  if (store.initialized && batchRouteKey(requested) === synchronizedRouteKey) return
+  void applyRoute()
+})
+
+onMounted(() => {
+  pageActive = true
+  registerRefresh()
+  void applyRoute()
 })
 onUnmounted(() => {
   pageActive = false
+  routeRun += 1
   unregisterPageRefresh?.()
+  store.deactivate()
 })
 </script>
 
@@ -46,7 +89,7 @@ onUnmounted(() => {
     <div v-else-if="project.initError" class="startup-state card">
       <div class="startup-title">页面加载失败</div>
       <div class="startup-message">{{ project.initError }}</div>
-      <a-button type="primary" size="small" @click="retryInit">重新加载</a-button>
+      <a-button type="primary" size="small" @click="applyRoute">重新加载</a-button>
     </div>
     <template v-else>
       <FilterSidebar />
