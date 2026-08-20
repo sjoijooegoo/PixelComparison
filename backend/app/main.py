@@ -2151,7 +2151,8 @@ def get_meta(db: Session = Depends(get_db)):
             "screenshot_qualities": [],
         }
     all_runs = db.scalars(select(QualityRun)).all()
-    all_counts = ready_counts(db, [run.id for run in all_runs])
+    # 这里需要所有运行的计数；直接聚合，不能把所有 ID 展开为 SQLite IN 参数。
+    all_counts = ready_counts(db)
     batches_by_id = {
         batch.id: batch for batch in db.scalars(select(Batch)).all()
     }

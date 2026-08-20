@@ -355,6 +355,16 @@ def test_screenshot_scene_availability_requires_complete_matching_run(client, pn
     assert empty_day.json()["scene_ids"] == []
 
 
+def test_ready_counts_chunks_large_run_id_list_for_sqlite(client):
+    """运行 ID 超过 SQLite 变量上限时，计数查询仍必须可用。"""
+    from app.db import SessionLocal
+    from app.quality_runs import ready_counts
+
+    with SessionLocal() as db:
+        # 测试库没有这些运行；关键在于 1,000 个绑定变量不能进入同一条 IN。
+        assert ready_counts(db, list(range(1, 1001))) == {}
+
+
 def test_existing_database_is_backed_up_before_multi_quality_migration(tmp_path):
     db_path = tmp_path / "shotdiff.db"
     connection = sqlite3.connect(db_path)

@@ -14,6 +14,9 @@ from .models import QualityRun, Screenshot
 
 
 DEFAULT_LEGACY_SHADING_QUALITY = 4
+# SQLite 的默认单条语句变量上限通常为 999；计数查询本身还会绑定
+# ``upload_status``，因此保留余量，避免大项目的全量元数据请求触发 500。
+_READY_COUNT_RUN_ID_CHUNK_SIZE = 900
 
 
 def ready_count_query():
@@ -25,12 +28,29 @@ def ready_count_query():
 
 
 def ready_counts(db: Session, run_ids: list[int] | None = None) -> dict[int, int]:
-    stmt = ready_count_query()
-    if run_ids is not None:
-        if not run_ids:
-            return {}
-        stmt = stmt.where(Screenshot.quality_run_id.in_(run_ids))
-    return {int(run_id): int(count) for run_id, count in db.execute(stmt) if run_id is not None}
+    if run_ids is None:
+        return {
+            int(run_id): int(count)
+            for run_id, count in db.execute(ready_count_query())
+            if run_id is not None
+        }
+
+    # ``IN`` 绑定变量不能超过 SQLite 的编译上限。去重还能避免同一调用方
+    # 重复传入运行 ID 时发出无意义的参数和查询。
+    unique_run_ids = list(dict.fromkeys(run_ids))
+    if not unique_run_ids:
+        return {}
+
+    counts: dict[int, int] = {}
+    for start in range(0, len(unique_run_ids), _READY_COUNT_RUN_ID_CHUNK_SIZE):
+        run_id_chunk = unique_run_ids[start:start + _READY_COUNT_RUN_ID_CHUNK_SIZE]
+        stmt = ready_count_query().where(Screenshot.quality_run_id.in_(run_id_chunk))
+        counts.update(
+            (int(run_id), int(count))
+            for run_id, count in db.execute(stmt)
+            if run_id is not None
+        )
+    return counts
 
 
 def ready_scene_counts_by_batch(db: Session, batch_ids: list[str]) -> dict[str, int]:
