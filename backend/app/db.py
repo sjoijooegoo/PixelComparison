@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, text
@@ -105,6 +106,115 @@ _NEW_COLUMNS = {
 }
 
 
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+_CREATE_TABLE_PREFIX = re.compile(
+    r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r'(?:"(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]|[^\s(]+)',
+    re.IGNORECASE,
+)
+_STALE_BATCH_REFERENCE = re.compile(
+    r'(\bREFERENCES\s+)(?:"_batches_old"|`_batches_old`|'
+    r"\[_batches_old\]|_batches_old)(?=\s|\()",
+    re.IGNORECASE,
+)
+
+
+def _repair_stale_batch_foreign_keys() -> list[str]:
+    """修复旧版 v2 迁移中断后指向已删除临时表的外键。
+
+    已发布过的迁移曾先把 ``batches`` 重命名为 ``_batches_old``。
+    SQLite 会连带重写所有子表的父表名；临时表删除后，第一次启动会在
+    ``foreign_key_check`` 失败，但之前的表结构事务已经提交。这里仅重建实际
+    指向该临时表的子表，并保留其数据、索引和触发器，使迁移可以安全续跑。
+    """
+    repaired: list[str] = []
+    with engine.begin() as conn:
+        if int(conn.scalar(text("PRAGMA foreign_keys")) or 0):
+            raise RuntimeError("修复迁移外键前必须关闭 SQLite foreign_keys")
+
+        tables = list(conn.execute(text(
+            "SELECT name, sql FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL"
+        )))
+        for table_name, create_sql in tables:
+            quoted_table = _quote_identifier(table_name)
+            foreign_keys = list(conn.execute(text(
+                f"PRAGMA foreign_key_list({quoted_table})"
+            )))
+            if not any(row[2] == "_batches_old" for row in foreign_keys):
+                continue
+
+            prefix = _CREATE_TABLE_PREFIX.match(create_sql)
+            repaired_sql = _STALE_BATCH_REFERENCE.sub(r"\1batches", create_sql)
+            if prefix is None or repaired_sql == create_sql:
+                raise RuntimeError(f"无法安全修复表 {table_name} 的旧批次外键")
+
+            temp_name = f"_fk_repair_{table_name}"
+            quoted_temp = _quote_identifier(temp_name)
+            repaired_sql = (
+                f"CREATE TABLE {quoted_temp}" + repaired_sql[prefix.end():]
+            )
+            schema_objects = list(conn.execute(text(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE tbl_name = :table_name "
+                "AND type IN ('index', 'trigger') AND sql IS NOT NULL"
+            ), {"table_name": table_name}))
+            columns = [
+                row[1]
+                for row in conn.execute(text(f"PRAGMA table_info({quoted_table})"))
+            ]
+            if not columns:
+                raise RuntimeError(f"无法读取待修复表 {table_name} 的列")
+            column_list = ", ".join(_quote_identifier(name) for name in columns)
+            old_count = int(conn.scalar(text(
+                f"SELECT COUNT(*) FROM {quoted_table}"
+            )) or 0)
+
+            conn.execute(text(f"DROP TABLE IF EXISTS {quoted_temp}"))
+            conn.exec_driver_sql(repaired_sql)
+            conn.execute(text(
+                f"INSERT INTO {quoted_temp} ({column_list}) "
+                f"SELECT {column_list} FROM {quoted_table}"
+            ))
+            new_count = int(conn.scalar(text(
+                f"SELECT COUNT(*) FROM {quoted_temp}"
+            )) or 0)
+            if old_count != new_count:
+                raise RuntimeError(
+                    f"修复表 {table_name} 数据数量不一致: "
+                    f"old={old_count} new={new_count}"
+                )
+
+            conn.execute(text(f"DROP TABLE {quoted_table}"))
+            conn.execute(text(
+                f"ALTER TABLE {quoted_temp} RENAME TO {quoted_table}"
+            ))
+            for _object_type, _object_name, object_sql in schema_objects:
+                conn.exec_driver_sql(object_sql)
+            repaired.append(table_name)
+
+        remaining = []
+        for table_name, _create_sql in tables:
+            if table_name in repaired:
+                foreign_keys = list(conn.execute(text(
+                    f"PRAGMA foreign_key_list({_quote_identifier(table_name)})"
+                )))
+                if any(row[2] == "_batches_old" for row in foreign_keys):
+                    remaining.append(table_name)
+        if remaining:
+            raise RuntimeError(f"旧批次外键修复不完整: {remaining}")
+
+    if repaired:
+        logging.getLogger("pixelcomp").warning(
+            "检测到上次中断的多画质迁移，已修复外键表: %s",
+            ", ".join(repaired),
+        )
+    return repaired
+
+
 def _relax_p4_nullable() -> None:
     """放宽 batches.p4_version 的 NOT NULL,允许未上报 p4 版本。
 
@@ -130,10 +240,15 @@ def _relax_p4_nullable() -> None:
                 piece += f" DEFAULT {dflt}"
             defs.append(piece)
         cols = ", ".join(f'"{r[1]}"' for r in info)
-        conn.execute(text("ALTER TABLE batches RENAME TO _batches_old"))
-        conn.execute(text(f"CREATE TABLE batches ({', '.join(defs)})"))
-        conn.execute(text(f"INSERT INTO batches ({cols}) SELECT {cols} FROM _batches_old"))
-        conn.execute(text("DROP TABLE _batches_old"))
+        # 必须先创建新表再替换原表。若先把父表 batches 改名，SQLite 3.26+
+        # 会把所有子表外键自动改写为临时表名，临时表删除后外键即悬空。
+        conn.execute(text("DROP TABLE IF EXISTS _batches_nullable"))
+        conn.execute(text(f"CREATE TABLE _batches_nullable ({', '.join(defs)})"))
+        conn.execute(text(
+            f"INSERT INTO _batches_nullable ({cols}) SELECT {cols} FROM batches"
+        ))
+        conn.execute(text("DROP TABLE batches"))
+        conn.execute(text("ALTER TABLE _batches_nullable RENAME TO batches"))
 
 
 def _nested_json_value(data: object, path: tuple[str, ...]) -> int:
@@ -232,6 +347,7 @@ def migrate_columns() -> None:
         logging.getLogger("pixelcomp").info(
             "已回填烘培趋势静态指标: %s 条 registry", backfilled
         )
+    _repair_stale_batch_foreign_keys()
     _relax_p4_nullable()
     with engine.begin() as conn:
         tables = set(conn.scalars(text(

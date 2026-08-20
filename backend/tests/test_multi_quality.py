@@ -361,7 +361,7 @@ def test_existing_database_is_backed_up_before_multi_quality_migration(tmp_path)
     connection.executescript("""
         CREATE TABLE batches (
             id VARCHAR PRIMARY KEY, branch_tag VARCHAR NOT NULL DEFAULT 'main',
-            scene_id VARCHAR NOT NULL, p4_version INTEGER, platform VARCHAR NOT NULL,
+            scene_id VARCHAR NOT NULL, p4_version INTEGER NOT NULL, platform VARCHAR NOT NULL,
             creator VARCHAR NOT NULL, created_at DATETIME NOT NULL,
             batch_url VARCHAR, resolution VARCHAR, capture_type VARCHAR,
             levelsequence_name VARCHAR, levelsequence_path VARCHAR,
@@ -423,7 +423,7 @@ def test_migration_preserves_baseline_comparison_and_screenshot_references(tmp_p
     connection.executescript("""
         CREATE TABLE batches (
             id VARCHAR PRIMARY KEY, branch_tag VARCHAR NOT NULL DEFAULT 'main',
-            scene_id VARCHAR NOT NULL, p4_version INTEGER, platform VARCHAR NOT NULL,
+            scene_id VARCHAR NOT NULL, p4_version INTEGER NOT NULL, platform VARCHAR NOT NULL,
             creator VARCHAR NOT NULL, created_at DATETIME NOT NULL,
             batch_url VARCHAR, resolution VARCHAR, capture_type VARCHAR,
             levelsequence_name VARCHAR, levelsequence_path VARCHAR,
@@ -515,4 +515,135 @@ def test_migration_preserves_baseline_comparison_and_screenshot_references(tmp_p
         "FROM comparisons WHERE id=1"
     ).fetchone() == (run_ids["current"], run_ids["reference"], "valid")
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    connection.close()
+
+
+def test_migration_recovers_foreign_keys_left_by_interrupted_v2_upgrade(tmp_path):
+    """已由旧版迁移改写成 _batches_old 的线上库可直接续跑。"""
+    db_path = tmp_path / "shotdiff.db"
+    connection = sqlite3.connect(db_path)
+    connection.executescript("""
+        CREATE TABLE batches (
+            id VARCHAR PRIMARY KEY, branch_tag VARCHAR NOT NULL DEFAULT 'main',
+            scene_id VARCHAR NOT NULL, p4_version INTEGER NOT NULL,
+            platform VARCHAR NOT NULL, creator VARCHAR NOT NULL,
+            created_at DATETIME NOT NULL, shading_quality INTEGER
+        );
+        CREATE TABLE quality_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id VARCHAR NOT NULL,
+            quality_run_index INTEGER NOT NULL, shading_quality INTEGER NOT NULL,
+            tex_quality INTEGER, capture_status VARCHAR NOT NULL,
+            expected_screenshot_count INTEGER NOT NULL, created_at DATETIME NOT NULL,
+            FOREIGN KEY(batch_id) REFERENCES batches(id),
+            UNIQUE(batch_id, shading_quality), UNIQUE(batch_id, quality_run_index)
+        );
+        CREATE TABLE screenshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id VARCHAR NOT NULL,
+            scene_name VARCHAR NOT NULL, path VARCHAR NOT NULL,
+            cache_version VARCHAR, frame_index INTEGER, camera JSON,
+            FOREIGN KEY(batch_id) REFERENCES batches(id),
+            UNIQUE(batch_id, scene_name)
+        );
+        CREATE TABLE baselines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, version VARCHAR NOT NULL,
+            branch_tag VARCHAR NOT NULL DEFAULT 'main', scene_id VARCHAR NOT NULL,
+            platform VARCHAR NOT NULL, source_batch_id VARCHAR NOT NULL,
+            status VARCHAR NOT NULL, created_at DATETIME NOT NULL,
+            FOREIGN KEY(source_batch_id) REFERENCES batches(id)
+        );
+        CREATE TABLE comparisons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id VARCHAR NOT NULL,
+            ref_batch_id VARCHAR NOT NULL, baseline_id INTEGER,
+            status VARCHAR NOT NULL, diff_avg FLOAT NOT NULL,
+            created_at DATETIME NOT NULL,
+            FOREIGN KEY(batch_id) REFERENCES batches(id),
+            FOREIGN KEY(ref_batch_id) REFERENCES batches(id),
+            FOREIGN KEY(baseline_id) REFERENCES baselines(id)
+        );
+        INSERT INTO batches VALUES
+            ('current', 'main', 'OldScene', 2, 'Windows', 'CI',
+             '2026-01-02 00:00:00', 5),
+            ('reference', 'main', 'OldScene', 1, 'Windows', 'CI',
+             '2026-01-01 00:00:00', 5);
+        INSERT INTO quality_runs VALUES
+            (10, 'current', 0, 5, NULL, 'legacy', 1,
+             '2026-01-02 00:00:00'),
+            (20, 'reference', 0, 5, NULL, 'legacy', 1,
+             '2026-01-01 00:00:00');
+        INSERT INTO screenshots (
+            id, batch_id, scene_name, path, cache_version, frame_index, camera
+        ) VALUES
+            (100, 'current', 'shot', 'batches/current/shot.png', 'v10', 0, NULL),
+            (200, 'reference', 'shot', 'batches/reference/shot.png', 'v20', 0, NULL);
+        INSERT INTO baselines VALUES (
+            1, 'v1', 'main', 'OldScene', 'Windows', 'reference',
+            'active', '2026-01-01 00:00:00'
+        );
+        INSERT INTO comparisons VALUES (
+            1, 'current', 'reference', 1, 'pass', 0.0,
+            '2026-01-02 00:00:00'
+        );
+
+        -- 精确模拟已发布旧代码的错误重建顺序及第一次失败后的已提交结构。
+        ALTER TABLE batches RENAME TO _batches_old;
+        CREATE TABLE batches (
+            id VARCHAR PRIMARY KEY, branch_tag VARCHAR NOT NULL DEFAULT 'main',
+            scene_id VARCHAR NOT NULL, p4_version INTEGER,
+            platform VARCHAR NOT NULL, creator VARCHAR NOT NULL,
+            created_at DATETIME NOT NULL, shading_quality INTEGER
+        );
+        INSERT INTO batches SELECT * FROM _batches_old;
+        DROP TABLE _batches_old;
+        PRAGMA user_version = 0;
+    """)
+    assert {
+        row[2] for row in connection.execute("PRAGMA foreign_key_list(quality_runs)")
+    } == {"_batches_old"}
+    connection.commit()
+    connection.close()
+
+    env = os.environ.copy()
+    env.update({
+        "PIXELCOMP_DATA_DIR": str(tmp_path),
+        "PIXELCOMP_BACKUP_ENABLED": "0",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+    })
+    command = [sys.executable, "-c", "import app.main"]
+    first = subprocess.run(
+        command,
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert first.returncode == 0, first.stderr
+    # 修复后的库再次启动也必须幂等，不能重复重建或丢失引用。
+    second = subprocess.run(
+        command,
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert second.returncode == 0, second.stderr
+
+    connection = sqlite3.connect(db_path)
+    assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+    assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    for table_name in ("quality_runs", "screenshots", "baselines", "comparisons"):
+        targets = {
+            row[2]
+            for row in connection.execute(f"PRAGMA foreign_key_list({table_name})")
+        }
+        assert "_batches_old" not in targets
+    assert connection.execute(
+        "SELECT source_quality_run_id FROM baselines WHERE id=1"
+    ).fetchone() == (20,)
+    assert connection.execute(
+        "SELECT current_quality_run_id, reference_quality_run_id "
+        "FROM comparisons WHERE id=1"
+    ).fetchone() == (10, 20)
+    assert connection.execute("SELECT COUNT(*) FROM batches").fetchone() == (2,)
     connection.close()
