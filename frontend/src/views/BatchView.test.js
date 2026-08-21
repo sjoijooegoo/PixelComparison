@@ -14,7 +14,6 @@ const storeMock = vi.hoisted(() => ({
   filters: {
     branch_tag: 'main',
     scene_id: '',
-    shading_quality: '',
     dateMode: 'range',
     created_from: '2026-08-14',
     created_to: '2026-08-20',
@@ -24,13 +23,9 @@ const storeMock = vi.hoisted(() => ({
   batchLoading: false,
   initialized: false,
   applyRoute: vi.fn(async (requested) => {
-    const quality = requested.shadingQuality === 'all' || requested.shadingQuality == null
-      ? ''
-      : Number(requested.shadingQuality)
     storeMock.filters = {
       branch_tag: requested.branchTag || 'main',
       scene_id: requested.sceneId || '',
-      shading_quality: quality,
       dateMode: requested.dateMode || 'range',
       created_from: requested.createdFrom || '2026-08-14',
       created_to: requested.createdTo || '2026-08-20',
@@ -41,7 +36,6 @@ const storeMock = vi.hoisted(() => ({
     return {
       branchTag: storeMock.filters.branch_tag,
       sceneId: storeMock.filters.scene_id,
-      shadingQuality: storeMock.filters.shading_quality,
       dateMode: storeMock.filters.dateMode,
       createdFrom: storeMock.filters.created_from,
       createdTo: storeMock.filters.created_to,
@@ -96,11 +90,10 @@ describe('BatchView route synchronization', () => {
     await flushRoute()
   })
 
-  it('无参数地址规范化为 main、全部场景和全部画质', () => {
+  it('无参数地址规范化为 main 和全部场景', () => {
     expect(storeMock.applyRoute).toHaveBeenCalledWith({
       branchTag: 'main',
       sceneId: '',
-      shadingQuality: undefined,
       dateMode: undefined,
       createdFrom: undefined,
       createdTo: undefined,
@@ -109,7 +102,6 @@ describe('BatchView route synchronization', () => {
     })
     expect(router.currentRoute.value.query).toEqual({
       branch_tag: 'main',
-      quality: 'all',
       date_mode: 'range',
       from: '2026-08-14',
       to: '2026-08-20',
@@ -135,7 +127,6 @@ describe('BatchView route synchronization', () => {
     expect(storeMock.applyRoute).toHaveBeenCalledWith({
       branchTag: 'engine-ue5',
       sceneId: 'SceneB',
-      shadingQuality: '3',
       dateMode: 'days',
       createdFrom: undefined,
       createdTo: undefined,
@@ -145,9 +136,9 @@ describe('BatchView route synchronization', () => {
     expect(storeMock.filters).toMatchObject({
       branch_tag: 'engine-ue5',
       scene_id: 'SceneB',
-      shading_quality: 3,
       dateMode: 'days',
     })
+    expect(router.currentRoute.value.query).not.toHaveProperty('quality')
     expect(storeMock.batchPage).toBe(2)
     wrapper.unmount()
   })

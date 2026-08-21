@@ -7,7 +7,6 @@ import {
   MAX_DATE_RANGE_DAYS,
   defaultDateRange,
   isDateRangeAllowed,
-  visibleQualityOptions,
 } from '../store'
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
 import { useProjectStore } from '../stores/projectStore'
@@ -16,8 +15,6 @@ const store = useBatchCatalogStore()
 const project = useProjectStore()
 const router = useRouter()
 
-// 画质下拉选项:跟随项目设置「筛选框显示的画质」
-const qualityOptions = computed(() => visibleQualityOptions(project.settings))
 const unlistedSceneIds = computed(() => new Set(project.meta.unlisted_scene_ids || []))
 
 function sceneHasBatchData(sceneId) {
@@ -65,10 +62,6 @@ function replaceFilters(overrides = {}) {
   return router.replace(contextTarget(overrides))
 }
 
-function onQualityChange(quality) {
-  void replaceFilters({ shading_quality: quality ?? '' })
-}
-
 function onDateChange(v) {
   if (v?.[0] && v?.[1]) {
     if (!isDateRangeAllowed(v[0], v[1])) {
@@ -109,7 +102,7 @@ function removeDay(d) {
 }
 
 function reset() {
-  // 批次管理清空后固定回到 main、全部场景、全部画质和项目默认日期范围。
+  // 批次管理清空后固定回到 main、全部场景和项目默认日期范围。
   dayPick.value = null
   dayPickerOpen.value = false
   void router.replace(batchLocation(batchStateFromFilters(store.defaultFilters())))
@@ -141,13 +134,6 @@ function reset() {
             <span v-if="unlistedSceneIds.has(s)" class="unlisted">未配置</span>
           </span>
         </a-option>
-      </a-select>
-    </div>
-    <div class="field">
-      <span class="label">画质</span>
-      <a-select :model-value="store.filters.shading_quality" placeholder="全部画质" allow-clear
-        size="small" style="width: 130px" @change="onQualityChange">
-        <a-option v-for="o in qualityOptions" :key="o.value" :value="o.value">{{ o.label }}</a-option>
       </a-select>
     </div>
     <div class="field">

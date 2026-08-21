@@ -51,6 +51,13 @@ beforeEach(async () => {
 })
 
 describe('FilterSidebar scene data availability', () => {
+  it('批次管理不展示画质筛选', () => {
+    const wrapper = mountSidebar()
+
+    expect(wrapper.text()).not.toContain('画质')
+    expect(wrapper.findAllComponents(SelectStub)).toHaveLength(2)
+  })
+
   it('批次目录按当前筛选聚合结果置灰，并保持选项可选', async () => {
     const project = useProjectStore()
     const store = useBatchCatalogStore()
@@ -76,7 +83,6 @@ describe('FilterSidebar scene data availability', () => {
     store.filters = {
       branch_tag: 'main',
       scene_id: 'SceneA',
-      shading_quality: 3,
       dateMode: 'range',
       created_from: '2026-08-14',
       created_to: '2026-08-20',
@@ -93,7 +99,6 @@ describe('FilterSidebar scene data availability', () => {
       query: {
         branch_tag: 'main',
         scene_id: 'SceneB',
-        quality: '3',
         date_mode: 'range',
         from: '2026-08-14',
         to: '2026-08-20',
@@ -102,11 +107,10 @@ describe('FilterSidebar scene data availability', () => {
     expect(store.filters.scene_id).toBe('SceneA')
   })
 
-  it('清空筛选写入 main、全部场景和全部画质', async () => {
+  it('清空筛选写入 main 和全部场景', async () => {
     const store = useBatchCatalogStore()
     store.filters.branch_tag = 'engine-ue5'
     store.filters.scene_id = 'SceneA'
-    store.filters.shading_quality = 4
     const replace = vi.spyOn(router, 'replace')
     const wrapper = mountSidebar()
 
@@ -119,9 +123,9 @@ describe('FilterSidebar scene data availability', () => {
       path: '/batches',
       query: expect.objectContaining({
         branch_tag: 'main',
-        quality: 'all',
       }),
     }))
     expect(replace.mock.calls[0][0].query).not.toHaveProperty('scene_id')
+    expect(replace.mock.calls[0][0].query).not.toHaveProperty('quality')
   })
 })

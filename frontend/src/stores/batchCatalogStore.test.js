@@ -39,7 +39,7 @@ beforeEach(() => {
 })
 
 describe('batch catalog requests', () => {
-  it('无查询参数时默认 main、全部场景和全部画质', async () => {
+  it('无查询参数时默认 main 和全部场景', async () => {
     apiMock.batches.mockResolvedValue({ items: [], total: 0 })
     const store = useBatchCatalogStore()
 
@@ -48,22 +48,21 @@ describe('batch catalog requests', () => {
     expect(store.filters).toMatchObject({
       branch_tag: 'main',
       scene_id: '',
-      shading_quality: '',
       dateMode: 'range',
     })
     expect(store.batchPage).toBe(1)
     expect(apiMock.batches).toHaveBeenCalledWith(expect.objectContaining({
       branch_tag: 'main',
       scene_id: '',
-      shading_quality: '',
       page: 1,
     }))
+    expect(apiMock.batches.mock.calls[0][0]).not.toHaveProperty('shading_quality')
     expect(normalized).toMatchObject({
-      branchTag: 'main', sceneId: '', shadingQuality: '', page: 1,
+      branchTag: 'main', sceneId: '', page: 1,
     })
   })
 
-  it('从路由恢复分支、场景、画质、指定日期和页码', async () => {
+  it('从路由恢复分支、场景、指定日期和页码并忽略历史画质参数', async () => {
     apiMock.batches.mockResolvedValue({ items: [], total: 0 })
     const store = useBatchCatalogStore()
 
@@ -79,7 +78,6 @@ describe('batch catalog requests', () => {
     expect(store.filters).toMatchObject({
       branch_tag: 'engine-ue5',
       scene_id: 'SceneB',
-      shading_quality: 3,
       dateMode: 'days',
       created_dates: ['2026-08-01', '2026-08-03'],
     })
@@ -87,10 +85,10 @@ describe('batch catalog requests', () => {
     expect(apiMock.batches).toHaveBeenCalledWith(expect.objectContaining({
       branch_tag: 'engine-ue5',
       scene_id: 'SceneB',
-      shading_quality: 3,
       created_dates: ['2026-08-01', '2026-08-03'],
       page: 2,
     }))
+    expect(apiMock.batches.mock.calls[0][0]).not.toHaveProperty('shading_quality')
     expect(normalized.page).toBe(2)
   })
 
@@ -148,12 +146,11 @@ describe('batch catalog requests', () => {
     expect(apiMock.batches).not.toHaveBeenCalled()
   })
 
-  it('场景可用性应用除场景自身外的画质和日期筛选', async () => {
+  it('场景可用性应用除场景自身外的分支和日期筛选', async () => {
     const store = useBatchCatalogStore()
     store.filters = {
       branch_tag: 'engine-ue5',
       scene_id: 'SceneA',
-      shading_quality: 3,
       dateMode: 'range',
       created_from: '2026-08-01',
       created_to: '2026-08-07',
@@ -167,13 +164,12 @@ describe('batch catalog requests', () => {
     expect(apiMock.sceneAvailability).toHaveBeenCalledWith({
       capability: 'batches',
       branch_tag: 'engine-ue5',
-      shading_quality: 3,
       created_from: '2026-08-01',
       created_to: '2026-08-07',
     }, { signal: expect.any(AbortSignal) })
   })
 
-  it('快速切换筛选时旧场景可用性响应不能覆盖新状态', async () => {
+  it('快速切换日期时旧场景可用性响应不能覆盖新状态', async () => {
     const oldRequest = deferred()
     const newRequest = deferred()
     apiMock.sceneAvailability
@@ -181,9 +177,9 @@ describe('batch catalog requests', () => {
       .mockReturnValueOnce(newRequest.promise)
     const store = useBatchCatalogStore()
 
-    store.filters.shading_quality = 5
+    store.filters.created_from = '2026-08-01'
     const oldLoad = store.loadSceneAvailability()
-    store.filters.shading_quality = 3
+    store.filters.created_from = '2026-08-02'
     const newLoad = store.loadSceneAvailability()
     newRequest.resolve({ scene_ids: ['NewScene'] })
     await newLoad

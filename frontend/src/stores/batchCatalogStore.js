@@ -7,7 +7,6 @@ import {
   defaultDateRange,
   isDateRangeAllowed,
   normalizeSelectedDates,
-  normalizeShadingQuality,
 } from '../store'
 import { useProjectStore } from './projectStore'
 
@@ -34,7 +33,6 @@ function routeFilters(project, requested) {
   const filters = {
     branch_tag: branchTag,
     scene_id: sceneId,
-    shading_quality: normalizeShadingQuality(requested.shadingQuality),
     dateMode: 'range',
     ...defaultDateRange(project.settings.default_date_range_days ?? 7),
     created_dates: [],
@@ -67,7 +65,6 @@ function normalizedRoute(filters, page) {
   return {
     branchTag: filters.branch_tag,
     sceneId: filters.scene_id,
-    shadingQuality: filters.shading_quality,
     dateMode: filters.dateMode,
     createdFrom: filters.created_from,
     createdTo: filters.created_to,
@@ -81,7 +78,6 @@ export const useBatchCatalogStore = defineStore('batchCatalog', {
     filters: {
       branch_tag: 'main',
       scene_id: '',
-      shading_quality: '',
       dateMode: 'range',
       ...defaultDateRange(),
       created_dates: [],
@@ -117,7 +113,6 @@ export const useBatchCatalogStore = defineStore('batchCatalog', {
       return {
         branch_tag: 'main',
         scene_id: '',
-        shading_quality: '',
         dateMode: 'range',
         ...defaultDateRange(project.settings.default_date_range_days ?? 7),
         created_dates: [],

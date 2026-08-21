@@ -162,11 +162,11 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
         <div class="block-title">筛选默认值</div>
         <div class="grid grid-2">
           <div class="field field-full">
-            <label>筛选框显示的画质</label>
+            <label>截图对比显示的画质</label>
             <a-checkbox-group v-model="form.filter_shading_qualities">
               <a-checkbox v-for="o in SHADING_QUALITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</a-checkbox>
             </a-checkbox-group>
-            <span class="hint">勾选哪些画质会出现在筛选框的画质下拉里(至少勾一个;不勾任何项保存时回退为全部)</span>
+            <span class="hint">勾选哪些画质会出现在「截图对比」的画质下拉里(至少勾一个;不勾任何项保存时回退为全部)</span>
           </div>
           <div class="field field-full">
             <label>目录外场景</label>
@@ -181,7 +181,7 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
             <a-select v-model="form.default_shading_quality" size="large">
               <a-option v-for="o in defaultQualityOptions" :key="o.value" :value="o.value">{{ o.label }}</a-option>
             </a-select>
-            <span class="hint">进入「截图对比」或在该页点「清空」时默认选中此项；「批次管理」始终默认全部画质</span>
+            <span class="hint">进入「截图对比」或在该页点「清空」时默认选中此项；「批次管理」不按画质筛选</span>
           </div>
           <div class="field">
             <label>默认日期范围(最近 N 天)</label>
