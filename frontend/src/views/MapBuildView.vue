@@ -906,7 +906,7 @@ onUnmounted(() => {
             </div>
             <div class="trend-controls">
               <a-select :model-value="trendRangeMode === 'custom' ? 'custom' : filters.days"
-                size="small" class="days-select" popup-container=".map-build-page"
+                size="small" class="days-select"
                 @change="changeTrendRangeMode">
                 <a-option :value="7">最近 7 天</a-option>
                 <a-option :value="14">最近 14 天</a-option>
@@ -917,7 +917,6 @@ onUnmounted(() => {
               </a-select>
               <a-range-picker v-if="trendRangeMode === 'custom'" class="custom-range-picker"
                 size="small" value-format="YYYY-MM-DD" :allow-clear="false"
-                popup-container=".map-build-page"
                 :model-value="customDateRange" @change="changeCustomDateRange" />
             </div>
           </header>

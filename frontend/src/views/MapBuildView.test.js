@@ -260,6 +260,19 @@ describe('MapBuildView', () => {
     })
   })
 
+  it('趋势筛选弹层不挂载到内部滚动容器', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findComponent('.scene-select').attributes('popup-container'))
+      .toBe('.map-build-page')
+    expect(wrapper.findComponent('.days-select').attributes('popup-container')).toBeUndefined()
+
+    await wrapper.findComponent('.days-select').vm.$emit('change', 'custom')
+    expect(wrapper.findComponent('.custom-range-picker').attributes('popup-container'))
+      .toBeUndefined()
+  })
+
   it('刷新自定义日期 URL 后恢复日历范围', async () => {
     routeMock.path = '/map-build/Coral_WP'
     routeMock.params.sceneId = 'Coral_WP'
