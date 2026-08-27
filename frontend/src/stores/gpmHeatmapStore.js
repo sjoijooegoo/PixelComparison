@@ -74,7 +74,8 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       branchTag: 'main', platform: '', sceneId: '', shadingQuality: '', batchId: '',
     },
     metricKey: 'Scene_DC',
-    days: 30,
+    trendMode: 'average',
+    days: 14,
     frame: null,
     selectedPointId: null,
     pointDetail: null,
@@ -110,6 +111,11 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
   actions: {
     cancelAll() {
       for (const channel of ['meta', 'frame', 'detail', 'trends']) cancelChannel(this, channel)
+    },
+
+    dispose() {
+      invalidateRouteApplication(this)
+      this.cancelAll()
     },
 
     async loadMeta() {
@@ -185,7 +191,7 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       const pointId = this.selectedPointId
       if (pointId == null) {
         this.pointDetail = null
-        this.trends = null
+        if (this.trendMode === 'point') this.trends = null
         return null
       }
       const key = String(pointId)
@@ -212,13 +218,30 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
 
     async loadTrends() {
       const pointId = this.selectedPointId
-      if (pointId == null) return null
-      const key = `${pointId}:${this.days}`
+      if (this.trendMode === 'point' && pointId == null) {
+        this.trends = null
+        return null
+      }
+      if (this.trendMode === 'average' && !this.filters.sceneId) {
+        this.trends = null
+        return null
+      }
+      const scope = {
+        branch_tag: this.filters.branchTag,
+        platform: this.filters.platform,
+        shading_quality: this.filters.shadingQuality,
+        days: this.days,
+      }
+      const key = this.trendMode === 'average'
+        ? JSON.stringify(['average', this.filters.sceneId, scope])
+        : `point:${pointId}:${this.days}`
       const request = begin(this, 'trends', key)
       if (request.duplicate) return request.duplicate
       this.loading.trends = true
       this.errors.trends = ''
-      const promise = api.gpmHeatmapTrends(pointId, { days: this.days }, { signal: request.signal })
+      const promise = this.trendMode === 'average'
+        ? api.gpmHeatmapSceneTrends(this.filters.sceneId, scope, { signal: request.signal })
+        : api.gpmHeatmapTrends(pointId, { days: this.days }, { signal: request.signal })
       request.setPromise(promise)
       try {
         const data = await promise
@@ -227,7 +250,7 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
         return data
       } catch (error) {
         if (isRequestCancelled(error) || !request.isLatest()) return null
-        this.errors.trends = error?.message || '点位趋势加载失败'
+        this.errors.trends = error?.message || '趋势数据加载失败'
         throw error
       } finally {
         if (request.isLatest()) this.loading.trends = false
@@ -239,12 +262,22 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       if (Number(pointId) === Number(this.selectedPointId) && this.pointDetail) return this.pointDetail
       invalidateRouteApplication(this)
       cancelChannel(this, 'detail')
-      cancelChannel(this, 'trends')
+      if (this.trendMode === 'point') cancelChannel(this, 'trends')
       this.selectedPointId = pointId
-      this.pointDetail = null
-      this.trends = null
-      await Promise.all([this.loadPoint(), this.loadTrends()])
+      await Promise.all([
+        this.loadPoint(),
+        this.trendMode === 'point' ? this.loadTrends() : Promise.resolve(null),
+      ])
       return this.pointDetail
+    },
+
+    async changeTrendMode(mode) {
+      const nextMode = mode === 'average' ? 'average' : 'point'
+      if (nextMode === this.trendMode && this.trends) return this.trends
+      invalidateRouteApplication(this)
+      cancelChannel(this, 'trends')
+      this.trendMode = nextMode
+      return this.loadTrends()
     },
 
     async applyRoute(requested = {}) {
@@ -263,7 +296,8 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
         qualityValue(requested.shadingQuality), this.qualityOptions, 5,
       )
       this.metricKey = requested.metric || 'Scene_DC'
-      this.days = [7, 14, 30, 60, 90].includes(Number(requested.days)) ? Number(requested.days) : 30
+      this.trendMode = requested.trendMode === 'point' ? 'point' : 'average'
+      this.days = [7, 14, 30].includes(Number(requested.days)) ? Number(requested.days) : 14
       this.selectedPointId = requested.point ? Number(requested.point) : null
       await this.loadFrame(requested.batchId || '')
       if (!isCurrentRoute()) return null
@@ -307,6 +341,7 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
         batchId: this.filters.batchId,
         metric: this.metricKey,
         point: this.selectedPointId,
+        trendMode: this.trendMode,
         days: this.days,
       }
     },

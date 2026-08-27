@@ -17,6 +17,7 @@ const router = useRouter()
 let unregisterRefresh = null
 let applyingRoute = false
 let routeSequence = 0
+let synchronizedRoutePath = ''
 
 const routeSceneId = () => {
   const value = route.params.sceneId
@@ -36,7 +37,8 @@ function routeRequest() {
     batchId: queryValue('batch') || '',
     metric: queryValue('metric') || 'Scene_DC',
     point: queryValue('point') || '',
-    days: queryValue('days') || 30,
+    trendMode: queryValue('trend_mode') || 'average',
+    days: queryValue('days') || 14,
   }
 }
 
@@ -49,7 +51,8 @@ function normalizedLocation() {
   if (state.batchId) query.batch = state.batchId
   if (state.metric && state.metric !== 'Scene_DC') query.metric = state.metric
   if (state.point != null) query.point = String(state.point)
-  if (state.days !== 30) query.days = String(state.days)
+  if (state.trendMode !== 'average') query.trend_mode = state.trendMode
+  if (state.days !== 14) query.days = String(state.days)
   return {
     path: state.sceneId ? `/gpm-heatmap/${encodeURIComponent(state.sceneId)}` : '/gpm-heatmap',
     query,
@@ -57,19 +60,23 @@ function normalizedLocation() {
 }
 
 function sameLocation(target) {
-  const current = Object.fromEntries(Object.entries(route.query).map(([key, value]) => [
-    key, String(Array.isArray(value) ? value[0] : value),
-  ]))
-  const desired = Object.fromEntries(Object.entries(target.query).map(([key, value]) => [key, String(value)]))
-  return route.path === target.path && JSON.stringify(current) === JSON.stringify(desired)
+  return route.fullPath === router.resolve(target).fullPath
 }
 
 async function syncRoute() {
   const target = normalizedLocation()
-  if (sameLocation(target)) return
+  const targetPath = router.resolve(target).fullPath
+  if (sameLocation(target)) {
+    synchronizedRoutePath = ''
+    return
+  }
+  synchronizedRoutePath = targetPath
   applyingRoute = true
   try {
     await router.replace(target)
+  } catch (error) {
+    if (synchronizedRoutePath === targetPath) synchronizedRoutePath = ''
+    throw error
   } finally {
     applyingRoute = false
   }
@@ -97,8 +104,10 @@ async function changeScope(change) {
 
 async function selectPoint(pointId) {
   try {
-    await store.selectPoint(pointId)
+    const loading = store.selectPoint(pointId)
+    // 点位身份先进入地址栏；详情仍可保留上一帧并以 loading 状态平滑过渡。
     await syncRoute()
+    await loading
   } catch (error) {
     Message.error(error?.message || '点位数据加载失败')
   }
@@ -114,6 +123,15 @@ async function changeDays(days) {
   }
 }
 
+async function changeTrendMode(mode) {
+  try {
+    await store.changeTrendMode(mode)
+    await syncRoute()
+  } catch (error) {
+    Message.error(error?.message || '趋势统计方式切换失败')
+  }
+}
+
 async function refresh() {
   await store.refresh()
   await syncRoute()
@@ -124,18 +142,33 @@ function formatBatch(batch) {
   return `P4 ${batch?.p4_version ?? '—'} · ${time || '时间未知'}`
 }
 
-const trendDefinitions = computed(() => {
-  const labels = {
-    Scene_DC: '场景 DC', Scene_Tris: '场景面数', Drawcall: 'DrawCall', Triangle: 'Triangle',
-  }
-  const colors = ['#3491fa', '#f7ba1e', '#4cd6b0', '#a871e3']
-  return (store.frame?.trend || []).slice(0, 4).map((item, index) => ({
-    key: item.key, title: labels[item.key] || item.name || item.key, color: colors[index],
-  }))
+const trendGroups = computed(() => {
+  const available = new Set((store.frame?.trend || []).map((item) => item.key))
+  return [
+    {
+      key: 'draw-calls', title: 'DC 趋势',
+      series: [
+        { key: 'Scene_DC', label: '场景 DC', color: '#4cd6b0' },
+        { key: 'Drawcall', label: '全部 DC', color: '#3491fa' },
+      ].filter((item) => available.has(item.key)),
+    },
+    {
+      key: 'triangles', title: '面数趋势',
+      series: [
+        { key: 'Scene_Tris', label: '场景面数', color: '#4cd6b0' },
+        { key: 'Triangle', label: '全部面数', color: '#3491fa' },
+      ].filter((item) => available.has(item.key)),
+    },
+  ].filter((group) => group.series.length)
 })
 
 watch(() => route.fullPath, () => {
-  if (!applyingRoute) applyCurrentRoute()
+  if (route.fullPath === synchronizedRoutePath) {
+    synchronizedRoutePath = ''
+    return
+  }
+  if (applyingRoute) return
+  applyCurrentRoute()
 })
 
 onMounted(() => {
@@ -144,43 +177,51 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   unregisterRefresh?.()
-  store.cancelAll()
+  store.dispose()
 })
 </script>
 
 <template>
   <main class="gpm-page">
     <section class="gpm-filters card">
-      <label class="filter-field compact"><span>平台</span>
-        <a-select :model-value="store.filters.platform" :loading="store.loading.meta"
+      <div class="filter-field compact"><span>平台</span>
+        <a-select class="filter-select platform-select" size="small"
+          popup-container=".gpm-page"
+          :model-value="store.filters.platform" :loading="store.loading.meta"
           @change="changeScope({ platform: $event })">
           <a-option v-for="item in store.platformOptions" :key="item" :value="item">{{ item }}</a-option>
         </a-select>
-      </label>
-      <label class="filter-field scene"><span>场景 ID</span>
-        <a-select :model-value="store.filters.sceneId" allow-search :loading="store.loading.meta"
+      </div>
+      <div class="filter-field scene"><span>场景 ID</span>
+        <a-select class="filter-select scene-select" size="small"
+          popup-container=".gpm-page"
+          :model-value="store.filters.sceneId" allow-search :loading="store.loading.meta"
           @change="changeScope({ sceneId: $event })">
           <a-option v-for="item in store.sceneOptions" :key="item.value" :value="item.value">
             {{ item.value }}
           </a-option>
         </a-select>
-      </label>
-      <label class="filter-field compact"><span>画质</span>
-        <a-select :model-value="store.filters.shadingQuality" :loading="store.loading.meta"
+      </div>
+      <div class="filter-field compact"><span>画质</span>
+        <a-select class="filter-select quality-select" size="small"
+          popup-container=".gpm-page"
+          :model-value="store.filters.shadingQuality" :loading="store.loading.meta"
           @change="changeScope({ shadingQuality: $event })">
           <a-option v-for="item in store.qualityOptions" :key="item.value" :value="item.value">
             {{ item.label }}
           </a-option>
         </a-select>
-      </label>
-      <label class="filter-field batch"><span>采集批次</span>
-        <a-select :model-value="store.filters.batchId" :loading="store.loading.frame"
+      </div>
+      <div class="filter-field batch"><span>采集批次</span>
+        <a-select class="filter-select batch-select" size="small"
+          popup-container=".gpm-page"
+          :model-value="store.filters.batchId" :loading="store.loading.frame"
           @change="changeScope({ batchId: $event })">
           <a-option v-for="item in store.batchOptions" :key="item.batch_id" :value="item.batch_id">
             {{ formatBatch(item) }}
           </a-option>
         </a-select>
-      </label>
+      </div>
     </section>
 
     <div v-if="store.errors.meta && !store.sceneOptions.length" class="page-error card">
@@ -208,20 +249,29 @@ onBeforeUnmount(() => {
           @select="selectPoint" />
       </section>
 
-      <section class="trend-section">
-        <header class="trend-header card">
-          <div><strong>点位 {{ String(store.selectedPoint?.index || '').padStart(2, '0') }} · 版本趋势</strong>
-            <span>跟随当前选中点位</span></div>
-          <a-select :model-value="store.days" class="days-select" @change="changeDays">
-            <a-option v-for="value in [7, 14, 30, 60, 90]" :key="value" :value="value">
-              最近 {{ value }} 天
-            </a-option>
-          </a-select>
+      <section class="trend-section card">
+        <header class="trend-section-header">
+          <strong>数据趋势</strong>
+          <div class="trend-card-controls">
+            <a-radio-group :model-value="store.trendMode" type="button" size="small"
+              @change="changeTrendMode">
+              <a-radio value="average">整体平均</a-radio>
+              <a-radio value="point">单个点位</a-radio>
+            </a-radio-group>
+            <a-select :model-value="store.days" class="days-select" size="small" @change="changeDays">
+              <a-option v-for="value in [7, 14, 30]" :key="value" :value="value">
+                最近 {{ value }} 天
+              </a-option>
+            </a-select>
+          </div>
         </header>
         <div class="trend-grid">
-          <GpmTrendCard v-for="item in trendDefinitions" :key="item.key"
-            :title="item.title" :metric-key="item.key" :color="item.color"
-            :available="store.trends?.available !== false" :points="store.trends?.points || []" />
+          <GpmTrendCard v-for="item in trendGroups" :key="item.key"
+            :title="item.title" :series="item.series"
+            :storage-key="`pixelcomp.gpmTrend.${item.key}.visibleSeries.v1`"
+            :current-batch-id="store.filters.batchId"
+            :empty-label="store.trendMode === 'average' ? '整体平均' : '单个点位'"
+            :points="store.trends?.points || []" />
         </div>
       </section>
     </template>
@@ -231,16 +281,19 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .gpm-page {
-  flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px 18px;
+  position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px 18px;
   display: flex; flex-direction: column; gap: 10px;
 }
 .gpm-filters {
-  flex: 0 0 auto; min-height: 54px; padding: 8px 12px; display: grid;
-  grid-template-columns: minmax(180px, .75fr) minmax(300px, 1.35fr) minmax(180px, .75fr) minmax(330px, 1.4fr);
-  gap: 12px; align-items: center; overflow: visible;
+  flex: 0 0 auto; min-height: 48px; padding: 10px 14px; display: flex;
+  flex-wrap: wrap; gap: 10px 16px; align-items: center; overflow: visible;
 }
-.filter-field { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
-.filter-field > span { color: var(--color-text-3); white-space: nowrap; }
+.filter-field { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.filter-field > span { color: var(--color-text-3); font-size: 12px; white-space: nowrap; }
+.filter-field :deep(.platform-select) { width: 180px; }
+.filter-field :deep(.scene-select) { width: 380px; }
+.filter-field :deep(.quality-select) { width: 130px; }
+.filter-field :deep(.batch-select) { width: 310px; }
 .filter-field :deep(.arco-select-view) { background: var(--color-fill-2); border-color: transparent; }
 .overview-section {
   flex: 0 0 auto; min-width: 0; height: max(838px, calc(100dvh - 144px)); display: grid;
@@ -252,17 +305,43 @@ onBeforeUnmount(() => {
 }
 .page-loading, .page-error, .page-empty { min-height: 240px; display: flex; align-items: center; justify-content: center; gap: 12px; color: var(--color-text-3); }
 .page-error { color: rgb(var(--red-6)); }
-.trend-section { display: flex; flex-direction: column; gap: 10px; }
-.trend-header { min-height: 54px; padding: 7px 14px; display: flex; align-items: center; justify-content: space-between; overflow: visible; }
-.trend-header div { display: flex; align-items: baseline; gap: 10px; }
-.trend-header strong { font-size: 14px; }
-.trend-header span { color: var(--color-text-3); }
-.days-select { width: 150px; }
-.trend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.trend-section {
+  min-width: 0; min-height: 1007px; height: 1007px;
+  box-sizing: border-box; padding: 10px 12px 12px; overflow: visible;
+  display: flex; flex-direction: column;
+}
+.trend-section-header {
+  min-height: 30px; padding: 0 4px 8px; display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+.trend-section-header > strong {
+  color: var(--color-text-1); font-size: 15px; font-weight: 600;
+}
+.trend-card-controls {
+  min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+}
+.trend-card-controls :deep(.arco-radio-group) { flex: 0 0 auto; }
+.trend-card-controls :deep(.arco-radio-button-content) {
+  min-height: 22px; padding: 0 8px; font-size: 11px; line-height: 20px;
+}
+.trend-card-controls :deep(.days-select) { flex: 0 0 112px; width: 112px; }
+.trend-card-controls :deep(.days-select.arco-select-view) {
+  background: var(--color-fill-2); border-color: var(--color-border-1);
+}
+.trend-grid {
+  flex: 1; min-width: 0; min-height: 0; display: grid;
+  grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 8px;
+}
 @media (max-width: 1180px) {
-  .gpm-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .overview-section { height: auto; min-height: 0; grid-template-rows: auto auto; }
   .workspace-grid { flex: 0 0 auto; min-height: 0; grid-template-columns: 1fr; grid-template-rows: repeat(2, 680px); }
-  .trend-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .filter-field { width: 100%; }
+  .filter-field :deep(.filter-select) { flex: 1; width: auto; min-width: 0; }
+  .trend-card-controls { flex-wrap: wrap; }
+  .trend-section { height: auto; min-height: 0; }
+  .trend-grid { grid-template-rows: none; }
+  .trend-grid :deep(.trend-card) { min-height: 285px; }
 }
 </style>

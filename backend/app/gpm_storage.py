@@ -118,6 +118,8 @@ def initialize_gpm_database() -> None:
 
                 CREATE INDEX IF NOT EXISTS ix_gpm_upload_scope
                     ON gpm_uploads(branch_tag, platform, shading_quality, captured_at DESC);
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_gpm_batch_id
+                    ON gpm_uploads(batch_id);
                 CREATE INDEX IF NOT EXISTS ix_gpm_scene_lookup
                     ON gpm_scenes(scene_id, upload_id);
                 CREATE INDEX IF NOT EXISTS ix_gpm_point_scene

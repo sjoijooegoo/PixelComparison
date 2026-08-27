@@ -13,7 +13,7 @@ GPMHeatmap 是与截图批次、截图对比和烘培数据相互隔离的点位
 
 首屏左侧是地图与热力点，右侧是当前点位的 `detail_data` 列表，下方是横向点位截图。点击地图方块或截图会同步点位、详情和地址栏。地图点位使用纯色方块，短箭头表示采集方向。
 
-版本趋势默认查询最近 30 天。只有上报数据提供稳定 `point_key`（也接受 `teleport_point_id`）时，后端才会跨批次关联同一物理点位。缺少稳定键时只展示当前批次值，并明确提示无法安全形成趋势；不会用易变化的数组序号拼接历史数据。
+数据趋势默认使用“整体平均”和最近 14 天，可切换为 7、14、30 天。整体平均直接读取每次场景上报的趋势汇总；切换到“单个点位”时，只有上报数据提供稳定 `point_key`（也接受 `teleport_point_id`）才会跨批次关联同一物理点位。缺少稳定键时只保留当前批次值，不用易变化的数组序号拼接历史数据，也不额外打断用户操作。
 
 ## 2. 数据与环境变量
 
@@ -46,7 +46,7 @@ GPMHeatmap 是与截图批次、截图对比和烘培数据相互隔离的点位
 | `report` | 是 | `GPMHeatmap.json`；每个场景携带 `p4_version`、`platform`、`shading_quality` |
 | `screenshots` | 是 | `GPMScreenshot.zip` |
 | `pipeline_data` | 是 | JSON 对象，见下方结构 |
-| `overwrite` | 否 | 默认 `false`；同分支、同批次覆盖时必须显式为 `true` |
+| `overwrite` | 否 | 默认 `false`；同批次覆盖时必须显式为 `true` |
 
 `pipeline_data` 的规范结构如下。`batch_id` 和 `captured_at` 必填，`branch_tag` 缺省为 `main`，`batch_url` 可省略：
 
@@ -59,7 +59,7 @@ GPMHeatmap 是与截图批次、截图对比和烘培数据相互隔离的点位
 }
 ```
 
-同一报告内所有场景的 `platform`、`shading_quality` 和 `p4_version` 必须一致；`shading_quality` 范围为 0～5。为兼容已经接入的旧调用，后端暂时仍接受同名顶层表单字段，但新调用不得重复发送；两套字段同时存在且值冲突时整次上报失败。
+`batch_id` 在 GPMHeatmap 数据域内跨分支全局唯一；覆盖不能把已有批次移动到其他分支。同一报告内每个场景必须同时携带且保持一致的 `platform`、`shading_quality` 和 `p4_version`，`shading_quality` 范围为 0～5。为兼容已经接入的旧调用，后端暂时仍接受“所有场景都不携带这三个字段、统一由同名顶层表单字段补充”的早期格式；部分场景携带、部分场景缺失，以及两套入口值冲突，都会使整次上报失败。
 
 ZIP 中图片文件名的主文件名必须与每个点位的 `screenshot_id` 一致，例如 `screenshot_id=8` 对应 `8.jpg`。少图、多图、重复图、不安全路径、不可解码图片，以及同一场景内重复的稳定 `point_key`，都会使整次上报失败，不会写入部分场景。
 
@@ -88,7 +88,7 @@ curl.exe -X POST "http://127.0.0.1:8020/api/gpm-heatmaps/uploads" `
 | `origin_x` / `origin_y` | 世界坐标左下角起点 |
 | `range_x` / `range_y` | X/Y 世界坐标范围，必须大于 0 |
 | `x_reverse` / `y_reverse` | 坐标轴是否反转 |
-| `color_ranges` | 指标到三个分段阈值的 JSON 对象 |
+| `color_ranges` | 预留的指标阈值配置 JSON；当前页面仍会保存并返回，暂不参与着色 |
 
 Village 演示地图配置：
 
@@ -101,7 +101,7 @@ curl.exe -X POST "http://127.0.0.1:8020/api/gpm-heatmaps/maps/Village_Dimension_
   --form-string 'color_ranges={"Scene_DC":[150,300,450]}'
 ```
 
-前端对地图图片使用 `contain`，Canvas 只在图片真实渲染矩形内绘点。X/Y 分别按各自世界范围映射，因此地图图片无需强制裁成世界坐标范围的相同比例，但必须完整包含配置范围。
+前端对地图图片使用 `contain`，Canvas 只在图片真实渲染矩形内绘点。X/Y 分别按各自世界范围映射，因此地图图片无需强制裁成世界坐标范围的相同比例，但必须完整包含配置范围。当前所选指标按本批次点位的最小值到最大值做绿色→红色线性映射，方便观察同批次内相对高低；不同批次的颜色不能直接作为绝对阈值比较。
 
 ## 5. 主要读取接口
 
@@ -109,8 +109,9 @@ curl.exe -X POST "http://127.0.0.1:8020/api/gpm-heatmaps/maps/Village_Dimension_
 |---|---|
 | `GET /api/gpm-heatmaps/meta` | 平台、画质、场景筛选项 |
 | `GET /api/gpm-heatmaps/scenes/{scene_id}/frame` | 地图配置、热力指标、批次列表和紧凑点位数据 |
+| `GET /api/gpm-heatmaps/scenes/{scene_id}/trends?days=14` | 当前场景的整体平均趋势 |
 | `GET /api/gpm-heatmaps/points/{point_id}` | 单点完整 `detail_data` 与原图 |
-| `GET /api/gpm-heatmaps/points/{point_id}/trends?days=30` | 单点跨批次趋势或不可关联原因 |
+| `GET /api/gpm-heatmaps/points/{point_id}/trends?days=14` | 单点跨批次趋势；范围仅支持 7、14、30 天 |
 | `DELETE /api/gpm-heatmaps/uploads/{batch_id}?branch_tag=main` | 删除 GPM 批次、点位和独立截图资源 |
 
-列表接口只返回点位热字段和缩略图；体积较大的 `detail_data` 在用户选中点位后单独加载。快速切换场景、批次和点位时，前端会取消旧请求并通过请求序号阻止过期响应覆盖当前状态。
+列表接口只返回点位热字段和缩略图；体积较大的 `detail_data` 在用户选中点位后单独加载。快速切换场景、批次和点位时，前端会取消旧请求并通过请求序号阻止过期响应覆盖当前状态。删除操作先提交独立数据库，再清理该批次资源；极端文件系统故障只可能留下不可达的孤儿文件，不会让仍可查询的记录失去图片。

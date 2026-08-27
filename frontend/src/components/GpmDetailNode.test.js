@@ -38,6 +38,8 @@ describe('GpmDetailNode', () => {
     const wrapper = mount(GpmDetailNode, { props: { node: { name: 'GPUCulled' } } })
 
     expect(wrapper.get('.detail-summary').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.detail-summary').classes()).toContain('empty')
+    expect(wrapper.get('.detail-summary').attributes('aria-expanded')).toBeUndefined()
   })
 
   it('同一层级只展开一个子节点', async () => {
@@ -77,7 +79,7 @@ describe('GpmDetailNode', () => {
     expect(wrapper.text()).toContain('foliage')
   })
 
-  it('点击表头后按当前列升序和降序排列', async () => {
+  it('首次点击表头后按当前列降序排列，再次点击切换为升序', async () => {
     const sourceRows = [['ten', 10], ['two', 2], ['thirty', '30']]
     const wrapper = mount(GpmDetailNode, {
       props: {
@@ -94,13 +96,14 @@ describe('GpmDetailNode', () => {
     const dcValues = () => wrapper.findAll('tbody tr')
       .map((row) => row.findAll('td')[1].text())
 
-    await wrapper.findAll('.table-sort')[1].trigger('click')
-    expect(dcValues()).toEqual(['2', '10', '30'])
-    expect(wrapper.findAll('th')[1].attributes('aria-sort')).toBe('ascending')
-
+    expect(wrapper.findAll('.table-sort')[1].attributes('title')).toBe('按DC降序排列')
     await wrapper.findAll('.table-sort')[1].trigger('click')
     expect(dcValues()).toEqual(['30', '10', '2'])
     expect(wrapper.findAll('th')[1].attributes('aria-sort')).toBe('descending')
+
+    await wrapper.findAll('.table-sort')[1].trigger('click')
+    expect(dcValues()).toEqual(['2', '10', '30'])
+    expect(wrapper.findAll('th')[1].attributes('aria-sort')).toBe('ascending')
     expect(sourceRows).toEqual([['ten', 10], ['two', 2], ['thirty', '30']])
   })
 

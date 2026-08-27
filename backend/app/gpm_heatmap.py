@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import shutil
 import sqlite3
@@ -35,9 +36,39 @@ from .gpm_upload import router as upload_router
 router = APIRouter()
 router.include_router(upload_router)
 
+_TREND_DAYS = {7, 14, 30}
+_TREND_SUMMARY_FIELDS = {
+    "Scene_DC": "AvgSceneDrawCall",
+    "Scene_Tris": "AvgSceneTriangle",
+    "Drawcall": "AvgDrawCall",
+    "Triangle": "AvgTriangle",
+}
+
 
 def _quality_dto(value: int) -> dict:
     return {"value": value, "label": QUALITY_LABELS.get(value, f"画质 {value}")}
+
+
+def _validated_trend_days(days: int) -> int:
+    if days not in _TREND_DAYS:
+        raise _http_error(422, "INVALID_GPM_TREND_DAYS", "趋势范围仅支持 7、14、30 天")
+    return days
+
+
+def _trend_window_start(latest_captured_at: str, days: int) -> str:
+    latest = datetime.fromisoformat(str(latest_captured_at).replace("Z", "+00:00"))
+    return (latest - timedelta(days=days - 1)).isoformat(timespec="seconds")
+
+
+def _summary_trend_metrics(raw_trend: str) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for item in json.loads(raw_trend):
+        metric_key = item.get("key")
+        summary_field = _TREND_SUMMARY_FIELDS.get(metric_key)
+        value = item.get("summary_data", {}).get(summary_field) if summary_field else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            metrics[metric_key] = value
+    return metrics
 
 
 
@@ -134,8 +165,6 @@ def delete_gpm_upload(batch_id: str, branch_tag: str = Query("main")):
         / _safe_segment(batch_id, "batch")
     )
     asset_root = gpm_assets_dir() / Path(*relative_root.parts)
-    trash = asset_root.with_name(f".{asset_root.name}.deleted-{uuid.uuid4().hex}")
-    moved = False
     connection = _connect()
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -145,18 +174,27 @@ def delete_gpm_upload(batch_id: str, branch_tag: str = Query("main")):
         ).fetchone()
         if not row:
             raise _http_error(404, "GPM_BATCH_NOT_FOUND", "GPMHeatmap 批次不存在")
-        if asset_root.exists():
-            asset_root.rename(trash)
-            moved = True
         connection.execute("DELETE FROM gpm_uploads WHERE id = ?", (row["id"],))
         connection.commit()
-        if moved:
-            shutil.rmtree(trash, ignore_errors=True)
-        return {"batch_id": batch_id, "branch_tag": branch_tag, "deleted": True}
+        assets_removed = True
+        try:
+            # 数据库提交是删除的事实边界。即使进程在清理文件时退出，也只会留下
+            # 不可达的孤儿资源，不会让仍可查询的批次突然丢失图片。
+            if asset_root.exists():
+                shutil.rmtree(asset_root)
+        except OSError:
+            assets_removed = False
+            logging.getLogger("pixelcomp").exception(
+                "GPMHeatmap 批次已删除，但资源目录清理失败: %s", asset_root,
+            )
+        return {
+            "batch_id": batch_id,
+            "branch_tag": branch_tag,
+            "deleted": True,
+            "assets_removed": assets_removed,
+        }
     except Exception:
         connection.rollback()
-        if moved and trash.exists():
-            trash.rename(asset_root)
         raise
     finally:
         connection.close()
@@ -188,7 +226,7 @@ def gpm_meta(branch_tag: str = Query("main")):
             LEFT JOIN gpm_points p ON p.scene_row_id = s.id
             WHERE u.branch_tag = ?
             GROUP BY u.id, s.id
-            ORDER BY u.captured_at DESC, u.id DESC
+            ORDER BY datetime(u.captured_at) DESC, u.id DESC
             """,
             (branch_tag,),
         ).fetchall()
@@ -269,7 +307,7 @@ def gpm_scene_frame(
                    s.x_reverse, s.y_reverse, s.heat_map_json, s.trend_json
             FROM gpm_uploads u JOIN gpm_scenes s ON s.upload_id = u.id
             WHERE {scope}
-            ORDER BY u.captured_at DESC, u.id DESC
+            ORDER BY datetime(u.captured_at) DESC, u.id DESC
             """,
             tuple(params),
         ).fetchall()
@@ -356,8 +394,64 @@ def gpm_point_detail(point_id: int):
         connection.close()
 
 
+@router.get("/api/gpm-heatmaps/scenes/{scene_id}/trends")
+def gpm_scene_trends(
+    scene_id: str,
+    branch_tag: str = Query("main"),
+    platform: str = Query(...),
+    shading_quality: int = Query(..., ge=0, le=5),
+    days: int = Query(14),
+):
+    days = _validated_trend_days(days)
+    connection = _connect()
+    try:
+        params = (scene_id, branch_tag, platform, shading_quality)
+        latest = connection.execute(
+            """
+            SELECT u.captured_at
+            FROM gpm_scenes s JOIN gpm_uploads u ON u.id = s.upload_id
+            WHERE s.scene_id = ? AND u.branch_tag = ?
+              AND u.platform = ? AND u.shading_quality = ?
+            ORDER BY datetime(u.captured_at) DESC, u.id DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if not latest:
+            raise _http_error(404, "GPM_SCENE_NOT_FOUND", "当前筛选下没有 GPMHeatmap 场景数据")
+        latest_captured_at = latest["captured_at"]
+        start = _trend_window_start(latest_captured_at, days)
+        rows = connection.execute(
+            """
+            SELECT u.batch_id, u.captured_at, u.p4_version, s.trend_json
+            FROM gpm_scenes s JOIN gpm_uploads u ON u.id = s.upload_id
+            WHERE s.scene_id = ? AND u.branch_tag = ?
+              AND u.platform = ? AND u.shading_quality = ?
+              AND datetime(u.captured_at) >= datetime(?)
+            ORDER BY datetime(u.captured_at) ASC, u.id ASC
+            """,
+            (*params, start),
+        ).fetchall()
+        points = [{
+            "batch_id": row["batch_id"],
+            "captured_at": row["captured_at"],
+            "p4_version": row["p4_version"],
+            "metrics": _summary_trend_metrics(row["trend_json"]),
+        } for row in rows]
+        available = any(point["metrics"] for point in points)
+        return {
+            "available": available,
+            "reason": None if available else "上报数据没有整体平均指标",
+            "days": days,
+            "points": points,
+        }
+    finally:
+        connection.close()
+
+
 @router.get("/api/gpm-heatmaps/points/{point_id}/trends")
-def gpm_point_trends(point_id: int, days: int = Query(30, ge=1, le=90)):
+def gpm_point_trends(point_id: int, days: int = Query(14)):
+    days = _validated_trend_days(days)
     connection = _connect()
     try:
         current = connection.execute(
@@ -385,28 +479,31 @@ def gpm_point_trends(point_id: int, days: int = Query(30, ge=1, le=90)):
             }
         # “最近 N 天”锚定当前筛选范围内的最新采集，而不是服务器当天；
         # 历史环境或暂停上报的项目仍能看到完整窗口。
-        latest_captured_at = connection.execute(
+        latest = connection.execute(
             """
-            SELECT MAX(u.captured_at)
+            SELECT u.captured_at
             FROM gpm_scenes s JOIN gpm_uploads u ON u.id = s.upload_id
             WHERE s.scene_id = ? AND u.branch_tag = ?
               AND u.platform = ? AND u.shading_quality = ?
+            ORDER BY datetime(u.captured_at) DESC, u.id DESC
+            LIMIT 1
             """,
             (
                 current["scene_id"], current["branch_tag"],
                 current["platform"], current["shading_quality"],
             ),
-        ).fetchone()[0]
-        latest = datetime.fromisoformat(str(latest_captured_at).replace("Z", "+00:00"))
-        start = (latest - timedelta(days=days - 1)).isoformat(timespec="seconds")
+        ).fetchone()
+        latest_captured_at = latest["captured_at"]
+        start = _trend_window_start(latest_captured_at, days)
         rows = connection.execute(
             """
             SELECT u.batch_id, u.captured_at, u.p4_version, p.trend_data_json
             FROM gpm_points p JOIN gpm_scenes s ON s.id = p.scene_row_id
             JOIN gpm_uploads u ON u.id = s.upload_id
             WHERE p.point_key = ? AND s.scene_id = ? AND u.branch_tag = ?
-              AND u.platform = ? AND u.shading_quality = ? AND u.captured_at >= ?
-            ORDER BY u.captured_at ASC, u.id ASC
+              AND u.platform = ? AND u.shading_quality = ?
+              AND datetime(u.captured_at) >= datetime(?)
+            ORDER BY datetime(u.captured_at) ASC, u.id ASC
             """,
             (
                 current["point_key"], current["scene_id"], current["branch_tag"],

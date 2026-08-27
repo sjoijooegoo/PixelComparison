@@ -69,7 +69,12 @@ from .thumbnails import ThumbnailService
 
 setup_logging()
 initialize_database()
-initialize_gpm_database()
+try:
+    initialize_gpm_database()
+except Exception:
+    # GPMHeatmap 是独立数据域；其单独磁盘或配置异常不能阻断截图对比和烘培数据。
+    # GPM API 首次访问时会再次尝试初始化，并返回该模块自己的错误。
+    log.exception("GPMHeatmap 数据库初始化失败，其他模块继续启动")
 
 
 @asynccontextmanager

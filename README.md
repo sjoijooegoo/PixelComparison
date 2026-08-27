@@ -201,11 +201,12 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8020
 
 ```text
 backend/data/backup/YYYY-MM-DD/db/shotdiff.db
+backend/data/backup/YYYY-MM-DD/db/gpm_heatmap.db
 ```
 
 备份先写入唯一临时文件，通过 `PRAGMA quick_check` 后再原子发布；运行中的 WAL 数据也会进入一致快照。同一自然日只保留一个日快照。如果通过 `PIXELCOMP_DB_PATH` 使用自定义数据库文件名，日快照会在当天的 `db/` 目录中保留该文件名。
 
-自动备份只包含 SQLite 数据库，不包含 `PIXELCOMP_IMAGES_DIR` 中的原始截图、热力图，也不包含 `PIXELCOMP_THUMB_DIR` 中的缩略图。数据库只保存图片的相对路径；完整恢复时必须同时保留与快照匹配的 `images/batches` 原图。`images/heatmaps` 可以备份以便立即查看历史对比，`thumbs` 是可重建缓存，无需备份。
+自动备份只包含 SQLite 数据库，不包含 `PIXELCOMP_IMAGES_DIR` 中的原始截图、差异热力图，也不包含 `PIXELCOMP_THUMB_DIR` 中的缩略图和 `PIXELCOMP_GPM_ASSETS_DIR` 中的地图、点位截图。数据库只保存图片的相对路径；完整恢复截图功能时必须同时保留与快照匹配的 `images/batches` 原图，恢复 GPMHeatmap 时必须同时保留与 `gpm_heatmap.db` 匹配的 GPM 资源目录。`images/heatmaps` 可以备份以便立即查看历史对比，常规 `thumbs` 是可重建缓存，无需备份。
 
 校验快照时应使用 SQLite URI `mode=ro&immutable=1`，避免校验过程创建 `-wal`、`-shm` 等辅助文件。日期目录是保留和删除的完整单元，不要在其中存放人工维护的无关文件；若其他工具产生辅助文件，它们也只会位于对应日期的 `db/` 目录内。
 
@@ -220,6 +221,7 @@ backend/data/backup/YYYY-MM-DD/db/shotdiff.db
 | `/screenshot/:sceneId?branch_tag=main&quality=4&date_mode=range&from=2026-08-06&to=2026-08-19` | 打开指定场景并恢复画质与日期筛选；可追加 `baseline`、`current` 恢复对比角色 |
 | `/batches/:sceneId` | 兼容旧链接，自动重定向到 `/screenshot/:sceneId` |
 | `/map-build?branch_tag=main` | 所选分支的烘培数据分块网格、选中项细则和按天历史趋势 |
+| `/gpm-heatmap/:sceneId?branch_tag=main&platform=Android&quality=5` | 独立 GPMHeatmap 地图、点位详情、截图和 7/14/30 天趋势 |
 | `/settings` | 对比算法与默认筛选设置 |
 
 批次管理的分支、场景、日期和页码会同步到 URL，不按画质筛选；无参数 `/batches` 默认使用 `main`、全部场景和项目默认日期范围。截图对比按照“左旧右新”排列批次，其场景、画质和日期筛选也会同步到 URL；指定日期使用 `date_mode=days&dates=2026-08-01,2026-08-03`。选择基线和对比批次后，已有结果会直接显示热力图；没有缓存时可在当前工作区发起计算，不会跳页。旧 `/comparison` 地址不再提供历史或详情页面，会返回批次管理；对比记录及热力图仍在后端保留 14 天，重新选择同一批次对即可恢复。

@@ -133,6 +133,30 @@ describe('TopBar map-build actions', () => {
     wrapper.unmount()
   })
 
+  it('热力图页保留手动刷新且不执行定时自动刷新', async () => {
+    vi.useFakeTimers()
+    routeMock.path = '/gpm-heatmap/Village_Dimension_Main'
+    routeMock.params.sceneId = 'Village_Dimension_Main'
+    const refreshPage = vi.fn().mockResolvedValue()
+    const unregister = registerPageRefresh(refreshPage)
+    const wrapper = mountTopBar()
+
+    expect(wrapper.find('button[aria-label="刷新"]').exists()).toBe(true)
+    await wrapper.get('button[aria-label="刷新"]').trigger('click')
+    await flushPromises()
+    expect(refreshPage).toHaveBeenCalledWith({ silent: false })
+    expect(projectMock.loadMeta).not.toHaveBeenCalled()
+    refreshPage.mockClear()
+    vi.advanceTimersByTime(240000)
+    await flushPromises()
+    expect(projectMock.loadMeta).not.toHaveBeenCalled()
+    expect(refreshPage).not.toHaveBeenCalled()
+
+    unregister()
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
   it('从批次管理直接进入截图对比时不擅自选择场景', async () => {
     routeMock.path = '/batches'
     routeMock.params.sceneId = undefined

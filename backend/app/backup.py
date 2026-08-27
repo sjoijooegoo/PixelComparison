@@ -322,16 +322,22 @@ class DatabaseBackupScheduler:
                 created = create_daily_backup()
                 if created:
                     log.info("数据库每日备份完成: %s", created)
+            except Exception:  # noqa: BLE001
+                log.exception("主数据库每日备份失败,稍后自动重试")
+            try:
                 gpm_database = gpm_db_path()
                 if gpm_database.resolve() != Path(DB_PATH).resolve() and gpm_database.is_file():
                     gpm_created = create_daily_backup(gpm_database)
                     if gpm_created:
                         log.info("GPMHeatmap 数据库每日备份完成: %s", gpm_created)
+            except Exception:  # noqa: BLE001
+                log.exception("GPMHeatmap 数据库每日备份失败,稍后自动重试")
+            try:
                 removed = prune_backups()
                 if removed:
                     log.info("数据库备份淘汰:删除 %d 个过期日期目录", len(removed))
             except Exception:  # noqa: BLE001
-                log.exception("数据库每日备份失败,稍后自动重试")
+                log.exception("数据库备份淘汰失败,稍后自动重试")
             if self._stop.wait(BACKUP_CHECK_INTERVAL_SECONDS):
                 break
 

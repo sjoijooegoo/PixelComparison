@@ -171,6 +171,8 @@ export const api = {
     get('/api/gpm-heatmaps/meta', params, options),
   gpmHeatmapFrame: (sceneId, params = {}, options = {}) =>
     get(`/api/gpm-heatmaps/scenes/${encodeURIComponent(sceneId)}/frame`, params, options),
+  gpmHeatmapSceneTrends: (sceneId, params = {}, options = {}) =>
+    get(`/api/gpm-heatmaps/scenes/${encodeURIComponent(sceneId)}/trends`, params, options),
   gpmHeatmapPoint: (pointId, options = {}) =>
     get(`/api/gpm-heatmaps/points/${encodeURIComponent(pointId)}`, {}, options),
   gpmHeatmapTrends: (pointId, params = {}, options = {}) =>

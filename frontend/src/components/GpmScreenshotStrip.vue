@@ -21,9 +21,18 @@ let lastSelectionAt = 0
 
 watch(() => [props.selectedPointId, props.points.length], async () => {
   await nextTick()
-  strip.value?.querySelector('.shot.active')?.scrollIntoView?.({
-    behavior: 'smooth', block: 'nearest', inline: 'center',
-  })
+  const container = strip.value
+  const active = container?.querySelector('.shot.active')
+  if (!container || !active) return
+  const containerRect = container.getBoundingClientRect()
+  const activeRect = active.getBoundingClientRect()
+  const left = Math.max(0, container.scrollLeft + activeRect.left - containerRect.left
+    - (containerRect.width - activeRect.width) / 2)
+  if (typeof container.scrollTo === 'function') {
+    container.scrollTo({ left, behavior: 'smooth' })
+  } else {
+    container.scrollLeft = left
+  }
 }, { immediate: true })
 
 function onMouseDown(event) {
@@ -106,7 +115,7 @@ function setPreviewVisible(visible) {
 .shot-strip {
   display: flex; gap: 12px; overflow-x: auto; overflow-y: hidden; padding: 0 1px 4px;
   scroll-behavior: smooth; overscroll-behavior-inline: contain;
-  cursor: default; touch-action: pan-y; user-select: none;
+  cursor: pointer; touch-action: pan-y; user-select: none;
 }
 .shot-strip.dragging { cursor: grabbing; scroll-behavior: auto; }
 .shot-strip.dragging * { cursor: grabbing !important; }

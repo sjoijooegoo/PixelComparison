@@ -423,6 +423,36 @@ def test_scheduler_backs_up_primary_and_independent_gpm_database(tmp_path, monke
     assert calls == [Path(backup_module.DB_PATH).resolve(), gpm_database.resolve()]
 
 
+def test_scheduler_still_backs_up_gpm_when_primary_backup_fails(tmp_path, monkeypatch):
+    gpm_database = tmp_path / "gpm_heatmap.db"
+    gpm_database.write_bytes(b"gpm")
+    calls = []
+
+    def fake_backup(db_path=backup_module.DB_PATH, *_args, **_kwargs):
+        resolved = Path(db_path).resolve()
+        calls.append(resolved)
+        if resolved == Path(backup_module.DB_PATH).resolve():
+            raise OSError("primary unavailable")
+        return None
+
+    class OnePassStop:
+        def is_set(self):
+            return False
+
+        def wait(self, _timeout):
+            return True
+
+    monkeypatch.setattr(backup_module, "create_daily_backup", fake_backup)
+    monkeypatch.setattr(backup_module, "gpm_db_path", lambda: gpm_database)
+    monkeypatch.setattr(backup_module, "prune_backups", lambda: [])
+    scheduler = backup_module.DatabaseBackupScheduler()
+    scheduler._stop = OnePassStop()
+
+    scheduler._run()
+
+    assert calls == [Path(backup_module.DB_PATH).resolve(), gpm_database.resolve()]
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction 仅在 Windows 验证")
 @pytest.mark.parametrize("level", ["date", "db"])
 def test_prune_skips_windows_junction_with_resolved_path_mismatch(tmp_path, level):

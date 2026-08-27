@@ -27,6 +27,17 @@ function mountStrip() {
 describe('GpmScreenshotStrip', () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn()
+    HTMLElement.prototype.scrollTo = vi.fn()
+  })
+
+  it('选中项仅在截图条内横向居中，不滚动外层页面', async () => {
+    const wrapper = mountStrip()
+    await wrapper.vm.$nextTick()
+
+    expect(HTMLElement.prototype.scrollTo).toHaveBeenCalledWith({
+      left: 0, behavior: 'smooth',
+    })
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
   })
 
   it('单击选择点位，双击后使用原图打开预览', async () => {

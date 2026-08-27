@@ -1,4 +1,29 @@
 export const HEAT_COLORS = ['#2f80ed', '#b7babd', '#f2b315', '#fa541c']
+export const LINEAR_HEAT_GRADIENT = 'linear-gradient(90deg, hsl(120 78% 48%), hsl(60 78% 48%), hsl(0 78% 48%))'
+
+export function metricRange(points, metricKey) {
+  let minimum = Infinity
+  let maximum = -Infinity
+  for (const point of points || []) {
+    const raw = point?.heat_map_data?.[metricKey]
+    if (raw === null || raw === undefined || raw === '') continue
+    const value = Number(raw)
+    if (!Number.isFinite(value)) continue
+    minimum = Math.min(minimum, value)
+    maximum = Math.max(maximum, value)
+  }
+  return Number.isFinite(minimum) ? [minimum, maximum] : [0, 0]
+}
+
+export function linearHeatColor(value, range) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '#6b7280'
+  const [minimum, maximum] = range
+  const span = maximum - minimum
+  const ratio = span > 0 ? Math.min(1, Math.max(0, (number - minimum) / span)) : 0
+  const hue = Number((120 * (1 - ratio)).toFixed(1))
+  return `hsl(${hue} 78% 48%)`
+}
 
 export function metricThresholds(points, metricKey, configured) {
   if (Array.isArray(configured) && configured.length === 3

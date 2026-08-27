@@ -21,7 +21,7 @@ const children = computed(() => {
 const columns = computed(() => props.node.table_data?.cols || [])
 const rows = computed(() => props.node.table_data?.data || [])
 const sortColumnIndex = ref(null)
-const sortDirection = ref('asc')
+const sortDirection = ref('desc')
 const sortedRows = computed(() => {
   if (sortColumnIndex.value === null) return rows.value
   const column = columns.value[sortColumnIndex.value]
@@ -75,8 +75,9 @@ function toggleSort(columnIndex) {
     return
   }
   sortColumnIndex.value = columnIndex
-  sortDirection.value = 'asc'
+  sortDirection.value = 'desc'
 }
+
 </script>
 
 <template>
@@ -95,13 +96,14 @@ function toggleSort(columnIndex) {
           @toggle="toggleChild(index)" />
       </div>
       <div v-if="columns.length" class="table-scroll">
-        <table>
+        <table class="detail-table">
           <thead><tr>
             <th v-for="(column, columnIndex) in columns" :key="column.key"
               :aria-sort="sortColumnIndex === columnIndex
                 ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
               <button type="button" class="table-sort"
-                :title="`按${column.name}${sortColumnIndex === columnIndex && sortDirection === 'asc' ? '降序' : '升序'}排列`"
+                :title="`按${column.name}${sortColumnIndex === columnIndex
+                  ? (sortDirection === 'desc' ? '升序' : '降序') : '降序'}排列`"
                 @click="toggleSort(columnIndex)">
                 <span>{{ column.name }}</span>
                 <span class="sort-mark" :class="{ active: sortColumnIndex === columnIndex }" aria-hidden="true">
@@ -136,8 +138,8 @@ function toggleSort(columnIndex) {
 }
 .detail-summary:hover { background: var(--color-fill-2); color: var(--color-text-1); }
 .detail-summary:focus-visible { outline: 1px solid rgb(var(--arcoblue-5)); outline-offset: -1px; }
-.detail-summary:disabled { cursor: default; }
-.detail-summary:disabled:hover { background: transparent; }
+.detail-summary:disabled { cursor: not-allowed; color: var(--color-text-4); background: transparent; }
+.detail-summary:disabled:hover { color: var(--color-text-4); background: transparent; }
 .detail-node.root.open { border-color: var(--color-border-2); }
 .detail-node.root.open > .detail-summary { background: var(--color-fill-2); }
 .detail-node.nested > .detail-summary { background: var(--color-fill-2); }
@@ -162,14 +164,22 @@ function toggleSort(columnIndex) {
 .children-stack > .detail-node { border-bottom: 1px solid var(--color-border-1); }
 .children-stack > .detail-node:last-child { border-bottom: 0; }
 .table-scroll {
+  --detail-table-head-bg: color-mix(in srgb, var(--color-bg-5) 80%, var(--color-bg-white) 20%);
+  --detail-table-cell-bg: color-mix(in srgb, var(--color-bg-5) 90%, var(--color-bg-white) 10%);
   max-height: min(440px, 55vh); overflow: auto; border: 1px solid var(--color-border-2);
-  border-radius: 3px; background: var(--color-fill-1);
+  border-radius: 3px; background: var(--detail-table-cell-bg);
 }
 .children-stack + .table-scroll { margin-top: 10px; }
-table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 12px; }
+.detail-table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 12px; }
 th, td { text-align: left; border-right: 1px solid var(--color-border-1); border-bottom: 1px solid var(--color-border-1); }
-th { position: sticky; top: 0; z-index: 1; color: var(--color-text-2); background: var(--color-fill-3); font-weight: 600; }
-td { padding: 7px 9px; color: var(--color-text-2); background: var(--color-fill-1); font-variant-numeric: tabular-nums; }
+th {
+  position: sticky; top: 0; z-index: 1; color: var(--color-text-2); font-weight: 600;
+  background: var(--detail-table-head-bg);
+}
+td {
+  padding: 7px 9px; color: var(--color-text-2); background: var(--detail-table-cell-bg);
+  font-variant-numeric: tabular-nums;
+}
 .table-sort {
   width: 100%; min-height: 32px; padding: 7px 9px; border: 0; display: flex;
   align-items: center; justify-content: space-between; gap: 8px; color: inherit;

@@ -118,6 +118,12 @@ def _metadata_value(canonical: object, legacy: object, field: str, *, required: 
 
 
 def _report_scope_value(scenes: list[dict], key: str) -> object | None:
+    present = [key in scene and scene.get(key) is not None for scene in scenes]
+    if any(present) and not all(present):
+        raise http_error(
+            422, "INCONSISTENT_GPM_SCOPE",
+            f"所有场景必须同时提供 {key}，或全部通过兼容表单字段提供",
+        )
     values = [scene.get(key) for scene in scenes if scene.get(key) is not None]
     if not values:
         return None
@@ -313,7 +319,9 @@ def upload_gpm_heatmap(
         raise http_error(422, "INVALID_SHADING_QUALITY", "shading_quality 必须在 0 到 5 之间")
     if not 0 <= shading_quality <= 5:
         raise http_error(422, "INVALID_SHADING_QUALITY", "shading_quality 必须在 0 到 5 之间")
-    raw_p4 = _metadata_value(_report_scope_value(scenes, "p4_version"), p4_version, "p4_version")
+    raw_p4 = _metadata_value(
+        _report_scope_value(scenes, "p4_version"), p4_version, "p4_version", required=True,
+    )
     try:
         p4_version = int(raw_p4) if raw_p4 not in (None, "") else None
     except (TypeError, ValueError):
@@ -325,13 +333,18 @@ def upload_gpm_heatmap(
         connection = connect_gpm_database()
         try:
             existing = connection.execute(
-                "SELECT 1 FROM gpm_uploads WHERE branch_tag = ? AND batch_id = ?",
-                (branch_tag, batch_id),
+                "SELECT branch_tag FROM gpm_uploads WHERE batch_id = ?",
+                (batch_id,),
             ).fetchone()
         finally:
             connection.close()
         if existing:
-            raise http_error(409, "GPM_BATCH_EXISTS", "同分支 GPM 批次已存在；覆盖请传 overwrite=true")
+            if existing["branch_tag"] != branch_tag:
+                raise http_error(
+                    409, "GPM_BATCH_BRANCH_IMMUTABLE",
+                    "GPM 批次号在模块内全局唯一，不能在其他分支重复使用",
+                )
+            raise http_error(409, "GPM_BATCH_EXISTS", "GPM 批次已存在；覆盖请传 overwrite=true")
 
     staging_root = gpm_assets_dir() / ".staging" / uuid.uuid4().hex
     staging_root.mkdir(parents=True, exist_ok=False)
@@ -384,11 +397,16 @@ def upload_gpm_heatmap(
         try:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT id FROM gpm_uploads WHERE branch_tag = ? AND batch_id = ?",
-                (branch_tag, batch_id),
+                "SELECT id, branch_tag FROM gpm_uploads WHERE batch_id = ?",
+                (batch_id,),
             ).fetchone()
+            if existing and existing["branch_tag"] != branch_tag:
+                raise http_error(
+                    409, "GPM_BATCH_BRANCH_IMMUTABLE",
+                    "GPM 批次号在模块内全局唯一，覆盖不能改变所属分支",
+                )
             if existing and not overwrite:
-                raise http_error(409, "GPM_BATCH_EXISTS", "同分支 GPM 批次已存在；覆盖请传 overwrite=true")
+                raise http_error(409, "GPM_BATCH_EXISTS", "GPM 批次已存在；覆盖请传 overwrite=true")
             if existing:
                 old_paths = connection.execute(
                     """

@@ -30,7 +30,7 @@ const showDataActions = computed(() => (
 ))
 // 现有手动上报弹窗只处理截图批次；GPMHeatmap 由独立管线接口上报，避免入口误导。
 const showManualUpload = computed(() => showDataActions.value && !isActive('/gpm-heatmap'))
-const supportsAutoRefresh = computed(() => showDataActions.value)
+const supportsAutoRefresh = computed(() => showDataActions.value && !isActive('/gpm-heatmap'))
 
 function currentBranch() {
   const raw = route.query.branch_tag
@@ -54,7 +54,8 @@ function tabTarget(tab) {
 
 // 按当前视图刷新对应数据;silent=true 时不弹提示(供定时自动刷新复用)
 async function doRefresh({ silent = false } = {}) {
-  await project.loadMeta()
+  // GPMHeatmap 使用独立数据库与筛选元数据；刷新它时不应先依赖截图批次接口。
+  if (!isActive('/gpm-heatmap')) await project.loadMeta()
   const handled = await runPageRefresh({ silent })
   if (!handled) return
   if (!silent) Message.success('已刷新')
@@ -70,7 +71,7 @@ let autoTimer = null
 
 function autoTick() {
   if (document.hidden) return                       // 后台标签页不刷,省请求
-  if (!supportsAutoRefresh.value) return             // 仅批次/对比页自动刷
+  if (!supportsAutoRefresh.value) return             // 热力图仅手动刷新，其他数据页自动刷
   if (project.uploadVisible || screenshot.running) return  // 上传弹窗 / 对比中,不打断
   // 截图网格也刷新:渲染 key 稳定(列=批次id、行=检查点名),Vue 复用 DOM,
   // 已有图片不重载、滚动位置不丢;有新批次时仅在末尾插入新列。
