@@ -60,6 +60,23 @@ beforeEach(() => {
 })
 
 describe('TopBar map-build actions', () => {
+  it('项目设置从主导航移到主题按钮右侧', async () => {
+    const wrapper = mountTopBar()
+
+    expect(wrapper.findAll('.tab').map((tab) => tab.text())).toEqual([
+      '批次管理', '截图对比', '烘培数据', '热力图',
+    ])
+    const toolButtons = wrapper.find('.actions').findAll('button')
+    const themeIndex = toolButtons.findIndex((button) => button.attributes('aria-label') === '切换亮色')
+    const settingsIndex = toolButtons.findIndex((button) => button.attributes('aria-label') === '项目设置')
+    expect(settingsIndex).toBe(themeIndex + 1)
+
+    await toolButtons[settingsIndex].trigger('click')
+    expect(routerMock.push).toHaveBeenCalledWith('/settings')
+
+    wrapper.unmount()
+  })
+
   it('烘培数据页在右上角保留刷新和手动上报', async () => {
     const refreshPage = vi.fn().mockResolvedValue()
     const unregister = registerPageRefresh(refreshPage)
@@ -83,6 +100,7 @@ describe('TopBar map-build actions', () => {
 
     expect(wrapper.find('button[aria-label="刷新"]').exists()).toBe(false)
     expect(wrapper.find('button[aria-label="手动上报"]').exists()).toBe(false)
+    expect(wrapper.get('button[aria-label="项目设置"]').classes()).toContain('active')
 
     wrapper.unmount()
   })
@@ -96,6 +114,20 @@ describe('TopBar map-build actions', () => {
 
     expect(routerMock.push).toHaveBeenCalledWith({
       path: '/screenshot/Volcano_WP',
+      query: { branch_tag: 'engine-ue5' },
+    })
+    wrapper.unmount()
+  })
+
+  it('进入 GPMHeatmap 时继承当前场景和分支', async () => {
+    routeMock.path = '/map-build/Village_Dimension_Main'
+    routeMock.params.sceneId = 'Village_Dimension_Main'
+    const wrapper = mountTopBar()
+
+    await wrapper.findAll('.tab').find((tab) => tab.text() === '热力图').trigger('click')
+
+    expect(routerMock.push).toHaveBeenCalledWith({
+      path: '/gpm-heatmap/Village_Dimension_Main',
       query: { branch_tag: 'engine-ue5' },
     })
     wrapper.unmount()

@@ -12,6 +12,7 @@ export default defineConfig({
       '/api': backendTarget,
       '/images': backendTarget,
       '/thumb': backendTarget,
+      '/gpm-assets': backendTarget,
     },
   },
 })

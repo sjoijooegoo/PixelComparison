@@ -14,6 +14,7 @@ PixelComparison 是面向游戏截图与场景烘培数据的回归平台。采�
 - 支持浏览器拖入数据包手动上报，以及 HTTP API 接入 CI/采集端。
 - 支持外部模块全量同步前端场景目录，统一控制场景筛选项的顺序和可见性。
 - 接收批次随附的 `map_build_data`，以分块热力网格和跨批次折线展示烘培体积回归。
+- 独立接收 GPMHeatmap 点位热力数据和匹配截图，在场景地图上查看点位方向、详细树状数据与版本趋势。
 - 使用 `pipeline_data.branch_tag` 隔离 `main`、`engine-ue5` 等分支；旧数据与缺省上报自动归入 `main`。
 - 支持不带截图的纯烘培批次；批次列表展示数据能力，截图对比只使用确有截图的批次。
 - 自动生成缩略图并按访问时间淘汰缓存；批次画廊先显示缩略图，点击后才加载原图。
@@ -23,6 +24,7 @@ PixelComparison 是面向游戏截图与场景烘培数据的回归平台。采�
 
 - [完整使用文档](docs/使用文档.md)：安装、启动、界面操作、项目设置、数据目录、备份恢复和故障排查。
 - [数据上报接入指南](docs/上报接入指南.md)：manifest 格式、接口字段、异步对比和错误处理。
+- [GPMHeatmap 使用与接入](docs/GPMHeatmap使用与接入.md)：点位数据、地图配置、独立存储与接口示例。
 - [示例数据包说明](mock_uploads/README.md)：生成和上传演示批次。
 - [测试与维护脚本](scripts/README.md)：单元测试、构建、清理和可选浏览器脚本。
 - [后续工作](TODO.md)：当前明确保留的技术和产品待办。
@@ -103,7 +105,7 @@ cd frontend
 npm run dev
 ```
 
-Vite 默认把 `/api`、`/images` 和 `/thumb` 代理到 `http://127.0.0.1:8020`。如需使用其他后端地址：
+Vite 默认把 `/api`、`/images`、`/thumb` 和 `/gpm-assets` 代理到 `http://127.0.0.1:8020`。如需使用其他后端地址：
 
 ```powershell
 $env:PIXELCOMP_BACKEND_URL = "http://127.0.0.1:9000"
@@ -151,6 +153,9 @@ backend/data/
       db/
         shotdiff.db
   logs/
+  gpm_heatmap/
+    gpm_heatmap.db
+    assets/
 ```
 
 | 环境变量 | 默认值 | 说明 |
@@ -159,6 +164,9 @@ backend/data/
 | `PIXELCOMP_DB_PATH` | `<DATA_DIR>/shotdiff.db` | SQLite 文件；应放本地磁盘 |
 | `PIXELCOMP_IMAGES_DIR` | `<DATA_DIR>/images` | 原图和热力图，可单独放大容量磁盘或共享盘 |
 | `PIXELCOMP_THUMB_DIR` | `<PIXELCOMP_DB_PATH 所在目录>/thumbs` | 可重建的 WebP 缩略图缓存；建议放本地磁盘 |
+| `PIXELCOMP_GPM_DIR` | `<DATA_DIR>/gpm_heatmap` | GPMHeatmap 独立数据库和资源根目录 |
+| `PIXELCOMP_GPM_DB_PATH` | `<PIXELCOMP_GPM_DIR>/gpm_heatmap.db` | GPMHeatmap 独立 SQLite；应放本地磁盘 |
+| `PIXELCOMP_GPM_ASSETS_DIR` | `<PIXELCOMP_GPM_DIR>/assets` | GPM 地图、点位原图和缩略图；可单独放大容量磁盘 |
 | `PIXELCOMP_THUMB_WORKERS` | `2` | 后台生成缩略图的守护线程数，范围 1～8 |
 | `PIXELCOMP_THUMB_QUEUE_SIZE` | `64` | 等待生成的缩略图任务上限；队列满时不阻塞请求 |
 | `PIXELCOMP_MAX_SCREENSHOT_BYTES` | `104857600` | 单张截图上传上限（字节），默认 100 MiB |

@@ -33,6 +33,8 @@ from .errors import ApiError
 from .backup import backup_scheduler
 from .db import IMAGES_DIR, THUMB_DIR, SessionLocal, get_db, initialize_database
 from .logging_setup import client_log, log, setup_logging
+from .gpm_heatmap import router as gpm_heatmap_router
+from .gpm_storage import initialize_gpm_database
 from .map_build import (
     FORMAT_VERSION as MAP_BUILD_FORMAT_VERSION,
     MapBuildDataIn,
@@ -67,6 +69,7 @@ from .thumbnails import ThumbnailService
 
 setup_logging()
 initialize_database()
+initialize_gpm_database()
 
 
 @asynccontextmanager
@@ -83,6 +86,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="ShotDiff API", version="0.4.0", lifespan=lifespan)
+app.include_router(gpm_heatmap_router)
 app.add_middleware(
     CORSMiddleware,
     # 局域网/任意来源访问(内网工具,无凭证);如需收紧改回白名单

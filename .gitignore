@@ -18,3 +18,8 @@ mock_uploads/test2/
 
 # 本机密钥配置,切勿提交
 scripts/CosConfig.yaml
+
+.agents
+.claude
+.codex
+temp

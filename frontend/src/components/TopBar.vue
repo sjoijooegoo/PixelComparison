@@ -18,7 +18,7 @@ const tabs = [
   { path: '/batches', label: '批次管理' },
   { path: '/screenshot', label: '截图对比' },
   { path: '/map-build', label: '烘培数据' },
-  { path: '/settings', label: '项目设置' },
+  { path: '/gpm-heatmap', label: '热力图' },
 ]
 
 // 当前路径(根路径视作批次管理)
@@ -26,8 +26,10 @@ const current = computed(() => (route.path === '/' ? '/batches' : route.path))
 // 前缀匹配:/batches/<场景> 时「批次管理」仍高亮
 const isActive = (path) => current.value === path || current.value.startsWith(path + '/')
 const showDataActions = computed(() => (
-  isActive('/batches') || isActive('/screenshot') || isActive('/map-build')
+  isActive('/batches') || isActive('/screenshot') || isActive('/map-build') || isActive('/gpm-heatmap')
 ))
+// 现有手动上报弹窗只处理截图批次；GPMHeatmap 由独立管线接口上报，避免入口误导。
+const showManualUpload = computed(() => showDataActions.value && !isActive('/gpm-heatmap'))
 const supportsAutoRefresh = computed(() => showDataActions.value)
 
 function currentBranch() {
@@ -40,13 +42,13 @@ function currentBranch() {
 
 function tabTarget(tab) {
   let path = tab.path
-  if ((tab.path === '/map-build' && isActive('/screenshot'))
-      || (tab.path === '/screenshot' && isActive('/map-build'))) {
+  const sceneWorkspaces = ['/screenshot', '/map-build', '/gpm-heatmap']
+  if (sceneWorkspaces.includes(tab.path) && sceneWorkspaces.some(isActive)) {
     const rawSceneId = route.params.sceneId
     const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
     if (sceneId) path = `${tab.path}/${encodeURIComponent(sceneId)}`
   }
-  if (tab.path === '/settings' || tab.path === '/batches') return path
+  if (tab.path === '/batches') return path
   return { path, query: { branch_tag: currentBranch() } }
 }
 
@@ -113,7 +115,7 @@ onUnmounted(() => {
             </svg>
           </button>
         </a-tooltip>
-        <a-tooltip content="手动上报">
+        <a-tooltip v-if="showManualUpload" content="手动上报">
           <button class="icon-btn" aria-label="手动上报" @click="project.uploadVisible = true">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -123,7 +125,8 @@ onUnmounted(() => {
         </a-tooltip>
       </template>
       <a-tooltip :content="theme === 'dark' ? '切换亮色' : '切换暗色'">
-        <button class="icon-btn" @click="toggleTheme">
+        <button class="icon-btn" :aria-label="theme === 'dark' ? '切换亮色' : '切换暗色'"
+          @click="toggleTheme">
           <svg v-if="theme === 'dark'" width="15" height="15" viewBox="0 0 16 16" fill="none"
             stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
             <circle cx="8" cy="8" r="3.2" />
@@ -131,6 +134,17 @@ onUnmounted(() => {
           </svg>
           <svg v-else width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
             <path d="M13.8 9.7A6 6 0 0 1 6.3 2.2a6 6 0 1 0 7.5 7.5z" />
+          </svg>
+        </button>
+      </a-tooltip>
+      <a-tooltip content="项目设置">
+        <button class="icon-btn" :class="{ active: isActive('/settings') }"
+          aria-label="项目设置" :aria-current="isActive('/settings') ? 'page' : undefined"
+          @click="router.push('/settings')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.35.7.6 1 .3.28.68.42 1.1.4H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51.6z" />
           </svg>
         </button>
       </a-tooltip>
@@ -163,4 +177,9 @@ onUnmounted(() => {
   color: var(--color-text-2); display: flex; align-items: center; justify-content: center;
 }
 .icon-btn:hover { background: var(--color-fill-2); color: var(--color-text-1); }
+.icon-btn.active {
+  border-color: rgb(var(--arcoblue-5));
+  background: var(--color-primary-light-1);
+  color: rgb(var(--arcoblue-6));
+}
 </style>

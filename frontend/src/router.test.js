@@ -26,4 +26,8 @@ describe('workspace routes', () => {
   it('提供可选场景的截图对比工作区路由', () => {
     expect(router.getRoutes().some((route) => route.path === '/screenshot/:sceneId?')).toBe(true)
   })
+
+  it('提供可选场景的 GPMHeatmap 工作区路由', () => {
+    expect(router.getRoutes().some((route) => route.path === '/gpm-heatmap/:sceneId?')).toBe(true)
+  })
 })

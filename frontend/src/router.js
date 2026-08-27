@@ -13,6 +13,7 @@ const routes = [
   },
   { path: '/screenshot/:sceneId?', component: () => import('./views/ScreenshotComparisonView.vue') },
   { path: '/map-build/:sceneId?', component: () => import('./views/MapBuildView.vue') },
+  { path: '/gpm-heatmap/:sceneId?', component: () => import('./views/GpmHeatmapView.vue') },
   { path: '/settings', component: () => import('./components/ProjectSettings.vue') },
   { path: '/:pathMatch(.*)*', redirect: '/batches' },
 ]

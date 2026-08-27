@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .db import DATA_DIR, DB_PATH
+from .gpm_storage import gpm_db_path
 from .logging_setup import log
 
 
@@ -321,6 +322,11 @@ class DatabaseBackupScheduler:
                 created = create_daily_backup()
                 if created:
                     log.info("数据库每日备份完成: %s", created)
+                gpm_database = gpm_db_path()
+                if gpm_database.resolve() != Path(DB_PATH).resolve() and gpm_database.is_file():
+                    gpm_created = create_daily_backup(gpm_database)
+                    if gpm_created:
+                        log.info("GPMHeatmap 数据库每日备份完成: %s", gpm_created)
                 removed = prune_backups()
                 if removed:
                     log.info("数据库备份淘汰:删除 %d 个过期日期目录", len(removed))

@@ -167,6 +167,16 @@ export const api = {
     get(`/api/map-build/scenes/${encodeURIComponent(sceneId)}/overview`, params, options),
   mapBuildTrend: (sceneId, params = {}, options = {}) =>
     get(`/api/map-build/scenes/${encodeURIComponent(sceneId)}/trend`, params, options),
+  gpmHeatmapMeta: (params = {}, options = {}) =>
+    get('/api/gpm-heatmaps/meta', params, options),
+  gpmHeatmapFrame: (sceneId, params = {}, options = {}) =>
+    get(`/api/gpm-heatmaps/scenes/${encodeURIComponent(sceneId)}/frame`, params, options),
+  gpmHeatmapPoint: (pointId, options = {}) =>
+    get(`/api/gpm-heatmaps/points/${encodeURIComponent(pointId)}`, {}, options),
+  gpmHeatmapTrends: (pointId, params = {}, options = {}) =>
+    get(`/api/gpm-heatmaps/points/${encodeURIComponent(pointId)}/trends`, params, options),
+  deleteGpmHeatmapUpload: (batchId, branchTag = 'main') =>
+    del(`/api/gpm-heatmaps/uploads/${encodeURIComponent(batchId)}?branch_tag=${encodeURIComponent(branchTag)}`),
   baselines: (filters = {}) => get('/api/baselines', filters),
   settings: () => get('/api/settings'),
   saveSettings: (body) => put('/api/settings', body),
