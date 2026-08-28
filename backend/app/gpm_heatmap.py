@@ -6,23 +6,17 @@
 
 from __future__ import annotations
 
-import io
 import json
 import logging
-import os
 import shutil
 import sqlite3
-import uuid
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Annotated
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, Query
 from fastapi.responses import FileResponse
-from PIL import Image, UnidentifiedImageError
 
 from .gpm_common import (
-    IMAGE_SUFFIXES,
     QUALITY_LABELS,
     asset_url as _asset_url,
     http_error as _http_error,
@@ -31,10 +25,14 @@ from .gpm_common import (
 )
 from .gpm_storage import connect_gpm_database as _connect, gpm_assets_dir
 from .gpm_upload import router as upload_router
+from .gpm_project_config import router as project_config_router, runtime_map_config
+from .gpm_scale_config import resolve_heat_scales, router as scale_config_router
 
 
 router = APIRouter()
 router.include_router(upload_router)
+router.include_router(project_config_router)
+router.include_router(scale_config_router)
 
 _TREND_DAYS = {7, 14, 30}
 _TREND_SUMMARY_FIELDS = {
@@ -69,89 +67,6 @@ def _summary_trend_metrics(raw_trend: str) -> dict[str, float]:
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             metrics[metric_key] = value
     return metrics
-
-
-
-@router.post("/api/gpm-heatmaps/maps/{scene_id}", status_code=201)
-def upload_gpm_map(
-    scene_id: str,
-    image: Annotated[UploadFile, File()],
-    origin_x: Annotated[float, Form()],
-    origin_y: Annotated[float, Form()],
-    range_x: Annotated[float, Form()],
-    range_y: Annotated[float, Form()],
-    x_reverse: Annotated[bool, Form()] = False,
-    y_reverse: Annotated[bool, Form()] = True,
-    color_ranges: Annotated[str, Form()] = "{}",
-):
-    scene_id = _require_identifier(scene_id, "scene_id")
-    if range_x <= 0 or range_y <= 0:
-        raise _http_error(422, "INVALID_MAP_CONFIG", "场景 ID 和正数坐标范围必填")
-    try:
-        parsed_ranges = json.loads(color_ranges)
-        if not isinstance(parsed_ranges, dict):
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
-        raise _http_error(422, "INVALID_COLOR_RANGES", "color_ranges 必须是 JSON 对象")
-    raw = image.file.read(32 * 1024 * 1024 + 1)
-    if len(raw) > 32 * 1024 * 1024:
-        raise _http_error(413, "MAP_IMAGE_TOO_LARGE", "地图图片超过 32 MiB")
-    try:
-        with Image.open(io.BytesIO(raw)) as opened:
-            opened.verify()
-        with Image.open(io.BytesIO(raw)) as opened:
-            width, height = opened.size
-            image_format = (opened.format or "PNG").lower()
-    except (OSError, UnidentifiedImageError, Image.DecompressionBombError):
-        raise _http_error(422, "INVALID_MAP_IMAGE", "地图图片无法解析")
-    suffix = ".jpg" if image_format in {"jpg", "jpeg"} else f".{image_format}"
-    if suffix not in IMAGE_SUFFIXES:
-        raise _http_error(422, "UNSUPPORTED_MAP_IMAGE", "地图仅支持 PNG/JPEG/WebP")
-
-    connection = _connect()
-    destination: Path | None = None
-    temp_destination: Path | None = None
-    published = False
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        revision = int(connection.execute(
-            "SELECT COALESCE(MAX(revision), 0) + 1 FROM gpm_map_revisions WHERE scene_id = ?",
-            (scene_id,),
-        ).fetchone()[0])
-        relative = PurePosixPath("maps") / _safe_segment(scene_id, "scene") / f"r{revision}{suffix}"
-        destination = gpm_assets_dir() / Path(*relative.parts)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temp_destination = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-        temp_destination.write_bytes(raw)
-        os.replace(temp_destination, destination)
-        published = True
-        connection.execute("UPDATE gpm_map_revisions SET active = 0 WHERE scene_id = ?", (scene_id,))
-        cursor = connection.execute(
-            """
-            INSERT INTO gpm_map_revisions (
-                scene_id, revision, image_path, image_width, image_height,
-                origin_x, origin_y, range_x, range_y, x_reverse, y_reverse,
-                color_ranges_json, active, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-            """,
-            (
-                scene_id, revision, relative.as_posix(), width, height,
-                origin_x, origin_y, range_x, range_y, int(x_reverse), int(y_reverse),
-                json.dumps(parsed_ranges, ensure_ascii=False), datetime.now().isoformat(timespec="seconds"),
-            ),
-        )
-        connection.commit()
-        return {"id": cursor.lastrowid, "scene_id": scene_id, "revision": revision, "active": True}
-    except Exception:
-        connection.rollback()
-        if published and destination is not None:
-            destination.unlink(missing_ok=True)
-        if temp_destination is not None:
-            temp_destination.unlink(missing_ok=True)
-        raise
-    finally:
-        connection.close()
-
 
 @router.delete("/api/gpm-heatmaps/uploads/{batch_id}")
 def delete_gpm_upload(batch_id: str, branch_tag: str = Query("main")):
@@ -214,6 +129,154 @@ def _batch_dto(row: sqlite3.Row) -> dict:
     }
 
 
+def _validated_filter_date(value: str | None, field: str) -> str | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value).date().isoformat()
+    except (TypeError, ValueError):
+        raise _http_error(422, "INVALID_GPM_DATE_FILTER", f"{field} 必须是 YYYY-MM-DD 日期")
+
+
+def _csv_values(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return sorted({item for item in value.split(",") if item}, key=str.casefold)
+
+
+@router.get("/api/gpm-heatmaps/uploads/meta")
+def gpm_upload_meta(branch_tag: str = Query("main")):
+    branch_tag = _require_identifier(branch_tag.strip().lower(), "branch_tag", maximum=120)
+    connection = _connect()
+    try:
+        branches = [
+            row["branch_tag"] for row in connection.execute(
+                "SELECT DISTINCT branch_tag FROM gpm_uploads ORDER BY branch_tag"
+            ).fetchall()
+        ]
+        rows = connection.execute(
+            """
+            SELECT DISTINCT u.platform, u.shading_quality, s.scene_id
+            FROM gpm_uploads u JOIN gpm_scenes s ON s.upload_id = u.id
+            WHERE u.branch_tag = ?
+            ORDER BY s.scene_id, u.platform, u.shading_quality DESC
+            """,
+            (branch_tag,),
+        ).fetchall()
+        return {
+            "branch_tags": sorted(set(branches) | {"main"}),
+            "platforms": sorted({row["platform"] for row in rows}, key=str.casefold),
+            "scene_ids": sorted({row["scene_id"] for row in rows}, key=str.casefold),
+            "shading_qualities": [
+                _quality_dto(value)
+                for value in sorted({row["shading_quality"] for row in rows}, reverse=True)
+            ],
+        }
+    finally:
+        connection.close()
+
+
+@router.get("/api/gpm-heatmaps/uploads")
+def list_gpm_uploads(
+    branch_tag: str = Query("main"),
+    platform: str | None = Query(None),
+    scene_id: str | None = Query(None),
+    shading_quality: int | None = Query(None, ge=0, le=5),
+    captured_from: str | None = Query(None),
+    captured_to: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+):
+    """按一次完整 GPM 上报分页；场景、点位和地图状态均聚合到批次行。"""
+
+    branch_tag = _require_identifier(branch_tag.strip().lower(), "branch_tag", maximum=120)
+    captured_from = _validated_filter_date(captured_from, "captured_from")
+    captured_to = _validated_filter_date(captured_to, "captured_to")
+    if captured_from and captured_to and captured_from > captured_to:
+        raise _http_error(422, "INVALID_GPM_DATE_FILTER", "captured_from 不能晚于 captured_to")
+
+    clauses = ["u.branch_tag = ?"]
+    params: list[object] = [branch_tag]
+    if platform:
+        clauses.append("u.platform = ?")
+        params.append(platform)
+    if shading_quality is not None:
+        clauses.append("u.shading_quality = ?")
+        params.append(shading_quality)
+    if scene_id:
+        clauses.append("EXISTS (SELECT 1 FROM gpm_scenes sf WHERE sf.upload_id = u.id AND sf.scene_id = ?)")
+        params.append(scene_id)
+    if captured_from:
+        # captured_at records the collection-side wall-clock date (with its
+        # timezone). Filtering the ISO prefix avoids SQLite converting it to
+        # UTC and accidentally moving an early-morning capture to yesterday.
+        clauses.append("substr(u.captured_at, 1, 10) >= ?")
+        params.append(captured_from)
+    if captured_to:
+        clauses.append("substr(u.captured_at, 1, 10) <= ?")
+        params.append(captured_to)
+    where = " AND ".join(clauses)
+
+    connection = _connect()
+    try:
+        catalog_initialized = bool(connection.execute(
+            "SELECT EXISTS(SELECT 1 FROM gpm_config_imports)"
+        ).fetchone()[0])
+        configured_map_condition = (
+            "m.id IS NOT NULL AND d.active = 1"
+            if catalog_initialized else "m.id IS NOT NULL"
+        )
+        total = int(connection.execute(
+            f"SELECT COUNT(*) FROM gpm_uploads u WHERE {where}", tuple(params),
+        ).fetchone()[0])
+        rows = connection.execute(
+            f"""
+            SELECT u.*,
+                   COUNT(DISTINCT s.id) AS scene_count,
+                   COUNT(DISTINCT p.id) AS point_count,
+                   COUNT(DISTINCT CASE WHEN p.screenshot_path IS NOT NULL THEN p.id END)
+                     AS screenshot_count,
+                   GROUP_CONCAT(DISTINCT s.scene_id) AS scene_ids_csv,
+                   GROUP_CONCAT(DISTINCT s.map_name) AS map_names_csv,
+                   COUNT(DISTINCT s.map_name) AS map_count,
+                   COUNT(DISTINCT CASE WHEN {configured_map_condition} THEN s.map_name END)
+                     AS configured_map_count
+            FROM gpm_uploads u
+            JOIN gpm_scenes s ON s.upload_id = u.id
+            LEFT JOIN gpm_points p ON p.scene_row_id = s.id
+            LEFT JOIN gpm_map_revisions m ON m.map_name = s.map_name AND m.active = 1
+            LEFT JOIN gpm_map_definitions d ON d.map_name = s.map_name
+            WHERE {where}
+            GROUP BY u.id
+            ORDER BY datetime(u.captured_at) DESC, u.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, page_size, (page - 1) * page_size),
+        ).fetchall()
+        items = []
+        for row in rows:
+            map_count = int(row["map_count"] or 0)
+            configured = int(row["configured_map_count"] or 0)
+            map_status = "configured" if map_count and configured == map_count else (
+                "partial" if configured else "missing"
+            )
+            items.append({
+                **_batch_dto(row),
+                "created_at": row["created_at"],
+                "scene_ids": _csv_values(row["scene_ids_csv"]),
+                "map_names": _csv_values(row["map_names_csv"]),
+                "scene_count": int(row["scene_count"] or 0),
+                "point_count": int(row["point_count"] or 0),
+                "screenshot_count": int(row["screenshot_count"] or 0),
+                "map_count": map_count,
+                "configured_map_count": configured,
+                "map_status": map_status,
+            })
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+    finally:
+        connection.close()
+
+
 @router.get("/api/gpm-heatmaps/meta")
 def gpm_meta(branch_tag: str = Query("main")):
     connection = _connect()
@@ -264,24 +327,6 @@ def gpm_meta(branch_tag: str = Query("main")):
         connection.close()
 
 
-def _map_config(connection: sqlite3.Connection, scene_id: str) -> dict | None:
-    row = connection.execute(
-        "SELECT * FROM gpm_map_revisions WHERE scene_id = ? AND active = 1",
-        (scene_id,),
-    ).fetchone()
-    if not row:
-        return None
-    return {
-        "id": row["id"], "revision": row["revision"],
-        "image_url": _asset_url(row["image_path"]),
-        "image_width": row["image_width"], "image_height": row["image_height"],
-        "origin": [row["origin_x"], row["origin_y"]],
-        "range": [row["range_x"], row["range_y"]],
-        "x_reverse": bool(row["x_reverse"]), "y_reverse": bool(row["y_reverse"]),
-        "color_ranges": json.loads(row["color_ranges_json"]),
-    }
-
-
 @router.get("/api/gpm-heatmaps/scenes/{scene_id}/frame")
 def gpm_scene_frame(
     scene_id: str,
@@ -304,7 +349,7 @@ def gpm_scene_frame(
         batches = connection.execute(
             f"""
             SELECT u.*, s.id AS scene_row_id, s.pic_id, s.show_z, s.show_direction,
-                   s.x_reverse, s.y_reverse, s.heat_map_json, s.trend_json
+                   s.map_name, s.x_reverse, s.y_reverse, s.heat_map_json, s.trend_json
             FROM gpm_uploads u JOIN gpm_scenes s ON s.upload_id = u.id
             WHERE {scope}
             ORDER BY datetime(u.captured_at) DESC, u.id DESC
@@ -326,33 +371,46 @@ def gpm_scene_frame(
             """,
             (selected["scene_row_id"],),
         ).fetchall()
+        point_dtos = [
+            {
+                "id": row["id"], "index": row["point_index"],
+                "screenshot_id": row["screenshot_id"], "point_key": row["point_key"],
+                "position": json.loads(row["position_json"]),
+                "direction": json.loads(row["direction_json"]),
+                "view": json.loads(row["view_json"]),
+                "heat_map_data": json.loads(row["heat_map_data_json"]),
+                "trend_data": json.loads(row["trend_data_json"]),
+                "thumbnail_url": _asset_url(row["thumbnail_path"]),
+                "image_url": _asset_url(row["screenshot_path"]),
+            }
+            for row in points
+        ]
+        heat_map = json.loads(selected["heat_map_json"])
+        resolved_scales = resolve_heat_scales(
+            connection,
+            map_name=selected["map_name"],
+            platform=selected["platform"],
+            shading_quality=selected["shading_quality"],
+            heat_map=heat_map,
+            points=point_dtos,
+        )
+        for metric in heat_map:
+            metric["scale"] = resolved_scales.get(metric.get("key"))
         return {
             "batch": _batch_dto(selected),
             "available_batches": [_batch_dto(row) for row in batches],
             "scene": {
                 "id": scene_id, "pic_id": selected["pic_id"],
+                "map_name": selected["map_name"],
                 "show_z": bool(selected["show_z"]),
                 "show_direction": bool(selected["show_direction"]),
                 "x_reverse": bool(selected["x_reverse"]),
                 "y_reverse": bool(selected["y_reverse"]),
             },
-            "heat_map": json.loads(selected["heat_map_json"]),
+            "heat_map": heat_map,
             "trend": json.loads(selected["trend_json"]),
-            "map_config": _map_config(connection, scene_id),
-            "points": [
-                {
-                    "id": row["id"], "index": row["point_index"],
-                    "screenshot_id": row["screenshot_id"], "point_key": row["point_key"],
-                    "position": json.loads(row["position_json"]),
-                    "direction": json.loads(row["direction_json"]),
-                    "view": json.loads(row["view_json"]),
-                    "heat_map_data": json.loads(row["heat_map_data_json"]),
-                    "trend_data": json.loads(row["trend_data_json"]),
-                    "thumbnail_url": _asset_url(row["thumbnail_path"]),
-                    "image_url": _asset_url(row["screenshot_path"]),
-                }
-                for row in points
-            ],
+            "map_config": runtime_map_config(connection, selected["map_name"]),
+            "points": point_dtos,
         }
     finally:
         connection.close()

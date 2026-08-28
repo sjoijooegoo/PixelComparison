@@ -30,13 +30,11 @@ describe('GpmScreenshotStrip', () => {
     HTMLElement.prototype.scrollTo = vi.fn()
   })
 
-  it('选中项仅在截图条内横向居中，不滚动外层页面', async () => {
+  it('切换选中项不自动纠正截图条或外层页面的滚动位置', async () => {
     const wrapper = mountStrip()
     await wrapper.vm.$nextTick()
 
-    expect(HTMLElement.prototype.scrollTo).toHaveBeenCalledWith({
-      left: 0, behavior: 'smooth',
-    })
+    expect(HTMLElement.prototype.scrollTo).not.toHaveBeenCalled()
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
   })
 

@@ -169,6 +169,10 @@ export const api = {
     get(`/api/map-build/scenes/${encodeURIComponent(sceneId)}/trend`, params, options),
   gpmHeatmapMeta: (params = {}, options = {}) =>
     get('/api/gpm-heatmaps/meta', params, options),
+  gpmHeatmapUploadMeta: (params = {}, options = {}) =>
+    get('/api/gpm-heatmaps/uploads/meta', params, options),
+  gpmHeatmapUploads: (params = {}, options = {}) =>
+    get('/api/gpm-heatmaps/uploads', params, options),
   gpmHeatmapFrame: (sceneId, params = {}, options = {}) =>
     get(`/api/gpm-heatmaps/scenes/${encodeURIComponent(sceneId)}/frame`, params, options),
   gpmHeatmapSceneTrends: (sceneId, params = {}, options = {}) =>
@@ -177,6 +181,47 @@ export const api = {
     get(`/api/gpm-heatmaps/points/${encodeURIComponent(pointId)}`, {}, options),
   gpmHeatmapTrends: (pointId, params = {}, options = {}) =>
     get(`/api/gpm-heatmaps/points/${encodeURIComponent(pointId)}/trends`, params, options),
+  gpmProjectConfig: (options = {}) =>
+    get('/api/gpm-heatmaps/project-config', {}, options),
+  importGpmProjectConfig: (file) => {
+    const form = new FormData()
+    form.append('config', file)
+    return upload('/api/gpm-heatmaps/project-config/import', form, { fileName: file?.name })
+  },
+  uploadGpmProjectMapImage: (mapName, file) => {
+    const form = new FormData()
+    form.append('image', file)
+    return upload(
+      `/api/gpm-heatmaps/project-config/maps/${encodeURIComponent(mapName)}/image`,
+      form,
+      { sceneName: mapName, fileName: file?.name },
+    )
+  },
+  gpmProjectMapPreview: (mapName, options = {}) =>
+    get(
+      `/api/gpm-heatmaps/project-config/maps/${encodeURIComponent(mapName)}/preview`,
+      {},
+      options,
+    ),
+  gpmScaleCatalog: (options = {}) =>
+    get('/api/gpm-heatmaps/project-config/scales', {}, options),
+  createGpmMetricScale: (body) =>
+    post('/api/gpm-heatmaps/project-config/metric-scales', body),
+  updateGpmMetricScale: (scaleId, body) =>
+    put(`/api/gpm-heatmaps/project-config/metric-scales/${encodeURIComponent(scaleId)}`, body),
+  deleteGpmMetricScale: (scaleId) =>
+    del(`/api/gpm-heatmaps/project-config/metric-scales/${encodeURIComponent(scaleId)}`),
+  createGpmMetricScaleSet: (body) =>
+    post('/api/gpm-heatmaps/project-config/metric-scale-sets', body),
+  updateGpmMetricScaleSet: (scaleSetId, body) =>
+    put(`/api/gpm-heatmaps/project-config/metric-scale-sets/${encodeURIComponent(scaleSetId)}`, body),
+  deleteGpmMetricScaleSet: (scaleSetId) =>
+    del(`/api/gpm-heatmaps/project-config/metric-scale-sets/${encodeURIComponent(scaleSetId)}`),
+  updateGpmMapScaleBindings: (mapName, body) =>
+    put(
+      `/api/gpm-heatmaps/project-config/maps/${encodeURIComponent(mapName)}/scale-bindings`,
+      body,
+    ),
   deleteGpmHeatmapUpload: (batchId, branchTag = 'main') =>
     del(`/api/gpm-heatmaps/uploads/${encodeURIComponent(batchId)}?branch_tag=${encodeURIComponent(branchTag)}`),
   baselines: (filters = {}) => get('/api/baselines', filters),

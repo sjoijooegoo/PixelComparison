@@ -148,19 +148,23 @@ const trendGroups = computed(() => {
     {
       key: 'draw-calls', title: 'DC 趋势',
       series: [
-        { key: 'Scene_DC', label: '场景 DC', color: '#4cd6b0' },
         { key: 'Drawcall', label: '全部 DC', color: '#3491fa' },
+        { key: 'Scene_DC', label: '场景 DC', color: '#4cd6b0' },
       ].filter((item) => available.has(item.key)),
     },
     {
       key: 'triangles', title: '面数趋势',
       series: [
-        { key: 'Scene_Tris', label: '场景面数', color: '#4cd6b0' },
         { key: 'Triangle', label: '全部面数', color: '#3491fa' },
+        { key: 'Scene_Tris', label: '场景面数', color: '#4cd6b0' },
       ].filter((item) => available.has(item.key)),
     },
   ].filter((group) => group.series.length)
 })
+
+const activeMetric = computed(() => store.frame?.heat_map?.find(
+  (item) => item.key === store.metricKey,
+) || null)
 
 watch(() => route.fullPath, () => {
   if (route.fullPath === synchronizedRoutePath) {
@@ -241,8 +245,9 @@ onBeforeUnmount(() => {
           <GpmMapCanvas :frame="store.frame" :metric-key="store.metricKey"
             :selected-point-id="store.selectedPointId"
             @metric="store.metricKey = $event; syncRoute()" @select="selectPoint" />
-          <GpmDetailPanel :point="store.pointDetail" :loading="store.loading.detail"
-            :error="store.errors.detail" />
+          <GpmDetailPanel :point="store.pointDetail" :summary-point="store.selectedPoint"
+            :metric-key="store.metricKey" :metric-name="activeMetric?.name"
+            :loading="store.loading.detail" :error="store.errors.detail" />
         </section>
 
         <GpmScreenshotStrip :points="store.frame.points" :selected-point-id="store.selectedPointId"
@@ -324,7 +329,7 @@ onBeforeUnmount(() => {
 .trend-card-controls :deep(.arco-radio-button-content) {
   min-height: 22px; padding: 0 8px; font-size: 11px; line-height: 20px;
 }
-.trend-card-controls :deep(.days-select) { flex: 0 0 112px; width: 112px; }
+.trend-card-controls :deep(.days-select) { flex: 0 0 124px; width: 124px; }
 .trend-card-controls :deep(.days-select.arco-select-view) {
   background: var(--color-fill-2); border-color: var(--color-border-1);
 }

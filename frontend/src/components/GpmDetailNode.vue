@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 
 defineOptions({ name: 'GpmDetailNode' })
 const props = defineProps({
@@ -7,21 +7,34 @@ const props = defineProps({
   depth: { type: Number, default: 0 },
   expanded: { type: Boolean, default: false },
   expansionState: { type: Object, default: null },
+  tableSortState: { type: Object, default: null },
   nodePath: { type: String, default: 'root' },
 })
 const emit = defineEmits(['toggle'])
 const localExpansionState = reactive({})
+const localTableSortState = reactive({})
 const state = computed(() => props.expansionState || localExpansionState)
+const sortState = computed(() => props.tableSortState || localTableSortState)
 const openChildIndex = computed(() => state.value[props.nodePath] ?? null)
 const children = computed(() => {
   if (Array.isArray(props.node.children) && props.node.children.length) return props.node.children
   if (Array.isArray(props.node.treeData) && props.node.treeData.length) return props.node.treeData
   return []
 })
-const columns = computed(() => props.node.table_data?.cols || [])
-const rows = computed(() => props.node.table_data?.data || [])
-const sortColumnIndex = ref(null)
-const sortDirection = ref('desc')
+const columns = computed(() => (
+  Array.isArray(props.node.table_data?.cols) ? props.node.table_data.cols : []
+))
+const rows = computed(() => (
+  Array.isArray(props.node.table_data?.data) ? props.node.table_data.data : []
+))
+const savedSort = sortState.value[props.nodePath]
+const savedSortColumnIndex = savedSort
+  ? columns.value.findIndex((column) => (column.key || column.name) === savedSort.columnKey)
+  : -1
+const sortColumnIndex = ref(savedSortColumnIndex >= 0 ? savedSortColumnIndex : null)
+const sortDirection = ref(savedSort?.direction === 'asc' ? 'asc' : 'desc')
+const currentPage = ref(1)
+const pageSize = 15
 const sortedRows = computed(() => {
   if (sortColumnIndex.value === null) return rows.value
   const column = columns.value[sortColumnIndex.value]
@@ -46,8 +59,26 @@ const sortedRows = computed(() => {
     })
     .map((item) => item.row)
 })
+const totalPages = computed(() => Math.max(1, Math.ceil(sortedRows.value.length / pageSize)))
+const visiblePages = computed(() => {
+  const count = Math.min(5, totalPages.value)
+  const start = Math.min(
+    Math.max(1, currentPage.value - Math.floor(count / 2)),
+    totalPages.value - count + 1,
+  )
+  return Array.from({ length: count }, (_, index) => start + index)
+})
+const pagedRows = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return sortedRows.value.slice(start, start + pageSize)
+})
 const nodeTitle = computed(() => String(props.node.name || '未命名数据'))
 const hasContent = computed(() => Boolean(children.value.length || columns.value.length))
+const effectiveExpanded = computed(() => props.expanded && hasContent.value)
+
+watch(() => sortedRows.value.length, () => {
+  currentPage.value = Math.min(currentPage.value, totalPages.value)
+})
 
 function toggleChild(index) {
   if (openChildIndex.value === index) delete state.value[props.nodePath]
@@ -70,35 +101,51 @@ function isEmptyValue(value) {
 }
 
 function toggleSort(columnIndex) {
+  currentPage.value = 1
   if (sortColumnIndex.value === columnIndex) {
     sortDirection.value = sortDirection.value === 'asc' ? 'desc' : 'asc'
-    return
+  } else {
+    sortColumnIndex.value = columnIndex
+    sortDirection.value = 'desc'
   }
-  sortColumnIndex.value = columnIndex
-  sortDirection.value = 'desc'
+  const column = columns.value[columnIndex]
+  sortState.value[props.nodePath] = {
+    columnKey: column?.key || column?.name,
+    direction: sortDirection.value,
+  }
+}
+
+function changePage(offset) {
+  currentPage.value = Math.min(totalPages.value, Math.max(1, currentPage.value + offset))
+}
+
+function goToPage(page) {
+  currentPage.value = Math.min(totalPages.value, Math.max(1, page))
 }
 
 </script>
 
 <template>
-  <div class="detail-node" :class="{ nested: depth > 0, root: depth === 0, open: expanded }">
+  <div class="detail-node" :class="{ nested: depth > 0, root: depth === 0, open: effectiveExpanded }">
     <button type="button" class="detail-summary" :class="{ empty: !hasContent }"
-      :aria-expanded="hasContent ? expanded : undefined" :disabled="!hasContent"
+      :aria-expanded="hasContent ? effectiveExpanded : undefined" :disabled="!hasContent"
       @click="hasContent && emit('toggle')">
       <span class="node-title">{{ nodeTitle }}</span>
       <span class="toggle" aria-hidden="true">›</span>
     </button>
-    <div v-if="expanded" class="detail-content">
+    <div v-if="effectiveExpanded" class="detail-content"
+      :class="{ paginated: columns.length && totalPages > 1 }">
       <div v-if="children.length" class="children-stack">
         <GpmDetailNode v-for="(child, index) in children" :key="`${child.name}-${index}`"
           :node="child" :depth="depth + 1" :expanded="openChildIndex === index"
-          :expansion-state="state" :node-path="`${nodePath}.${index}`"
+          :expansion-state="state" :table-sort-state="sortState"
+          :node-path="`${nodePath}.${index}`"
           @toggle="toggleChild(index)" />
       </div>
       <div v-if="columns.length" class="table-scroll">
         <table class="detail-table">
           <thead><tr>
-            <th v-for="(column, columnIndex) in columns" :key="column.key"
+            <th v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex"
               :aria-sort="sortColumnIndex === columnIndex
                 ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
               <button type="button" class="table-sort"
@@ -113,14 +160,26 @@ function toggleSort(columnIndex) {
             </th>
           </tr></thead>
           <tbody>
-            <tr v-for="(row, rowIndex) in sortedRows" :key="rowIndex">
-              <td v-for="(column, columnIndex) in columns" :key="column.key">
+            <tr v-for="(row, rowIndex) in pagedRows"
+              :key="`${currentPage}-${rowIndex}`">
+              <td v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex">
                 {{ Array.isArray(row) ? row[columnIndex] : row?.[column.key] }}
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+      <footer v-if="columns.length && totalPages > 1" class="table-pagination"
+        :aria-label="`表格分页，共 ${sortedRows.length} 条`">
+        <button type="button" class="page-arrow" aria-label="上一页"
+          :disabled="currentPage === 1" @click="changePage(-1)">‹</button>
+        <button v-for="page in visiblePages" :key="page" type="button"
+          class="page-number" :class="{ active: page === currentPage }"
+          :aria-current="page === currentPage ? 'page' : undefined"
+          :aria-label="`第 ${page} 页`" @click="goToPage(page)">{{ page }}</button>
+        <button type="button" class="page-arrow" aria-label="下一页"
+          :disabled="currentPage === totalPages" @click="changePage(1)">›</button>
+      </footer>
       <div v-if="!children.length && !columns.length" class="empty-node">暂无明细</div>
     </div>
   </div>
@@ -157,6 +216,7 @@ function toggleSort(columnIndex) {
   background: color-mix(in srgb, var(--color-fill-2) 74%, var(--color-bg-2));
   animation: detail-reveal .16s ease-out both;
 }
+.detail-content.paginated { padding-bottom: 5px; }
 .children-stack {
   overflow: hidden; border: 1px solid var(--color-border-2); border-radius: 3px;
   background: var(--color-fill-1);
@@ -166,7 +226,7 @@ function toggleSort(columnIndex) {
 .table-scroll {
   --detail-table-head-bg: color-mix(in srgb, var(--color-bg-5) 80%, var(--color-bg-white) 20%);
   --detail-table-cell-bg: color-mix(in srgb, var(--color-bg-5) 90%, var(--color-bg-white) 10%);
-  max-height: min(440px, 55vh); overflow: auto; border: 1px solid var(--color-border-2);
+  overflow-x: auto; overflow-y: hidden; border: 1px solid var(--color-border-2);
   border-radius: 3px; background: var(--detail-table-cell-bg);
 }
 .children-stack + .table-scroll { margin-top: 10px; }
@@ -191,6 +251,31 @@ td {
 th:first-child, td:first-child { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 tr:last-child td { border-bottom: 0; }
 th:last-child, td:last-child { border-right: 0; }
+.table-pagination {
+  min-height: 32px; margin-top: 5px; padding: 3px 0; display: flex;
+  align-items: center; justify-content: flex-start; gap: 4px;
+  background: transparent;
+  color: var(--color-text-3); font-size: 12px; font-variant-numeric: tabular-nums;
+}
+.table-pagination button {
+  width: 26px; height: 26px; padding: 0; border: 1px solid transparent;
+  border-radius: 4px; background: transparent; color: var(--color-text-2);
+  display: grid; place-items: center; line-height: 1;
+  font: inherit; font-weight: 600; cursor: pointer;
+  transition: background-color .12s ease, border-color .12s ease, color .12s ease;
+}
+.table-pagination button:hover:not(:disabled) {
+  border-color: var(--color-border-2); background: color-mix(in srgb, var(--color-fill-3) 58%, transparent);
+}
+.table-pagination .page-number.active {
+  border-color: rgba(var(--arcoblue-6), .46);
+  background: rgba(var(--arcoblue-6), .16); color: rgb(var(--arcoblue-5));
+}
+.table-pagination .page-arrow { color: var(--color-text-3); font-size: 18px; font-weight: 400; }
+.table-pagination button:focus-visible {
+  outline: 1px solid rgb(var(--arcoblue-5)); outline-offset: 1px;
+}
+.table-pagination button:disabled { opacity: .42; cursor: not-allowed; }
 .empty-node { padding: 8px; text-align: center; color: var(--color-text-3); font-size: 12px; }
 @keyframes detail-reveal {
   from { opacity: 0; transform: translateY(-4px); }

@@ -107,7 +107,7 @@ describe('GpmDetailNode', () => {
     expect(sourceRows).toEqual([['ten', 10], ['two', 2], ['thirty', '30']])
   })
 
-  it('大表格不静默截断并交给明细区域内部滚动', () => {
+  it('大表格完整保留数据并使用上一页、下一页切换', async () => {
     const rows = Array.from({ length: 250 }, (_, index) => [`asset-${index}`, index])
     const wrapper = mount(GpmDetailNode, {
       props: {
@@ -122,8 +122,18 @@ describe('GpmDetailNode', () => {
       },
     })
 
-    expect(wrapper.findAll('tbody tr')).toHaveLength(250)
+    expect(wrapper.findAll('tbody tr')).toHaveLength(15)
+    expect(wrapper.text()).toContain('asset-0')
+    expect(wrapper.get('.table-pagination').attributes('aria-label')).toBe('表格分页，共 250 条')
+    expect(wrapper.get('.page-number.active').text()).toBe('1')
+
+    expect(wrapper.get('[aria-label="上一页"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[aria-label="第 2 页"]').trigger('click')
+
+    expect(wrapper.text()).toContain('asset-15')
+    expect(wrapper.text()).not.toContain('asset-0')
+    expect(wrapper.get('.page-number.active').text()).toBe('2')
+    expect(wrapper.findAll('.page-number')).toHaveLength(5)
     expect(wrapper.find('.row-limit').exists()).toBe(false)
-    expect(wrapper.get('.table-scroll').attributes('style')).toBeUndefined()
   })
 })

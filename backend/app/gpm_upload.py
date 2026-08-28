@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 import sqlite3
 import uuid
@@ -15,7 +16,9 @@ from typing import Annotated
 from fastapi import APIRouter, File, Form, UploadFile
 from PIL import Image, UnidentifiedImageError
 
-from .gpm_common import IMAGE_SUFFIXES, http_error, require_identifier, safe_segment
+from .gpm_common import (
+    IMAGE_SUFFIXES, http_error, require_identifier, require_platform, safe_segment,
+)
 from .gpm_storage import connect_gpm_database, gpm_assets_dir
 
 
@@ -47,6 +50,8 @@ def _validate_report(payload: object) -> list[dict]:
         if not isinstance(scene, dict):
             raise http_error(422, "INVALID_GPM_SCENE", "data 中的场景必须是对象")
         scene_id = require_identifier(scene.get("pic_name"), "pic_name")
+        map_name = require_identifier(scene.get("map_name") or scene_id, "map_name")
+        scene["map_name"] = map_name
         details = scene.get("detail")
         if not scene_id or not isinstance(details, list):
             raise http_error(422, "INVALID_GPM_SCENE", "每个场景必须包含 pic_name 和 detail 数组")
@@ -66,9 +71,10 @@ def _validate_report(payload: object) -> list[dict]:
                 direction = point["direction"]
             except (KeyError, TypeError, ValueError):
                 raise http_error(422, "INVALID_GPM_POINT", f"{scene_id} 点位缺少必要字段")
-            if index in indices or screenshot_id in screenshot_ids:
+            normalized_screenshot_id = screenshot_id.casefold()
+            if index in indices or normalized_screenshot_id in screenshot_ids:
                 raise http_error(422, "DUPLICATE_GPM_POINT", f"{scene_id} 点位或截图 ID 重复")
-            if screenshot_id in all_screenshot_ids:
+            if normalized_screenshot_id in all_screenshot_ids:
                 raise http_error(
                     422, "DUPLICATE_GPM_SCREENSHOT_ID",
                     f"跨场景 screenshot_id 必须唯一，重复值: {screenshot_id}",
@@ -77,6 +83,17 @@ def _validate_report(payload: object) -> list[dict]:
                 raise http_error(422, "INVALID_GPM_POSITION", f"{scene_id} 点位 {index} 坐标无效")
             if not isinstance(direction, list) or len(direction) < 2:
                 raise http_error(422, "INVALID_GPM_DIRECTION", f"{scene_id} 点位 {index} 方向无效")
+            for values, code, label in (
+                (position, "INVALID_GPM_POSITION", "坐标"),
+                (direction, "INVALID_GPM_DIRECTION", "方向"),
+            ):
+                if any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    for value in values[:2]
+                ):
+                    raise http_error(422, code, f"{scene_id} 点位 {index} {label}必须是有限数字")
             raw_point_key = point.get("point_key") or point.get("teleport_point_id")
             if raw_point_key is not None:
                 point_key = str(raw_point_key).strip()
@@ -87,8 +104,8 @@ def _validate_report(payload: object) -> list[dict]:
                 point["point_key"] = point_key
                 point_keys.add(point_key)
             indices.add(index)
-            screenshot_ids.add(screenshot_id)
-            all_screenshot_ids.add(screenshot_id)
+            screenshot_ids.add(normalized_screenshot_id)
+            all_screenshot_ids.add(normalized_screenshot_id)
     return scenes
 
 
@@ -145,6 +162,7 @@ def _archive_images(archive_path: Path) -> dict[str, zipfile.ZipInfo]:
         if sum(item.file_size for item in infos) > MAX_ARCHIVE_UNPACKED_BYTES:
             raise http_error(413, "SCREENSHOTS_TOO_LARGE", "截图解压后体积超过限制")
         images: dict[str, zipfile.ZipInfo] = {}
+        normalized_ids: set[str] = set()
         for item in infos:
             path = PurePosixPath(item.filename.replace("\\", "/"))
             if path.is_absolute() or ".." in path.parts:
@@ -154,9 +172,11 @@ def _archive_images(archive_path: Path) -> dict[str, zipfile.ZipInfo]:
             if path.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
             screenshot_id = path.stem
-            if screenshot_id in images:
+            normalized_screenshot_id = screenshot_id.casefold()
+            if normalized_screenshot_id in normalized_ids:
                 raise http_error(422, "DUPLICATE_SCREENSHOT", f"截图 ID 重复: {screenshot_id}")
             images[screenshot_id] = item
+            normalized_ids.add(normalized_screenshot_id)
         return images
 
 
@@ -204,12 +224,12 @@ def _insert_upload_graph(
         scene_cursor = connection.execute(
             """
             INSERT INTO gpm_scenes (
-                upload_id, scene_id, pic_id, show_z, show_direction,
+                upload_id, scene_id, map_name, pic_id, show_z, show_direction,
                 x_reverse, y_reverse, heat_map_json, trend_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                upload_id, str(scene["pic_name"]), scene.get("pic_id"),
+                upload_id, str(scene["pic_name"]), str(scene["map_name"]), scene.get("pic_id"),
                 int(bool(scene.get("show_z", 0))), int(bool(scene.get("show_direction", 1))),
                 int(bool(scene.get("x_reverse", 0))), int(bool(scene.get("y_reverse", 1))),
                 json.dumps(scene.get("heat_map", []), ensure_ascii=False),
@@ -304,11 +324,9 @@ def upload_gpm_heatmap(
         if batch_url and len(batch_url) > 2048:
             raise http_error(422, "INVALID_BATCH_URL", "batch_url 不能超过 2048 个字符")
 
-    platform = str(_metadata_value(
+    platform = require_platform(_metadata_value(
         _report_scope_value(scenes, "platform"), platform, "platform", required=True,
-    )).strip()
-    if not platform or len(platform) > 120:
-        raise http_error(422, "INVALID_UPLOAD_METADATA", "platform 不能为空且不能超过 120 个字符")
+    ))
     raw_quality = _metadata_value(
         _report_scope_value(scenes, "shading_quality"), shading_quality,
         "shading_quality", required=True,

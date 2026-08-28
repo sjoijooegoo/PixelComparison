@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { batchLocation, batchStateFromFilters } from '../batchRoute'
 import {
   MAX_DATE_RANGE_DAYS,
@@ -14,6 +14,7 @@ import { useProjectStore } from '../stores/projectStore'
 const store = useBatchCatalogStore()
 const project = useProjectStore()
 const router = useRouter()
+const route = useRoute()
 
 const unlistedSceneIds = computed(() => new Set(project.meta.unlisted_scene_ids || []))
 
@@ -47,7 +48,7 @@ function contextTarget(overrides = {}, page = 1) {
   return batchLocation(batchStateFromFilters({
     ...store.filters,
     ...overrides,
-  }, page))
+  }, page, route.query.return_to || ''))
 }
 
 function onBranchChange(branchTag) {
@@ -105,7 +106,9 @@ function reset() {
   // 批次管理清空后固定回到 main、全部场景和项目默认日期范围。
   dayPick.value = null
   dayPickerOpen.value = false
-  void router.replace(batchLocation(batchStateFromFilters(store.defaultFilters())))
+  void router.replace(batchLocation(batchStateFromFilters(
+    store.defaultFilters(), 1, route.query.return_to || '',
+  )))
 }
 </script>
 

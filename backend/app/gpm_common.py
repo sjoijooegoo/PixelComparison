@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
-QUALITY_LABELS = {0: "低", 1: "中", 2: "高", 3: "史诗", 4: "极致", 5: "电影"}
+QUALITY_LABELS = {0: "节能", 1: "流畅", 2: "均衡", 3: "精美", 4: "极致", 5: "电影"}
 SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._-]+")
 SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9._-]{1,200}")
 
@@ -34,6 +34,22 @@ def require_identifier(value: str, label: str, *, maximum: int = 200) -> str:
         raise http_error(
             422, "INVALID_IDENTIFIER",
             f"{label} 仅允许字母、数字、点、下划线和连字符",
+        )
+    return normalized
+
+
+def require_platform(value: object, label: str = "platform", *, maximum: int = 120) -> str:
+    """Validate a display-name platform consistently across upload and configuration APIs."""
+
+    normalized = str(value or "").strip()
+    if (
+        not normalized
+        or len(normalized) > maximum
+        or any(ord(character) < 32 for character in normalized)
+    ):
+        raise http_error(
+            422, "INVALID_GPM_PLATFORM",
+            f"{label} 不能为空、不能包含控制字符且不能超过 {maximum} 个字符",
         )
     return normalized
 

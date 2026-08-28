@@ -72,9 +72,9 @@ describe('BatchView route synchronization', () => {
     storeMock.batchPage = 1
     router = createRouter({
       history: createMemoryHistory(),
-      routes: [{ path: '/batches', component: BatchView }],
+      routes: [{ path: '/batch-management/capture', component: BatchView }],
     })
-    await router.push('/batches')
+    await router.push('/batch-management/capture')
     await router.isReady()
     wrapper = mount(BatchView, {
       global: {
@@ -84,6 +84,7 @@ describe('BatchView route synchronization', () => {
           BatchTable: EmptyStub,
           'a-button': EmptyStub,
           'a-spin': EmptyStub,
+          'a-tooltip': EmptyStub,
         },
       },
     })
@@ -92,6 +93,7 @@ describe('BatchView route synchronization', () => {
 
   it('无参数地址规范化为 main 和全部场景', () => {
     expect(storeMock.applyRoute).toHaveBeenCalledWith({
+      returnTo: '',
       branchTag: 'main',
       sceneId: '',
       dateMode: undefined,
@@ -112,7 +114,7 @@ describe('BatchView route synchronization', () => {
   it('路由变化时恢复筛选和页码', async () => {
     storeMock.applyRoute.mockClear()
     await router.push({
-      path: '/batches',
+      path: '/batch-management/capture',
       query: {
         branch_tag: 'engine-ue5',
         scene_id: 'SceneB',
@@ -125,6 +127,7 @@ describe('BatchView route synchronization', () => {
     await flushRoute()
 
     expect(storeMock.applyRoute).toHaveBeenCalledWith({
+      returnTo: '',
       branchTag: 'engine-ue5',
       sceneId: 'SceneB',
       dateMode: 'days',

@@ -12,6 +12,7 @@ function dateValues(value) {
 
 export function parseBatchRoute(route) {
   return {
+    returnTo: firstValue(route.query.return_to) || '',
     branchTag: firstValue(route.query.branch_tag) || 'main',
     sceneId: firstValue(route.query.scene_id) || '',
     dateMode: firstValue(route.query.date_mode),
@@ -22,8 +23,9 @@ export function parseBatchRoute(route) {
   }
 }
 
-export function batchStateFromFilters(filters, page = 1) {
+export function batchStateFromFilters(filters, page = 1, returnTo = '') {
   return {
+    returnTo,
     branchTag: filters.branch_tag || 'main',
     sceneId: filters.scene_id || '',
     dateMode: filters.dateMode,
@@ -36,6 +38,7 @@ export function batchStateFromFilters(filters, page = 1) {
 
 export function batchRouteKey(state) {
   return JSON.stringify({
+    returnTo: state.returnTo || '',
     branchTag: state.branchTag || 'main',
     sceneId: state.sceneId || '',
     dateMode: state.dateMode,
@@ -48,6 +51,7 @@ export function batchRouteKey(state) {
 
 export function batchLocation(state) {
   const query = { branch_tag: state.branchTag || 'main' }
+  if (state.returnTo) query.return_to = state.returnTo
   if (state.sceneId) query.scene_id = state.sceneId
   if (state.dateMode) {
     query.date_mode = state.dateMode
@@ -59,5 +63,5 @@ export function batchLocation(state) {
   }
   const page = Number(state.page)
   if (Number.isInteger(page) && page > 1) query.page = String(page)
-  return { path: '/batches', query }
+  return { path: '/batch-management/capture', query }
 }

@@ -7,6 +7,7 @@ import { router } from './router'
 import { useProjectStore } from './stores/projectStore'
 import { logger } from './logger'
 import { bootstrapApp } from './bootstrap'
+import './theme'
 import './style.css'
 
 // 截图网格自行决定初始横向位置；禁止浏览器在 F5 后恢复刷新前的滚动位置，

@@ -312,6 +312,10 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
 
     async changeScope({ sceneId, platform, shadingQuality, batchId } = {}) {
       invalidateRouteApplication(this)
+      const routeSequence = runtime(this).routeSequence
+      const isCurrent = () => routeSequence === runtime(this).routeSequence
+      cancelChannel(this, 'detail')
+      cancelChannel(this, 'trends')
       if (sceneId !== undefined) this.filters.sceneId = sceneId
       if (platform !== undefined) this.filters.platform = platform
       if (shadingQuality !== undefined) this.filters.shadingQuality = qualityValue(shadingQuality)
@@ -321,7 +325,9 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       this.pointDetail = null
       this.trends = null
       await this.loadFrame(batchId ?? '')
+      if (!isCurrent()) return null
       await Promise.all([this.loadPoint(), this.loadTrends()])
+      if (!isCurrent()) return null
       return this.routeState()
     },
 

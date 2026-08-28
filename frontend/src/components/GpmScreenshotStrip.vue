@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, onUnmounted, ref, watch } from 'vue'
+import { onUnmounted, ref } from 'vue'
 
 const props = defineProps({
   points: { type: Array, default: () => [] },
@@ -18,22 +18,6 @@ let direction = ''
 let suppressClickUntil = 0
 let lastSelectionId = null
 let lastSelectionAt = 0
-
-watch(() => [props.selectedPointId, props.points.length], async () => {
-  await nextTick()
-  const container = strip.value
-  const active = container?.querySelector('.shot.active')
-  if (!container || !active) return
-  const containerRect = container.getBoundingClientRect()
-  const activeRect = active.getBoundingClientRect()
-  const left = Math.max(0, container.scrollLeft + activeRect.left - containerRect.left
-    - (containerRect.width - activeRect.width) / 2)
-  if (typeof container.scrollTo === 'function') {
-    container.scrollTo({ left, behavior: 'smooth' })
-  } else {
-    container.scrollLeft = left
-  }
-}, { immediate: true })
 
 function onMouseDown(event) {
   if (event.button !== 0 || previewVisible.value || !strip.value) return

@@ -79,9 +79,9 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
 <template>
   <div class="settings-page">
     <div class="inner">
-      <div class="page-head">
-        <h2>项目设置</h2>
-        <p>调整对比算法参数与筛选默认值</p>
+      <div class="page-heading">
+        <h2>截图对比设置</h2>
+        <p>调整对比算法与筛选默认值</p>
       </div>
 
       <a-alert type="info" closable class="tip">
@@ -202,10 +202,9 @@ function resetDefaults() { Object.assign(form, DEFAULTS) }
 <style scoped>
 .settings-page { flex: 1; overflow-y: auto; padding: 28px 32px; }
 .inner { max-width: 1360px; margin: 0 auto; }
-
-.page-head { margin-bottom: 20px; }
-.page-head h2 { margin: 0; font-size: 24px; font-weight: 700; letter-spacing: .5px; }
-.page-head p { margin: 6px 0 0; font-size: 13px; color: var(--color-text-3); }
+.page-heading { margin-bottom: 20px; }
+.page-heading h2 { margin: 0; font-size: 22px; line-height: 1.3; color: var(--color-text-1); }
+.page-heading p { margin: 6px 0 0; font-size: 12px; color: var(--color-text-3); }
 
 .tip { margin-bottom: 18px; border-radius: 8px; }
 

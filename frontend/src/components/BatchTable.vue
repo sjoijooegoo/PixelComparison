@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { batchLocation, batchStateFromFilters } from '../batchRoute'
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
 import Pager from './Pager.vue'
@@ -11,13 +11,16 @@ import { qualityLabel } from '../qualityRuns'
 
 const store = useBatchCatalogStore()
 const router = useRouter()
+const route = useRoute()
 
 function retryBatches() {
   store.loadBatches().catch(() => {})
 }
 
 function changePage(page) {
-  return router.push(batchLocation(batchStateFromFilters(store.filters, page)))
+  return router.push(batchLocation(batchStateFromFilters(
+    store.filters, page, route.query.return_to || '',
+  )))
 }
 
 // 批次图片预览弹窗

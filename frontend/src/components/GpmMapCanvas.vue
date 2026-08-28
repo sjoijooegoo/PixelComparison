@@ -2,7 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { createMapProjection, containedImageRect } from '../gpmHeatmap/mapProjection'
-import { LINEAR_HEAT_GRADIENT, linearHeatColor, metricRange } from '../gpmHeatmap/colors'
+import {
+  LINEAR_HEAT_GRADIENT,
+  configuredBands,
+  formatMetricValue,
+  metricRange,
+  resolvedHeatColor,
+} from '../gpmHeatmap/colors'
 
 const props = defineProps({
   frame: { type: Object, default: null },
@@ -21,6 +27,8 @@ let projected = []
 
 const metric = computed(() => props.frame?.heat_map?.find((item) => item.key === props.metricKey))
 const valueRange = computed(() => metricRange(props.frame?.points, props.metricKey))
+const activeScale = computed(() => metric.value?.scale)
+const scaleBands = computed(() => configuredBands(activeScale.value))
 const hoveredPoint = computed(() => props.frame?.points?.find(
   (point) => samePointId(point.id, hoveredPointId.value),
 ))
@@ -111,7 +119,9 @@ function draw() {
     const selected = samePointId(source.id, props.selectedPointId)
     const hovered = samePointId(source.id, hoveredPointId.value)
     const size = selected ? 13 : hovered ? 12 : 10
-    const color = linearHeatColor(source.heat_map_data?.[props.metricKey], valueRange.value)
+    const color = resolvedHeatColor(
+      source.heat_map_data?.[props.metricKey], activeScale.value, valueRange.value,
+    )
     if ((hovered || selected) && props.frame?.scene?.show_direction) {
       drawDirectionArrow(context, point, direction)
     }
@@ -181,9 +191,16 @@ watch(() => props.frame, () => {
   tooltipAnchor.value = null
 })
 watch(() => [props.frame, props.metricKey, props.selectedPointId, hoveredPointId.value], draw)
+watch(host, (element, previous) => {
+  if (previous) observer?.unobserve(previous)
+  if (element) {
+    observer?.observe(element)
+    draw()
+  }
+}, { flush: 'post' })
 onMounted(() => {
   observer = new ResizeObserver(draw)
-  observer.observe(host.value)
+  if (host.value) observer.observe(host.value)
   draw()
 })
 onBeforeUnmount(() => observer?.disconnect())
@@ -227,8 +244,27 @@ onBeforeUnmount(() => observer?.disconnect())
       当前场景尚未配置地图，请先上传地图图片与坐标范围
     </div>
     <div v-if="frame?.map_config" class="map-legend">
-      <span class="linear-legend">
-        <small>低</small><i :style="{ background: LINEAR_HEAT_GRADIENT }"></i><small>高</small>
+      <template v-if="activeScale?.mode === 'configured'">
+        <span v-for="band in scaleBands" :key="`${band.minimum}-${band.maximum}`" class="band-legend">
+          <i :style="{ background: band.color }"></i>
+          <small v-if="band.minimum == null">
+            {{ band.maximumInclusive ? '≤' : '<' }} {{ formatMetricValue(band.maximum) }}
+          </small>
+          <small v-else-if="band.maximum == null">
+            {{ band.minimumInclusive ? '≥' : '>' }} {{ formatMetricValue(band.minimum) }}
+          </small>
+          <small v-else>
+            {{ band.minimumInclusive ? '≥' : '>' }} {{ formatMetricValue(band.minimum) }}
+            · {{ band.maximumInclusive ? '≤' : '<' }} {{ formatMetricValue(band.maximum) }}
+          </small>
+        </span>
+          <em :title="activeScale.source?.scale_set_name || ''">
+          {{ activeScale.source?.scale_name || '固定标尺' }}
+        </em>
+      </template>
+      <span v-else class="linear-legend">
+        <i :style="{ background: LINEAR_HEAT_GRADIENT }"></i>
+        <small>动态范围</small>
       </span>
     </div>
   </section>
@@ -294,6 +330,11 @@ onBeforeUnmount(() => observer?.disconnect())
   gap: 10px 18px; color: var(--color-text-3); border-top: 1px solid var(--color-border-1);
 }
 .map-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.map-legend i { width: 132px; height: 8px; border-radius: 2px; box-shadow: 0 0 0 1px rgba(255,255,255,.18); }
+.map-legend i { width: 10px; height: 10px; border-radius: 1px; box-shadow: 0 0 0 1px rgba(255,255,255,.16); }
+.map-legend .linear-legend i { width: 132px; height: 8px; }
 .map-legend small { color: var(--color-text-4); font-size: 11px; }
+.map-legend em {
+  margin-left: auto; overflow: hidden; color: var(--color-text-4); font-size: 10px;
+  font-style: normal; text-overflow: ellipsis; white-space: nowrap;
+}
 </style>

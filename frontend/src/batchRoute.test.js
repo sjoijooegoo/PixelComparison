@@ -16,7 +16,7 @@ describe('batch catalog route state', () => {
       createdDates: ['2026-08-01', '2026-08-03'],
       page: 2,
     })).toEqual({
-      path: '/batches',
+      path: '/batch-management/capture',
       query: {
         branch_tag: 'engine-ue5',
         scene_id: 'Scene A',
@@ -59,7 +59,7 @@ describe('batch catalog route state', () => {
     })
 
     expect(batchLocation(state)).toEqual({
-      path: '/batches',
+      path: '/batch-management/capture',
       query: {
         branch_tag: 'main',
         date_mode: 'range',

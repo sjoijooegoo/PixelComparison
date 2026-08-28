@@ -2,8 +2,19 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 // 视图懒加载,避免 router → view → store → router 的循环依赖
 const routes = [
-  { path: '/', redirect: '/batches' },
-  { path: '/batches', component: () => import('./views/BatchView.vue') },
+  { path: '/', redirect: '/screenshot' },
+  {
+    path: '/batch-management/capture',
+    component: () => import('./views/BatchView.vue'),
+  },
+  {
+    path: '/batch-management/gpm',
+    component: () => import('./views/GpmBatchView.vue'),
+  },
+  {
+    path: '/batches',
+    redirect: (to) => ({ path: '/batch-management/capture', query: to.query }),
+  },
   {
     path: '/batches/:sceneId',
     redirect: (to) => ({
@@ -14,8 +25,23 @@ const routes = [
   { path: '/screenshot/:sceneId?', component: () => import('./views/ScreenshotComparisonView.vue') },
   { path: '/map-build/:sceneId?', component: () => import('./views/MapBuildView.vue') },
   { path: '/gpm-heatmap/:sceneId?', component: () => import('./views/GpmHeatmapView.vue') },
-  { path: '/settings', component: () => import('./components/ProjectSettings.vue') },
-  { path: '/:pathMatch(.*)*', redirect: '/batches' },
+  {
+    path: '/settings/screenshot-comparison',
+    component: () => import('./components/ProjectSettings.vue'),
+  },
+  {
+    path: '/settings/gpm-heatmap',
+    component: () => import('./views/GpmProjectSettingsView.vue'),
+  },
+  {
+    path: '/settings/gpm-heatmap/scales',
+    component: () => import('./views/GpmScaleSettingsView.vue'),
+  },
+  {
+    path: '/settings',
+    redirect: (to) => ({ path: '/settings/screenshot-comparison', query: to.query }),
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/screenshot' },
 ]
 
 export const router = createRouter({

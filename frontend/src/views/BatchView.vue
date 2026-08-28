@@ -46,6 +46,7 @@ async function applyRoute() {
     if (run !== routeRun || !pageActive) return
     const normalized = await store.applyRoute(routeState())
     if (run !== routeRun || !pageActive || !normalized) return
+    normalized.returnTo = routeState().returnTo
     synchronizedRouteKey = batchRouteKey(normalized)
     await replaceUrl(normalized)
   } catch {
@@ -61,7 +62,7 @@ function registerRefresh() {
 }
 
 watch(() => route.fullPath, () => {
-  if (writingUrl || route.path !== '/batches') return
+  if (writingUrl || route.path !== '/batch-management/capture') return
   const requested = routeState()
   if (store.initialized && batchRouteKey(requested) === synchronizedRouteKey) return
   void applyRoute()

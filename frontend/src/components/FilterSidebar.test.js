@@ -44,9 +44,9 @@ beforeEach(async () => {
   setActivePinia(createPinia())
   router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/batches', component: SlotStub }],
+    routes: [{ path: '/batch-management/capture', component: SlotStub }],
   })
-  await router.push('/batches')
+  await router.push('/batch-management/capture')
   await router.isReady()
 })
 
@@ -95,7 +95,7 @@ describe('FilterSidebar scene data availability', () => {
     await nextTick()
 
     expect(push).toHaveBeenCalledWith({
-      path: '/batches',
+      path: '/batch-management/capture',
       query: {
         branch_tag: 'main',
         scene_id: 'SceneB',
@@ -120,7 +120,7 @@ describe('FilterSidebar scene data availability', () => {
     await nextTick()
 
     expect(replace).toHaveBeenCalledWith(expect.objectContaining({
-      path: '/batches',
+      path: '/batch-management/capture',
       query: expect.objectContaining({
         branch_tag: 'main',
       }),

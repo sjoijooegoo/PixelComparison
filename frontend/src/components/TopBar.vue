@@ -2,11 +2,18 @@
 import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import { theme, toggleTheme } from '../theme'
 import { runPageRefresh } from '../pageActions'
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useScreenshotComparisonStore } from '../stores/screenshotComparisonStore'
+import {
+  batchManagementLocation,
+  gpmSettingsLocation,
+  primaryWorkspaces,
+  safeReturnTo,
+  screenshotSettingsLocation,
+  workspaceContext,
+} from '../workspaceNavigation'
 
 const project = useProjectStore()
 const catalog = useBatchCatalogStore()
@@ -14,48 +21,81 @@ const screenshot = useScreenshotComparisonStore()
 const route = useRoute()
 const router = useRouter()
 
-const tabs = [
-  { path: '/batches', label: '批次管理' },
-  { path: '/screenshot', label: '截图对比' },
-  { path: '/map-build', label: '烘培数据' },
-  { path: '/gpm-heatmap', label: '热力图' },
-]
-
-// 当前路径(根路径视作批次管理)
-const current = computed(() => (route.path === '/' ? '/batches' : route.path))
-// 前缀匹配:/batches/<场景> 时「批次管理」仍高亮
-const isActive = (path) => current.value === path || current.value.startsWith(path + '/')
-const showDataActions = computed(() => (
-  isActive('/batches') || isActive('/screenshot') || isActive('/map-build') || isActive('/gpm-heatmap')
+const tabs = primaryWorkspaces
+const context = computed(() => workspaceContext(route))
+const showRefresh = computed(() => context.value.isDataPage || context.value.isManagement)
+const showWorkspaceReturn = computed(() => context.value.isManagement || context.value.isSettings)
+const workspaceLabel = computed(() => ({
+  screenshot: '截图对比', mapBuild: '烘培数据', gpm: '热力图',
+})[context.value.workspace])
+// 现有手动上报弹窗只处理截图/烘培批次，且只放在对应工作区。
+const showManualUpload = computed(() => (
+  context.value.isDataPage && context.value.workspace !== 'gpm'
 ))
-// 现有手动上报弹窗只处理截图批次；GPMHeatmap 由独立管线接口上报，避免入口误导。
-const showManualUpload = computed(() => showDataActions.value && !isActive('/gpm-heatmap'))
-const supportsAutoRefresh = computed(() => showDataActions.value && !isActive('/gpm-heatmap'))
+const showBatchManagement = computed(() => context.value.isDataPage)
+const showScreenshotSettings = computed(() => (
+  context.value.isDataPage && context.value.workspace === 'screenshot'
+))
+const showGpmSettings = computed(() => (
+  context.value.isDataPage && context.value.workspace === 'gpm'
+))
+const supportsAutoRefresh = computed(() => (
+  showRefresh.value && context.value.workspace !== 'gpm'
+))
 
 function currentBranch() {
   const raw = route.query.branch_tag
   if (Array.isArray(raw)) return raw[0] || 'main'
   if (raw) return raw
-  if (isActive('/batches')) return catalog.filters.branch_tag || 'main'
+  if (context.value.isManagement && context.value.batchDomain === 'capture') {
+    return catalog.filters.branch_tag || 'main'
+  }
+  if (!context.value.isDataPage) {
+    const source = router.resolve(context.value.returnTo)
+    const sourceBranch = Array.isArray(source.query.branch_tag)
+      ? source.query.branch_tag[0]
+      : source.query.branch_tag
+    if (sourceBranch) return sourceBranch
+  }
   return 'main'
 }
 
 function tabTarget(tab) {
+  if (!context.value.isDataPage && tab.id === context.value.workspace) {
+    return safeReturnTo(route.query.return_to, tab.path)
+  }
   let path = tab.path
-  const sceneWorkspaces = ['/screenshot', '/map-build', '/gpm-heatmap']
-  if (sceneWorkspaces.includes(tab.path) && sceneWorkspaces.some(isActive)) {
+  const preservesScene = context.value.isDataPage
+    && context.value.workspace !== 'gpm'
+    && tab.id !== 'gpm'
+  if (preservesScene) {
     const rawSceneId = route.params.sceneId
     const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
     if (sceneId) path = `${tab.path}/${encodeURIComponent(sceneId)}`
   }
-  if (tab.path === '/batches') return path
   return { path, query: { branch_tag: currentBranch() } }
+}
+
+function openBatchManagement() {
+  return router.push(batchManagementLocation(route))
+}
+
+function openScreenshotSettings() {
+  return router.push(screenshotSettingsLocation(route))
+}
+
+function openGpmSettings() {
+  return router.push(gpmSettingsLocation(route))
+}
+
+function returnToWorkspace() {
+  return router.push(context.value.returnTo)
 }
 
 // 按当前视图刷新对应数据;silent=true 时不弹提示(供定时自动刷新复用)
 async function doRefresh({ silent = false } = {}) {
   // GPMHeatmap 使用独立数据库与筛选元数据；刷新它时不应先依赖截图批次接口。
-  if (!isActive('/gpm-heatmap')) await project.loadMeta()
+  if (context.value.workspace !== 'gpm') await project.loadMeta()
   const handled = await runPageRefresh({ silent })
   if (!handled) return
   if (!silent) Message.success('已刷新')
@@ -103,11 +143,22 @@ onUnmounted(() => {
     </div>
     <nav class="tabs">
       <button v-for="t in tabs" :key="t.path" class="tab"
-        :class="{ active: isActive(t.path) }"
+        :class="{ active: context.workspace === t.id }"
         @click="router.push(tabTarget(t))">{{ t.label }}</button>
     </nav>
     <div class="actions">
-      <template v-if="showDataActions">
+      <a-tooltip v-if="showWorkspaceReturn" :content="`返回${workspaceLabel}`">
+        <button class="icon-btn return-button" :aria-label="`返回${workspaceLabel}`"
+          @click="returnToWorkspace">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5" /><path d="m12 19-7-7 7-7" />
+          </svg>
+          <span>返回{{ workspaceLabel }}</span>
+        </button>
+      </a-tooltip>
+      <span v-if="showWorkspaceReturn" class="action-divider" aria-hidden="true"></span>
+      <template v-if="showRefresh">
         <a-tooltip content="刷新">
           <button class="icon-btn" aria-label="刷新" @click="refresh">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -125,23 +176,27 @@ onUnmounted(() => {
           </button>
         </a-tooltip>
       </template>
-      <a-tooltip :content="theme === 'dark' ? '切换亮色' : '切换暗色'">
-        <button class="icon-btn" :aria-label="theme === 'dark' ? '切换亮色' : '切换暗色'"
-          @click="toggleTheme">
-          <svg v-if="theme === 'dark'" width="15" height="15" viewBox="0 0 16 16" fill="none"
-            stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
-            <circle cx="8" cy="8" r="3.2" />
-            <path d="M8 1.2v1.8M8 13v1.8M1.2 8H3M13 8h1.8M3.2 3.2l1.3 1.3M11.5 11.5l1.3 1.3M12.8 3.2l-1.3 1.3M4.5 11.5l-1.3 1.3" />
-          </svg>
-          <svg v-else width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M13.8 9.7A6 6 0 0 1 6.3 2.2a6 6 0 1 0 7.5 7.5z" />
+      <a-tooltip v-if="showBatchManagement" content="批次管理">
+        <button class="icon-btn" aria-label="批次管理" @click="openBatchManagement">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <ellipse cx="12" cy="5" rx="7" ry="3" />
+            <path d="M5 5v6c0 1.66 3.13 3 7 3s7-1.34 7-3V5" />
+            <path d="M5 11v6c0 1.66 3.13 3 7 3s7-1.34 7-3v-6" />
           </svg>
         </button>
       </a-tooltip>
-      <a-tooltip content="项目设置">
-        <button class="icon-btn" :class="{ active: isActive('/settings') }"
-          aria-label="项目设置" :aria-current="isActive('/settings') ? 'page' : undefined"
-          @click="router.push('/settings')">
+      <a-tooltip v-if="showScreenshotSettings" content="截图对比设置">
+        <button class="icon-btn" aria-label="截图对比设置" @click="openScreenshotSettings">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.14.37.35.7.6 1 .3.28.68.42 1.1.4H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51.6z" />
+          </svg>
+        </button>
+      </a-tooltip>
+      <a-tooltip v-if="showGpmSettings" content="热力图设置">
+        <button class="icon-btn" aria-label="热力图设置" @click="openGpmSettings">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3" />
@@ -172,12 +227,26 @@ onUnmounted(() => {
   height: 2px; background: rgb(var(--arcoblue-6)); border-radius: 2px;
 }
 .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.action-divider { width: 1px; height: 18px; margin: 0 2px; background: var(--color-border-2); }
 .icon-btn {
   width: 30px; height: 30px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--color-border-2); background: transparent;
   color: var(--color-text-2); display: flex; align-items: center; justify-content: center;
 }
 .icon-btn:hover { background: var(--color-fill-2); color: var(--color-text-1); }
+.return-button {
+  box-sizing: border-box; width: auto; min-width: 92px; height: 34px;
+  padding: 8px 11px; gap: 6px; border-radius: 7px; line-height: 16px;
+  border-color: rgba(var(--arcoblue-5), .42); color: rgb(var(--arcoblue-6));
+  background: color-mix(in srgb, rgb(var(--arcoblue-6)) 8%, transparent);
+  font-size: 11px; white-space: nowrap;
+}
+.return-button svg { flex: 0 0 auto; display: block; }
+.return-button span { line-height: 16px; }
+.return-button:hover {
+  border-color: rgba(var(--arcoblue-5), .7);
+  background: color-mix(in srgb, rgb(var(--arcoblue-6)) 14%, var(--color-fill-2));
+}
 .icon-btn.active {
   border-color: rgb(var(--arcoblue-5));
   background: var(--color-primary-light-1);
