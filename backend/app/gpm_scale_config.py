@@ -6,18 +6,17 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import math
 import sqlite3
 from datetime import datetime
 
 from fastapi import APIRouter, Body
 
-from .gpm_common import QUALITY_LABELS, http_error, require_identifier, require_platform
+from .gpm_common import QUALITY_LABELS, http_error
+from .gpm_map_config import list_map_definitions
 from .gpm_scale_expressions import (
     ScaleExpressionError,
     compile_scale_segments,
-    segments_from_legacy,
 )
 from .gpm_storage import connect_gpm_database
 
@@ -29,13 +28,21 @@ FIVE_LEVEL_PALETTE = {
     "colors": ["#52e817", "#b7f400", "#ffb20a", "#ff4a0a", "#ff1111"],
     "labels": ["优秀", "良好", "可接受", "关注", "超标"],
 }
-_DIRECTIONS = {"lower_is_better", "higher_is_better"}
-_MIN_COLOR_BANDS = 2
-_MAX_COLOR_BANDS = 10
+_CONFIG_ID_TABLES = frozenset({"gpm_metric_scales", "gpm_metric_scale_sets"})
 
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _next_config_id(connection: sqlite3.Connection, table_name: str) -> int:
+    """在调用方持有 BEGIN IMMEDIATE 写锁时分配单调递增的配置 ID。"""
+
+    if table_name not in _CONFIG_ID_TABLES:
+        raise ValueError(f"不支持的 GPM 配置 ID 表: {table_name}")
+    return int(connection.execute(
+        f"SELECT COALESCE(MAX(id), -1) + 1 FROM {table_name}"
+    ).fetchone()[0])
 
 
 def _required_text(payload: dict, key: str, label: str, maximum: int) -> str:
@@ -55,91 +62,21 @@ def _metric_key(value: object, label: str) -> str:
     return key
 
 
-def _colors(value: object) -> list[str]:
-    if value is None:
-        return list(FIVE_LEVEL_PALETTE["colors"])
-    if not isinstance(value, list) or not _MIN_COLOR_BANDS <= len(value) <= _MAX_COLOR_BANDS:
-        raise http_error(
-            422, "INVALID_GPM_SCALE_COLORS",
-            f"颜色标尺必须包含 {_MIN_COLOR_BANDS} 到 {_MAX_COLOR_BANDS} 个颜色段",
-        )
-    colors: list[str] = []
-    for item in value:
-        color = str(item or "").strip().lower()
-        if len(color) != 7 or not color.startswith("#"):
-            raise http_error(422, "INVALID_GPM_SCALE_COLORS", "颜色必须使用 #RRGGBB 格式")
-        try:
-            int(color[1:], 16)
-        except ValueError as exc:
-            raise http_error(422, "INVALID_GPM_SCALE_COLORS", "颜色必须使用 #RRGGBB 格式") from exc
-        colors.append(color)
-    return colors
-
-
-def _thresholds(value: object, color_count: int) -> list[float]:
-    expected = color_count - 1
-    if not isinstance(value, list) or len(value) != expected:
-        raise http_error(
-            422, "INVALID_GPM_SCALE_THRESHOLDS",
-            f"{color_count} 个颜色段必须包含 {expected} 个递增阈值",
-        )
-    result: list[float] = []
-    for item in value:
-        if isinstance(item, bool):
-            raise http_error(422, "INVALID_GPM_SCALE_THRESHOLDS", "标尺阈值必须是有限数字")
-        try:
-            number = float(item)
-        except (TypeError, ValueError):
-            raise http_error(422, "INVALID_GPM_SCALE_THRESHOLDS", "标尺阈值必须是有限数字")
-        if not math.isfinite(number):
-            raise http_error(422, "INVALID_GPM_SCALE_THRESHOLDS", "标尺阈值必须是有限数字")
-        result.append(number)
-    if any(right <= left for left, right in zip(result, result[1:])):
-        raise http_error(422, "INVALID_GPM_SCALE_THRESHOLDS", "标尺阈值必须严格递增")
-    return result
-
-
-def _direction(value: object) -> str:
-    direction = str(value or "lower_is_better")
-    if direction not in _DIRECTIONS:
-        raise http_error(422, "INVALID_GPM_SCALE_DIRECTION", "指标方向不受支持")
-    return direction
-
-
 def _scale_payload(payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise http_error(422, "INVALID_GPM_SCALE_CONFIG", "指标标尺必须是对象")
     try:
-        if "segments" in payload:
-            compiled = compile_scale_segments(payload.get("segments"))
-        else:
-            colors = _colors(payload.get("colors"))
-            thresholds = _thresholds(payload.get("thresholds"), len(colors))
-            compiled = compile_scale_segments(segments_from_legacy(
-                thresholds, colors, _direction(payload.get("direction")),
-            ))
+        compiled = compile_scale_segments(payload.get("segments"))
     except ScaleExpressionError as exc:
         raise http_error(422, "INVALID_GPM_SCALE_EXPRESSIONS", str(exc)) from exc
     return {
         "name": _required_text(payload, "name", "指标标尺名称", 100),
         "segments": compiled.segments,
-        "thresholds": compiled.thresholds,
-        "boundary_owners": compiled.boundary_owners,
-        "colors": compiled.colors,
-        "direction": "lower_is_better",
     }
 
 
 def _compiled_row_scale(row: sqlite3.Row):
-    try:
-        raw_segments = json.loads(row["segments_json"])
-        return compile_scale_segments(raw_segments)
-    except (IndexError, KeyError, TypeError, json.JSONDecodeError, ScaleExpressionError):
-        return compile_scale_segments(segments_from_legacy(
-            json.loads(row["thresholds_json"]),
-            json.loads(row["colors_json"]),
-            row["direction"],
-        ))
+    return compile_scale_segments(json.loads(row["segments_json"]))
 
 
 def _scale_dto(row: sqlite3.Row) -> dict:
@@ -148,10 +85,6 @@ def _scale_dto(row: sqlite3.Row) -> dict:
         "id": row["id"],
         "name": row["name"],
         "segments": compiled.segments,
-        "thresholds": compiled.thresholds,
-        "boundary_owners": compiled.boundary_owners,
-        "colors": compiled.colors,
-        "direction": "lower_is_better",
         "revision": row["revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -250,44 +183,6 @@ def _scale_set_dto(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
     }
 
 
-def _validated_map_bindings(connection: sqlite3.Connection, raw_bindings: object) -> list[dict]:
-    if raw_bindings is None:
-        return []
-    if not isinstance(raw_bindings, list):
-        raise http_error(422, "INVALID_GPM_MAP_SCALE_BINDINGS", "地图标尺绑定必须是数组")
-    bindings: list[dict] = []
-    scopes: set[tuple[str, int]] = set()
-    for index, raw in enumerate(raw_bindings):
-        if not isinstance(raw, dict):
-            raise http_error(422, "INVALID_GPM_MAP_SCALE_BINDINGS", f"bindings[{index}] 必须是对象")
-        platform = require_platform(raw.get("platform"), f"bindings[{index}].platform")
-        quality = raw.get("shading_quality")
-        if isinstance(quality, bool) or not isinstance(quality, int) or not 0 <= quality <= 5:
-            raise http_error(
-                422, "INVALID_GPM_MAP_SCALE_BINDINGS",
-                f"bindings[{index}].shading_quality 必须在 0 到 5 之间",
-            )
-        scale_set_id = raw.get("scale_set_id")
-        if isinstance(scale_set_id, bool) or not isinstance(scale_set_id, int):
-            raise http_error(
-                422, "INVALID_GPM_MAP_SCALE_BINDINGS",
-                f"bindings[{index}].scale_set_id 必须是整数",
-            )
-        _scale_set_row(connection, scale_set_id)
-        scope = (platform, quality)
-        if scope in scopes:
-            raise http_error(
-                422, "DUPLICATE_GPM_MAP_SCALE_BINDING",
-                "同一地图的平台和画质只能关联一个指标标尺集",
-            )
-        scopes.add(scope)
-        bindings.append({
-            "platform": platform, "shading_quality": quality,
-            "scale_set_id": scale_set_id,
-        })
-    return bindings
-
-
 def _expect_revision(payload: dict, current: int, code: str, label: str) -> None:
     expected = payload.get("expected_revision")
     if expected is None:
@@ -298,29 +193,17 @@ def _expect_revision(payload: dict, current: int, code: str, label: str) -> None
         raise http_error(409, code, f"{label}已被其他用户更新，请刷新后重试")
 
 
-def _binding_revision(bindings: list[dict]) -> str:
-    normalized = sorted(
-        (
-            str(item["platform"]), int(item["shading_quality"]), int(item["scale_set_id"]),
-        )
-        for item in bindings
-    )
-    return hashlib.sha256(
-        json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()[:16]
-
-
 def _catalog(connection: sqlite3.Connection) -> dict:
     scales = [_scale_dto(row) for row in connection.execute(
         """
         SELECT s.*,
           (SELECT COUNT(*) FROM gpm_metric_scale_set_items i WHERE i.scale_id = s.id)
           AS usage_count
-        FROM gpm_metric_scales s ORDER BY s.name COLLATE NOCASE
+        FROM gpm_metric_scales s ORDER BY s.id
         """
     )]
     scale_set_rows = connection.execute(
-        "SELECT * FROM gpm_metric_scale_sets ORDER BY name COLLATE NOCASE"
+        "SELECT * FROM gpm_metric_scale_sets ORDER BY id"
     ).fetchall()
     items_by_set: dict[int, list[dict]] = {row["id"]: [] for row in scale_set_rows}
     for item in connection.execute(
@@ -364,32 +247,19 @@ def _catalog(connection: sqlite3.Connection) -> dict:
         "items": items_by_set.get(row["id"], []),
         "bindings": bindings_by_set.get(row["id"], []),
     } for row in scale_set_rows]
-    map_rows = connection.execute(
-        """
-        SELECT map_name, map_id FROM gpm_map_definitions
-        WHERE active = 1 ORDER BY map_id, map_name COLLATE NOCASE
-        """
-    ).fetchall()
     maps: list[dict] = []
-    for row in map_rows:
-        bindings = bindings_by_map.get(row["map_name"], [])
+    for definition in list_map_definitions(connection, include_bindings=False):
+        bindings = bindings_by_map.get(definition["map_name"], [])
         maps.append({
-            "map_name": row["map_name"], "map_id": row["map_id"],
+            **definition,
             "bindings": bindings,
-            "binding_revision": _binding_revision(bindings),
         })
-    platforms = [row[0] for row in connection.execute(
-        "SELECT DISTINCT platform FROM gpm_uploads ORDER BY platform"
-    )]
-    quality_values = [row[0] for row in connection.execute(
-        "SELECT DISTINCT shading_quality FROM gpm_uploads ORDER BY shading_quality DESC"
-    )]
     return {
         "palette": FIVE_LEVEL_PALETTE,
-        "platforms": platforms,
+        "platforms": ["IOS", "Android", "Windows"],
         "shading_qualities": [
             {"value": value, "label": QUALITY_LABELS.get(value, f"画质 {value}")}
-            for value in quality_values
+            for value in range(5, -1, -1)
         ],
         "metric_scales": scales,
         "scale_sets": scale_sets,
@@ -397,7 +267,7 @@ def _catalog(connection: sqlite3.Connection) -> dict:
     }
 
 
-@router.get("/api/gpm-heatmaps/project-config/scales")
+@router.get("/api/gpm-heatmaps/configuration")
 def get_scale_catalog():
     connection = connect_gpm_database()
     try:
@@ -406,58 +276,21 @@ def get_scale_catalog():
         connection.close()
 
 
-@router.post("/api/gpm-heatmaps/project-config/metric-scales", status_code=201)
+@router.post("/api/gpm-heatmaps/configuration/scales", status_code=201)
 def create_metric_scale(payload: dict = Body(...)):
     item = _scale_payload(payload)
     now = _now()
     connection = connect_gpm_database()
     try:
         connection.execute("BEGIN IMMEDIATE")
-        cursor = connection.execute(
-            """
-            INSERT INTO gpm_metric_scales (
-                name, metric_key, thresholds_json, colors_json, segments_json, direction,
-                revision, created_at, updated_at
-            ) VALUES (?, '*', ?, ?, ?, ?, 1, ?, ?)
-            """,
-            (
-                item["name"], json.dumps(item["thresholds"]), json.dumps(item["colors"]),
-                json.dumps(item["segments"], ensure_ascii=False), item["direction"], now, now,
-            ),
-        )
-        row = _scale_row(connection, int(cursor.lastrowid))
-        connection.commit()
-        return _scale_dto(row)
-    except sqlite3.IntegrityError as exc:
-        connection.rollback()
-        raise http_error(409, "GPM_METRIC_SCALE_NAME_EXISTS", "指标标尺名称已经存在") from exc
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-
-@router.put("/api/gpm-heatmaps/project-config/metric-scales/{scale_id}")
-def update_metric_scale(scale_id: int, payload: dict = Body(...)):
-    item = _scale_payload(payload)
-    connection = connect_gpm_database()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        current = _scale_row(connection, scale_id)
-        _expect_revision(
-            payload, current["revision"], "GPM_METRIC_SCALE_REVISION_CONFLICT", "指标标尺",
-        )
+        scale_id = _next_config_id(connection, "gpm_metric_scales")
         connection.execute(
             """
-            UPDATE gpm_metric_scales SET name = ?, thresholds_json = ?, colors_json = ?,
-                segments_json = ?, direction = ?, revision = revision + 1,
-                updated_at = ? WHERE id = ?
+            INSERT INTO gpm_metric_scales (id, name, segments_json, revision, created_at, updated_at)
+            VALUES (?, ?, ?, 1, ?, ?)
             """,
             (
-                item["name"], json.dumps(item["thresholds"]), json.dumps(item["colors"]),
-                json.dumps(item["segments"], ensure_ascii=False), item["direction"],
-                _now(), scale_id,
+                scale_id, item["name"], json.dumps(item["segments"], ensure_ascii=False), now, now,
             ),
         )
         row = _scale_row(connection, scale_id)
@@ -473,7 +306,39 @@ def update_metric_scale(scale_id: int, payload: dict = Body(...)):
         connection.close()
 
 
-@router.delete("/api/gpm-heatmaps/project-config/metric-scales/{scale_id}")
+@router.put("/api/gpm-heatmaps/configuration/scales/{scale_id}")
+def update_metric_scale(scale_id: int, payload: dict = Body(...)):
+    item = _scale_payload(payload)
+    connection = connect_gpm_database()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        current = _scale_row(connection, scale_id)
+        _expect_revision(
+            payload, current["revision"], "GPM_METRIC_SCALE_REVISION_CONFLICT", "指标标尺",
+        )
+        connection.execute(
+            """
+            UPDATE gpm_metric_scales SET name = ?, segments_json = ?,
+                revision = revision + 1, updated_at = ? WHERE id = ?
+            """,
+            (
+                item["name"], json.dumps(item["segments"], ensure_ascii=False), _now(), scale_id,
+            ),
+        )
+        row = _scale_row(connection, scale_id)
+        connection.commit()
+        return _scale_dto(row)
+    except sqlite3.IntegrityError as exc:
+        connection.rollback()
+        raise http_error(409, "GPM_METRIC_SCALE_NAME_EXISTS", "指标标尺名称已经存在") from exc
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+@router.delete("/api/gpm-heatmaps/configuration/scales/{scale_id}")
 def delete_metric_scale(scale_id: int):
     connection = connect_gpm_database()
     try:
@@ -494,21 +359,21 @@ def delete_metric_scale(scale_id: int):
         connection.close()
 
 
-@router.post("/api/gpm-heatmaps/project-config/metric-scale-sets", status_code=201)
+@router.post("/api/gpm-heatmaps/configuration/scale-sets", status_code=201)
 def create_metric_scale_set(payload: dict = Body(...)):
     connection = connect_gpm_database()
     try:
         connection.execute("BEGIN IMMEDIATE")
         item = _scale_set_payload(connection, payload)
         now = _now()
-        cursor = connection.execute(
+        scale_set_id = _next_config_id(connection, "gpm_metric_scale_sets")
+        connection.execute(
             """
-            INSERT INTO gpm_metric_scale_sets (name, revision, created_at, updated_at)
-            VALUES (?, 1, ?, ?)
+            INSERT INTO gpm_metric_scale_sets (id, name, revision, created_at, updated_at)
+            VALUES (?, ?, 1, ?, ?)
             """,
-            (item["name"], now, now),
+            (scale_set_id, item["name"], now, now),
         )
-        scale_set_id = int(cursor.lastrowid)
         _replace_scale_set_items(connection, scale_set_id, item["items"])
         connection.commit()
         return _scale_set_dto(connection, _scale_set_row(connection, scale_set_id))
@@ -522,7 +387,7 @@ def create_metric_scale_set(payload: dict = Body(...)):
         connection.close()
 
 
-@router.put("/api/gpm-heatmaps/project-config/metric-scale-sets/{scale_set_id}")
+@router.put("/api/gpm-heatmaps/configuration/scale-sets/{scale_set_id}")
 def update_metric_scale_set(scale_set_id: int, payload: dict = Body(...)):
     connection = connect_gpm_database()
     try:
@@ -552,7 +417,7 @@ def update_metric_scale_set(scale_set_id: int, payload: dict = Body(...)):
         connection.close()
 
 
-@router.delete("/api/gpm-heatmaps/project-config/metric-scale-sets/{scale_set_id}")
+@router.delete("/api/gpm-heatmaps/configuration/scale-sets/{scale_set_id}")
 def delete_metric_scale_set(scale_set_id: int):
     connection = connect_gpm_database()
     try:
@@ -574,61 +439,6 @@ def delete_metric_scale_set(scale_set_id: int):
         connection.close()
 
 
-@router.put("/api/gpm-heatmaps/project-config/maps/{map_name}/scale-bindings")
-def update_map_scale_bindings(map_name: str, payload: dict = Body(...)):
-    map_name = require_identifier(map_name, "map_name")
-    if not isinstance(payload, dict):
-        raise http_error(422, "INVALID_GPM_MAP_SCALE_BINDINGS", "地图标尺绑定必须是对象")
-    connection = connect_gpm_database()
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        exists = connection.execute(
-            "SELECT 1 FROM gpm_map_definitions WHERE map_name = ? AND active = 1", (map_name,)
-        ).fetchone()
-        if not exists:
-            raise http_error(404, "GPM_MAP_DEFINITION_NOT_FOUND", "项目地图不存在")
-        current_bindings = [dict(row) for row in connection.execute(
-            """
-            SELECT platform, shading_quality, scale_set_id
-            FROM gpm_map_scale_set_bindings WHERE map_name = ?
-            """,
-            (map_name,),
-        )]
-        expected_revision = payload.get("expected_revision")
-        if expected_revision is not None:
-            if not isinstance(expected_revision, str):
-                raise http_error(422, "INVALID_GPM_REVISION", "expected_revision 必须是字符串")
-            if expected_revision != _binding_revision(current_bindings):
-                raise http_error(
-                    409, "GPM_MAP_BINDING_REVISION_CONFLICT",
-                    "地图应用已被其他用户更新，请刷新后重试",
-                )
-        bindings = _validated_map_bindings(connection, payload.get("bindings"))
-        now = _now()
-        connection.execute("DELETE FROM gpm_map_scale_set_bindings WHERE map_name = ?", (map_name,))
-        connection.executemany(
-            """
-            INSERT INTO gpm_map_scale_set_bindings (
-                map_name, platform, shading_quality, scale_set_id, updated_at
-            ) VALUES (?, ?, ?, ?, ?)
-            """,
-            [
-                (map_name, item["platform"], item["shading_quality"], item["scale_set_id"], now)
-                for item in bindings
-            ],
-        )
-        connection.commit()
-        return {
-            "map_name": map_name, "bindings": bindings,
-            "binding_revision": _binding_revision(bindings),
-        }
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-
 def _configured_scale_dto(
     row: sqlite3.Row, scale_set_id: int, scale_set_name: str,
 ) -> dict:
@@ -640,9 +450,7 @@ def _configured_scale_dto(
             "colors": compiled.colors,
             "labels": [f"区间 {index + 1}" for index in range(len(compiled.colors))],
         },
-        "thresholds": compiled.thresholds,
-        "boundary_owners": compiled.boundary_owners,
-        "direction": "lower_is_better",
+        "segments": compiled.segments,
         "source": {
             "type": "scale_set",
             "scale_id": row["id"],

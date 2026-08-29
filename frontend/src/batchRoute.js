@@ -16,6 +16,7 @@ export function parseBatchRoute(route) {
     branchTag: firstValue(route.query.branch_tag) || 'main',
     sceneId: firstValue(route.query.scene_id) || '',
     dateMode: firstValue(route.query.date_mode),
+    rangeMode: firstValue(route.query.range_mode),
     createdFrom: firstValue(route.query.from),
     createdTo: firstValue(route.query.to),
     createdDates: dateValues(route.query.dates),
@@ -29,6 +30,7 @@ export function batchStateFromFilters(filters, page = 1, returnTo = '') {
     branchTag: filters.branch_tag || 'main',
     sceneId: filters.scene_id || '',
     dateMode: filters.dateMode,
+    rangeMode: filters.rangeMode,
     createdFrom: filters.created_from,
     createdTo: filters.created_to,
     createdDates: [...(filters.created_dates || [])],
@@ -42,6 +44,7 @@ export function batchRouteKey(state) {
     branchTag: state.branchTag || 'main',
     sceneId: state.sceneId || '',
     dateMode: state.dateMode,
+    rangeMode: state.rangeMode,
     createdFrom: state.createdFrom,
     createdTo: state.createdTo,
     createdDates: [...(state.createdDates || [])],
@@ -57,8 +60,13 @@ export function batchLocation(state) {
     query.date_mode = state.dateMode
     if (state.dateMode === 'days') query.dates = (state.createdDates || []).join(',')
     else {
-      query.from = state.createdFrom || ''
-      query.to = state.createdTo || ''
+      const rangeMode = state.rangeMode
+        || (state.createdFrom && state.createdTo ? 'fixed' : 'rolling')
+      query.range_mode = rangeMode
+      if (rangeMode === 'fixed') {
+        query.from = state.createdFrom || ''
+        query.to = state.createdTo || ''
+      }
     }
   }
   const page = Number(state.page)

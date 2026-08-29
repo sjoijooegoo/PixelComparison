@@ -28,7 +28,7 @@ describe('workspace routes', () => {
   })
 
   it('提供可选场景的 GPMHeatmap 工作区路由', () => {
-    expect(router.getRoutes().some((route) => route.path === '/gpm-heatmap/:sceneId?')).toBe(true)
+    expect(router.getRoutes().some((route) => route.path === '/gpm-heatmap/:mapName?')).toBe(true)
   })
 
   it('旧批次和设置地址重定向到新的上下文页面', async () => {
@@ -52,6 +52,6 @@ describe('workspace routes', () => {
     const paths = router.getRoutes().map((route) => route.path)
     expect(paths).toContain('/settings/screenshot-comparison')
     expect(paths).toContain('/settings/gpm-heatmap')
-    expect(paths).toContain('/settings/gpm-heatmap/scales')
+    expect(paths).not.toContain('/settings/gpm-heatmap/scales')
   })
 })

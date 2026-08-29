@@ -36,7 +36,9 @@ export function createMapProjection(config, renderedRect) {
     throw new Error('地图坐标范围和渲染尺寸必须有效')
   }
   const xSign = config?.x_reverse ? -1 : 1
-  const ySign = config?.y_reverse ? 1 : -1
+  // 上报的朝向向量使用“向上为正”的 Y 轴约定；Canvas 屏幕坐标则向下为正。
+  // 地图点位位置仍按地图配置映射，只有朝向需要额外翻转屏幕 Y 轴。
+  const ySign = config?.y_reverse ? -1 : 1
 
   function normalized(position) {
     let x = (finiteNumber(position?.[0], '点位 X') - originX) / rangeX

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 
@@ -18,9 +18,10 @@ let unregisterRefresh = null
 let applyingRoute = false
 let routeSequence = 0
 let synchronizedRoutePath = ''
+const hoveredTrendPointKey = ref('')
 
-const routeSceneId = () => {
-  const value = route.params.sceneId
+const routeMapName = () => {
+  const value = route.params.mapName
   return (Array.isArray(value) ? value[0] : value) || ''
 }
 const queryValue = (key) => {
@@ -31,7 +32,7 @@ const queryValue = (key) => {
 function routeRequest() {
   return {
     branchTag: queryValue('branch_tag') || 'main',
-    sceneId: routeSceneId(),
+    mapName: routeMapName(),
     platform: queryValue('platform') || '',
     shadingQuality: queryValue('quality') ?? '',
     batchId: queryValue('batch') || '',
@@ -54,7 +55,7 @@ function normalizedLocation() {
   if (state.trendMode !== 'average') query.trend_mode = state.trendMode
   if (state.days !== 14) query.days = String(state.days)
   return {
-    path: state.sceneId ? `/gpm-heatmap/${encodeURIComponent(state.sceneId)}` : '/gpm-heatmap',
+    path: state.mapName ? `/gpm-heatmap/${encodeURIComponent(state.mapName)}` : '/gpm-heatmap',
     query,
   }
 }
@@ -82,10 +83,12 @@ async function syncRoute() {
   }
 }
 
-async function applyCurrentRoute() {
+async function applyCurrentRoute({ preferLatest = false } = {}) {
   const sequence = ++routeSequence
   try {
-    await store.applyRoute(routeRequest())
+    const requested = routeRequest()
+    if (preferLatest) requested.batchId = ''
+    await store.applyRoute(requested)
     if (sequence !== routeSequence) return
     await syncRoute()
   } catch (error) {
@@ -137,9 +140,9 @@ async function refresh() {
   await syncRoute()
 }
 
-function formatBatch(batch) {
+function formatBatch(batch, isLatest = false) {
   const time = String(batch?.captured_at || '').replace('T', ' ').slice(0, 16)
-  return `P4 ${batch?.p4_version ?? '—'} · ${time || '时间未知'}`
+  return `P4 ${batch?.p4_version ?? '—'} · ${time || '时间未知'}${isLatest ? '（最新）' : ''}`
 }
 
 const trendGroups = computed(() => {
@@ -177,7 +180,7 @@ watch(() => route.fullPath, () => {
 
 onMounted(() => {
   unregisterRefresh = registerPageRefresh(refresh)
-  applyCurrentRoute()
+  applyCurrentRoute({ preferLatest: true })
 })
 onBeforeUnmount(() => {
   unregisterRefresh?.()
@@ -199,10 +202,14 @@ onBeforeUnmount(() => {
       <div class="filter-field scene"><span>场景 ID</span>
         <a-select class="filter-select scene-select" size="small"
           popup-container=".gpm-page"
-          :model-value="store.filters.sceneId" allow-search :loading="store.loading.meta"
-          @change="changeScope({ sceneId: $event })">
-          <a-option v-for="item in store.sceneOptions" :key="item.value" :value="item.value">
-            {{ item.value }}
+          :model-value="store.filters.mapName" allow-search :loading="store.loading.meta"
+          @change="changeScope({ mapName: $event })">
+          <a-option v-for="item in store.mapOptions" :key="item.value" :value="item.value">
+            <span class="filter-option-name"
+              :class="{ 'is-data-empty': store.mapHasBatches(item.value) === false }"
+              :title="store.mapHasBatches(item.value) === false ? '当前平台和画质下没有采集批次' : undefined">
+              {{ item.value }}
+            </span>
           </a-option>
         </a-select>
       </div>
@@ -212,7 +219,11 @@ onBeforeUnmount(() => {
           :model-value="store.filters.shadingQuality" :loading="store.loading.meta"
           @change="changeScope({ shadingQuality: $event })">
           <a-option v-for="item in store.qualityOptions" :key="item.value" :value="item.value">
-            {{ item.label }}
+            <span class="filter-option-name"
+              :class="{ 'is-data-empty': store.qualityHasBatches(item.value) === false }"
+              :title="store.qualityHasBatches(item.value) === false ? '当前平台和场景下没有采集批次' : undefined">
+              {{ item.label }}
+            </span>
           </a-option>
         </a-select>
       </div>
@@ -221,19 +232,23 @@ onBeforeUnmount(() => {
           popup-container=".gpm-page"
           :model-value="store.filters.batchId" :loading="store.loading.frame"
           @change="changeScope({ batchId: $event })">
-          <a-option v-for="item in store.batchOptions" :key="item.batch_id" :value="item.batch_id">
-            {{ formatBatch(item) }}
+          <a-option v-for="(item, index) in store.batchOptions"
+            :key="item.batch_id" :value="item.batch_id">
+            {{ formatBatch(item, index === 0) }}
           </a-option>
         </a-select>
       </div>
     </section>
 
-    <div v-if="store.errors.meta && !store.sceneOptions.length" class="page-error card">
+    <div v-if="store.errors.meta && !store.mapOptions.length" class="page-error card">
       {{ store.errors.meta }}
       <a-button size="small" @click="applyCurrentRoute">重新加载</a-button>
     </div>
     <div v-else-if="store.loading.frame && !store.frame" class="page-loading card">
       <a-spin /> 正在加载 GPMHeatmap 数据
+    </div>
+    <div v-else-if="store.scopeEmpty" class="page-empty card">
+      当前平台、场景和画质下暂无采集批次
     </div>
     <div v-else-if="store.errors.frame && !store.frame" class="page-error card">
       {{ store.errors.frame }}
@@ -270,13 +285,15 @@ onBeforeUnmount(() => {
             </a-select>
           </div>
         </header>
-        <div class="trend-grid">
+        <div class="trend-grid" @mouseleave="hoveredTrendPointKey = ''">
           <GpmTrendCard v-for="item in trendGroups" :key="item.key"
             :title="item.title" :series="item.series"
             :storage-key="`pixelcomp.gpmTrend.${item.key}.visibleSeries.v1`"
             :current-batch-id="store.filters.batchId"
+            :hovered-point-key="hoveredTrendPointKey"
             :empty-label="store.trendMode === 'average' ? '整体平均' : '单个点位'"
-            :points="store.trends?.points || []" />
+            :points="store.trends?.points || []"
+            @hover-point="hoveredTrendPointKey = $event" />
         </div>
       </section>
     </template>
@@ -300,6 +317,7 @@ onBeforeUnmount(() => {
 .filter-field :deep(.quality-select) { width: 130px; }
 .filter-field :deep(.batch-select) { width: 310px; }
 .filter-field :deep(.arco-select-view) { background: var(--color-fill-2); border-color: transparent; }
+.filter-option-name.is-data-empty { color: var(--color-text-4); }
 .overview-section {
   flex: 0 0 auto; min-width: 0; height: max(838px, calc(100dvh - 144px)); display: grid;
   grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(620px, 1fr) auto; gap: 10px;

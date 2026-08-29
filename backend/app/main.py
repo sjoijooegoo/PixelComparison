@@ -34,6 +34,7 @@ from .backup import backup_scheduler
 from .db import IMAGES_DIR, THUMB_DIR, SessionLocal, get_db, initialize_database
 from .logging_setup import client_log, log, setup_logging
 from .gpm_heatmap import router as gpm_heatmap_router
+from .gpm_retention import gpm_retention_scheduler
 from .gpm_storage import initialize_gpm_database
 from .map_build import (
     FORMAT_VERSION as MAP_BUILD_FORMAT_VERSION,
@@ -82,9 +83,11 @@ async def lifespan(_app: FastAPI):
     thumbnail_service.start()
     comparison_executor.start()
     backup_scheduler.start()
+    gpm_retention_scheduler.start()
     try:
         yield
     finally:
+        gpm_retention_scheduler.stop()
         thumbnail_service.stop()
         comparison_executor.stop()
         backup_scheduler.stop()
@@ -2200,7 +2203,8 @@ def get_meta(db: Session = Depends(get_db)):
 # ---------------------------------------------------------------- 生产:托管前端构建产物
 # 单端口同源部署:FastAPI 直接伺服 vite build 出的静态页面。
 # /api、/images 与 FastAPI 的 /docs、/openapi.json 都在此兜底路由之前注册,优先匹配;
-# 其余路径:命中静态文件则返回,否则回退 index.html(支持前端 history 路由深链)。
+# 其余路径:命中静态文件则返回；未知 API 返回 JSON 404，页面路径才回退
+# index.html（支持前端 history 路由深链）。
 # 仅当存在 frontend/dist 时启用;开发模式(vite dev)下不存在,跳过即可。
 from pathlib import Path  # noqa: E402
 
@@ -2212,6 +2216,8 @@ if _FRONTEND_DIST.is_dir():
 
     @app.get("/{full_path:path}")
     def spa_fallback(full_path: str):
+        if full_path == "api" or full_path.startswith("api/"):
+            raise ApiError(404, "API_NOT_FOUND", "API 接口不存在")
         target = (_DIST / full_path).resolve()
         # 命中真实静态文件才返回(并防目录遍历);否则一律回 index.html
         if full_path and target.is_file() and _DIST in target.parents:

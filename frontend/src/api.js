@@ -93,10 +93,10 @@ async function send(method, url, body, options = {}) {
 }
 
 // multipart 上传:不要手动设 Content-Type,让浏览器带 boundary
-async function upload(url, formData, context = {}) {
+async function upload(url, formData, context = {}, method = 'POST') {
   return fetchWithTimeout(
     url,
-    { method: 'POST', body: formData },
+    { method, body: formData },
     UPLOAD_TIMEOUT_MS,
     async (res) => {
       if (!res.ok) {
@@ -106,12 +106,31 @@ async function upload(url, formData, context = {}) {
           context.sceneName ? `scene=${context.sceneName}` : '',
           context.fileName ? `file=${context.fileName}` : '',
         ].filter(Boolean).join(' ')
-        logger.error('上传失败', `POST ${url}`, res.status, ctx, error.message || '')
+        logger.error('上传失败', `${method} ${url}`, res.status, ctx, error.message || '')
         throw error
       }
       return await res.json()
     },
   )
+}
+
+function responseFilename(res, fallback) {
+  const disposition = res.headers?.get?.('content-disposition') || ''
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+  if (encoded) {
+    try { return decodeURIComponent(encoded) } catch { return fallback }
+  }
+  return disposition.match(/filename="?([^";]+)"?/i)?.[1] || fallback
+}
+
+async function download(url, fallbackName) {
+  return fetchWithTimeout(url, {}, UPLOAD_TIMEOUT_MS, async (res) => {
+    if (!res.ok) throw await responseError(res, `${res.status} ${url}`)
+    return {
+      blob: await res.blob(),
+      filename: responseFilename(res, fallbackName),
+    }
+  })
 }
 
 // 小尺寸预览用缩略图(/images/x -> /thumb/x);放大/对比/详情仍用原图
@@ -167,61 +186,65 @@ export const api = {
     get(`/api/map-build/scenes/${encodeURIComponent(sceneId)}/overview`, params, options),
   mapBuildTrend: (sceneId, params = {}, options = {}) =>
     get(`/api/map-build/scenes/${encodeURIComponent(sceneId)}/trend`, params, options),
-  gpmHeatmapMeta: (params = {}, options = {}) =>
-    get('/api/gpm-heatmaps/meta', params, options),
-  gpmHeatmapUploadMeta: (params = {}, options = {}) =>
-    get('/api/gpm-heatmaps/uploads/meta', params, options),
+  gpmHeatmapCatalog: (params = {}, options = {}) =>
+    get('/api/gpm-heatmaps/catalog', params, options),
   gpmHeatmapUploads: (params = {}, options = {}) =>
     get('/api/gpm-heatmaps/uploads', params, options),
-  gpmHeatmapFrame: (sceneId, params = {}, options = {}) =>
-    get(`/api/gpm-heatmaps/scenes/${encodeURIComponent(sceneId)}/frame`, params, options),
-  gpmHeatmapSceneTrends: (sceneId, params = {}, options = {}) =>
-    get(`/api/gpm-heatmaps/scenes/${encodeURIComponent(sceneId)}/trends`, params, options),
+  gpmHeatmapFrame: (mapName, params = {}, options = {}) =>
+    get(`/api/gpm-heatmaps/maps/${encodeURIComponent(mapName)}/frame`, params, options),
+  gpmHeatmapMapTrends: (mapName, params = {}, options = {}) =>
+    get(`/api/gpm-heatmaps/maps/${encodeURIComponent(mapName)}/trends`, params, options),
   gpmHeatmapPoint: (pointId, options = {}) =>
     get(`/api/gpm-heatmaps/points/${encodeURIComponent(pointId)}`, {}, options),
   gpmHeatmapTrends: (pointId, params = {}, options = {}) =>
     get(`/api/gpm-heatmaps/points/${encodeURIComponent(pointId)}/trends`, params, options),
-  gpmProjectConfig: (options = {}) =>
-    get('/api/gpm-heatmaps/project-config', {}, options),
-  importGpmProjectConfig: (file) => {
+  saveGpmMapConfiguration: (mapName, configuration, file = null) => {
     const form = new FormData()
-    form.append('config', file)
-    return upload('/api/gpm-heatmaps/project-config/import', form, { fileName: file?.name })
-  },
-  uploadGpmProjectMapImage: (mapName, file) => {
-    const form = new FormData()
-    form.append('image', file)
+    form.append('configuration', JSON.stringify(configuration))
+    if (file) form.append('image', file)
     return upload(
-      `/api/gpm-heatmaps/project-config/maps/${encodeURIComponent(mapName)}/image`,
+      `/api/gpm-heatmaps/configuration/maps/${encodeURIComponent(mapName)}`,
       form,
       { sceneName: mapName, fileName: file?.name },
+      'PUT',
     )
   },
-  gpmProjectMapPreview: (mapName, options = {}) =>
+  gpmMapPreview: (mapName, options = {}) =>
     get(
-      `/api/gpm-heatmaps/project-config/maps/${encodeURIComponent(mapName)}/preview`,
+      `/api/gpm-heatmaps/configuration/maps/${encodeURIComponent(mapName)}/preview`,
       {},
       options,
     ),
   gpmScaleCatalog: (options = {}) =>
-    get('/api/gpm-heatmaps/project-config/scales', {}, options),
-  createGpmMetricScale: (body) =>
-    post('/api/gpm-heatmaps/project-config/metric-scales', body),
-  updateGpmMetricScale: (scaleId, body) =>
-    put(`/api/gpm-heatmaps/project-config/metric-scales/${encodeURIComponent(scaleId)}`, body),
-  deleteGpmMetricScale: (scaleId) =>
-    del(`/api/gpm-heatmaps/project-config/metric-scales/${encodeURIComponent(scaleId)}`),
-  createGpmMetricScaleSet: (body) =>
-    post('/api/gpm-heatmaps/project-config/metric-scale-sets', body),
-  updateGpmMetricScaleSet: (scaleSetId, body) =>
-    put(`/api/gpm-heatmaps/project-config/metric-scale-sets/${encodeURIComponent(scaleSetId)}`, body),
-  deleteGpmMetricScaleSet: (scaleSetId) =>
-    del(`/api/gpm-heatmaps/project-config/metric-scale-sets/${encodeURIComponent(scaleSetId)}`),
-  updateGpmMapScaleBindings: (mapName, body) =>
-    put(
-      `/api/gpm-heatmaps/project-config/maps/${encodeURIComponent(mapName)}/scale-bindings`,
-      body,
+    get('/api/gpm-heatmaps/configuration', {}, options),
+  exportGpmConfiguration: (scope = 'all') =>
+    download(
+      `/api/gpm-heatmaps/configuration/export?scope=${encodeURIComponent(scope)}`,
+      `gpm-heatmap-config-${scope}.zip`,
     ),
+  inspectGpmConfiguration: (file) => {
+    const form = new FormData()
+    form.append('package', file)
+    return upload(
+      '/api/gpm-heatmaps/configuration/imports/inspect',
+      form,
+      { fileName: file?.name },
+    )
+  },
+  applyGpmConfigurationImport: (importId) =>
+    post(`/api/gpm-heatmaps/configuration/imports/${encodeURIComponent(importId)}/apply`, {}),
+  createGpmMetricScale: (body) =>
+    post('/api/gpm-heatmaps/configuration/scales', body),
+  updateGpmMetricScale: (scaleId, body) =>
+    put(`/api/gpm-heatmaps/configuration/scales/${encodeURIComponent(scaleId)}`, body),
+  deleteGpmMetricScale: (scaleId) =>
+    del(`/api/gpm-heatmaps/configuration/scales/${encodeURIComponent(scaleId)}`),
+  createGpmMetricScaleSet: (body) =>
+    post('/api/gpm-heatmaps/configuration/scale-sets', body),
+  updateGpmMetricScaleSet: (scaleSetId, body) =>
+    put(`/api/gpm-heatmaps/configuration/scale-sets/${encodeURIComponent(scaleSetId)}`, body),
+  deleteGpmMetricScaleSet: (scaleSetId) =>
+    del(`/api/gpm-heatmaps/configuration/scale-sets/${encodeURIComponent(scaleSetId)}`),
   deleteGpmHeatmapUpload: (batchId, branchTag = 'main') =>
     del(`/api/gpm-heatmaps/uploads/${encodeURIComponent(batchId)}?branch_tag=${encodeURIComponent(branchTag)}`),
   baselines: (filters = {}) => get('/api/baselines', filters),

@@ -2,10 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { createMapProjection, containedImageRect } from '../gpmHeatmap/mapProjection'
+import { createPointHitIndex } from '../gpmHeatmap/pointHitIndex'
 import {
   LINEAR_HEAT_GRADIENT,
+  configuredBandIndex,
   configuredBands,
-  formatMetricValue,
+  formatCoordinateValue,
+  formatConfiguredBandRange,
   metricRange,
   resolvedHeatColor,
 } from '../gpmHeatmap/colors'
@@ -22,16 +25,19 @@ const canvas = ref(null)
 const mapImage = ref(null)
 const hoveredPointId = ref(null)
 const tooltipAnchor = ref(null)
+const hoveredBandIndex = ref(null)
+const hiddenBandIndexes = ref(new Set())
 let observer = null
-let projected = []
+let pointHitIndex = createPointHitIndex([])
 
 const metric = computed(() => props.frame?.heat_map?.find((item) => item.key === props.metricKey))
 const valueRange = computed(() => metricRange(props.frame?.points, props.metricKey))
 const activeScale = computed(() => metric.value?.scale)
 const scaleBands = computed(() => configuredBands(activeScale.value))
-const hoveredPoint = computed(() => props.frame?.points?.find(
-  (point) => samePointId(point.id, hoveredPointId.value),
+const pointsById = computed(() => new Map(
+  (props.frame?.points || []).map((point) => [String(point.id), point]),
 ))
+const hoveredPoint = computed(() => pointsById.value.get(String(hoveredPointId.value)))
 const hoveredValue = computed(() => hoveredPoint.value?.heat_map_data?.[props.metricKey])
 
 function samePointId(left, right) {
@@ -46,6 +52,17 @@ function formatValue(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(number)
 }
 
+function setHoveredBand(index) {
+  hoveredBandIndex.value = index
+}
+
+function toggleBand(index) {
+  const next = new Set(hiddenBandIndexes.value)
+  if (next.has(index)) next.delete(index)
+  else next.add(index)
+  hiddenBandIndexes.value = next
+}
+
 function projectionForSize(width, height) {
   const config = props.frame?.map_config
   if (!config || !mapImage.value?.naturalWidth) return null
@@ -58,10 +75,10 @@ function projectionForSize(width, height) {
 function traceDirectionArrow(context, point, direction) {
   const startX = point.x
   const startY = point.y
-  const endX = point.x + direction.x * 30
-  const endY = point.y + direction.y * 30
+  const endX = point.x + direction.x * 20
+  const endY = point.y + direction.y * 20
   const angle = Math.atan2(direction.y, direction.x)
-  const headLength = 7
+  const headLength = 5
   const headSpread = Math.PI / 5
   context.beginPath()
   context.moveTo(startX, startY)
@@ -95,6 +112,27 @@ function drawDirectionArrow(context, point, direction) {
   context.restore()
 }
 
+function drawPointSquare(context, item) {
+  context.save()
+  context.globalAlpha = item.alpha
+  context.fillStyle = item.color
+  context.fillRect(
+    item.point.x - item.size / 2,
+    item.point.y - item.size / 2,
+    item.size,
+    item.size,
+  )
+  context.strokeStyle = item.selected ? '#ffffff' : 'rgba(0,0,0,.72)'
+  context.lineWidth = item.selected ? 2 : 1
+  context.strokeRect(
+    item.point.x - item.size / 2,
+    item.point.y - item.size / 2,
+    item.size,
+    item.size,
+  )
+  context.restore()
+}
+
 function draw() {
   const element = canvas.value
   const container = host.value
@@ -102,52 +140,67 @@ function draw() {
   const width = container.clientWidth
   const height = container.clientHeight
   const ratio = window.devicePixelRatio || 1
-  element.width = Math.max(1, Math.round(width * ratio))
-  element.height = Math.max(1, Math.round(height * ratio))
-  element.style.width = `${width}px`
-  element.style.height = `${height}px`
+  const pixelWidth = Math.max(1, Math.round(width * ratio))
+  const pixelHeight = Math.max(1, Math.round(height * ratio))
+  if (element.width !== pixelWidth) element.width = pixelWidth
+  if (element.height !== pixelHeight) element.height = pixelHeight
+  if (element.style.width !== `${width}px`) element.style.width = `${width}px`
+  if (element.style.height !== `${height}px`) element.style.height = `${height}px`
   const context = element.getContext('2d')
   context.setTransform(ratio, 0, 0, ratio, 0, 0)
   context.clearRect(0, 0, width, height)
   const projection = projectionForSize(width, height)
-  if (!projection) return
-  projected = []
+  if (!projection) {
+    pointHitIndex = createPointHitIndex([])
+    return
+  }
+  const projected = []
+  const renderPoints = []
   for (const source of props.frame?.points || []) {
     const point = projection.project(source.position)
     if (!point.inBounds) continue
     const direction = projection.projectDirection(source.direction)
     const selected = samePointId(source.id, props.selectedPointId)
     const hovered = samePointId(source.id, hoveredPointId.value)
-    const size = selected ? 13 : hovered ? 12 : 10
+    const value = source.heat_map_data?.[props.metricKey]
+    const bandIndex = configuredBandIndex(value, activeScale.value)
+    if (hiddenBandIndexes.value.has(bandIndex)) continue
+    const emphasizedByLegend = hoveredBandIndex.value !== null
+      && bandIndex === hoveredBandIndex.value
+    const dimmedByLegend = hoveredBandIndex.value !== null && !emphasizedByLegend
+    const size = (selected ? 13 : hovered ? 12 : 10) + (emphasizedByLegend ? 4 : 0)
     const color = resolvedHeatColor(
-      source.heat_map_data?.[props.metricKey], activeScale.value, valueRange.value,
+      value, activeScale.value, valueRange.value,
     )
-    if ((hovered || selected) && props.frame?.scene?.show_direction) {
-      drawDirectionArrow(context, point, direction)
-    }
-    context.fillStyle = color
-    context.fillRect(point.x - size / 2, point.y - size / 2, size, size)
-    context.strokeStyle = selected ? '#ffffff' : 'rgba(0,0,0,.72)'
-    context.lineWidth = selected ? 2 : 1
-    context.strokeRect(point.x - size / 2, point.y - size / 2, size, size)
-    projected.push({ source, x: point.x, y: point.y, hit: selected ? 15 : 13 })
+    renderPoints.push({
+      point, direction, selected, hovered, size, color,
+      alpha: dimmedByLegend ? 0.18 : 1,
+    })
+    projected.push({ source, x: point.x, y: point.y, hit: Math.max(13, size + 2) })
   }
+  pointHitIndex = createPointHitIndex(projected)
+
+  // 方块先统一绘制；活动箭头随后提升到所有普通点位之上，最后再覆盖活动
+  // 点位自己的方块，确保箭头从方块下方伸出且不会被其他点位截断。
+  renderPoints.forEach((item) => drawPointSquare(context, item))
+  const activePoints = renderPoints.filter((item) => item.selected || item.hovered)
+    // Canvas 后绘制的元素位于上层；悬停点必须排在选中点之后。
+    .sort((left, right) => Number(left.hovered) - Number(right.hovered))
+  const arrowPoints = props.frame?.map?.show_direction ? activePoints : []
+  arrowPoints.forEach((item) => {
+    context.save()
+    context.globalAlpha = item.alpha
+    drawDirectionArrow(context, item.point, item.direction)
+    context.restore()
+  })
+  activePoints.forEach((item) => drawPointSquare(context, item))
 }
 
 function pointAtEvent(event) {
   const rect = canvas.value.getBoundingClientRect()
   const x = event.clientX - rect.left
   const y = event.clientY - rect.top
-  let nearest = null
-  let distance = Infinity
-  for (const point of projected) {
-    const current = Math.hypot(x - point.x, y - point.y)
-    if (current <= point.hit && current < distance) {
-      nearest = point
-      distance = current
-    }
-  }
-  return nearest
+  return pointHitIndex.find(x, y)
 }
 
 function clickMap(event) {
@@ -189,8 +242,21 @@ function imageReady() {
 watch(() => props.frame, () => {
   hoveredPointId.value = null
   tooltipAnchor.value = null
+  hoveredBandIndex.value = null
+  hiddenBandIndexes.value = new Set()
 })
-watch(() => [props.frame, props.metricKey, props.selectedPointId, hoveredPointId.value], draw)
+watch(() => props.metricKey, () => {
+  hoveredBandIndex.value = null
+  hiddenBandIndexes.value = new Set()
+})
+watch(() => [
+  props.frame,
+  props.metricKey,
+  props.selectedPointId,
+  hoveredPointId.value,
+  hoveredBandIndex.value,
+  hiddenBandIndexes.value,
+], draw)
 watch(host, (element, previous) => {
   if (previous) observer?.unobserve(previous)
   if (element) {
@@ -222,7 +288,7 @@ onBeforeUnmount(() => observer?.disconnect())
       <canvas ref="canvas" @click="clickMap" @mousemove="moveMap" @mouseleave="leaveMap"></canvas>
       <div v-if="hoveredPoint && tooltipAnchor" class="point-tooltip"
         :class="`on-${tooltipAnchor.side}`"
-        :style="{ left: `${tooltipAnchor.x}px`, top: `clamp(34px, ${tooltipAnchor.y}px, calc(100% - 34px))` }">
+        :style="{ left: `${tooltipAnchor.x}px`, top: `clamp(80px, ${tooltipAnchor.y}px, calc(100% - 10px))` }">
         <div class="tooltip-id">
           <span>序号</span>
           <strong>{{ String(hoveredPoint.index ?? hoveredPoint.id).padStart(2, '0') }}</strong>
@@ -230,8 +296,8 @@ onBeforeUnmount(() => observer?.disconnect())
         <div class="tooltip-position">
           <span>坐标</span>
           <strong>
-            <b>X</b> {{ formatValue(hoveredPoint.position?.[0]) }}
-            <b>Y</b> {{ formatValue(hoveredPoint.position?.[1]) }}
+            <b>X</b> {{ formatCoordinateValue(hoveredPoint.position?.[0]) }}
+            <b>Y</b> {{ formatCoordinateValue(hoveredPoint.position?.[1]) }}
           </strong>
         </div>
         <div class="tooltip-metric">
@@ -245,20 +311,18 @@ onBeforeUnmount(() => observer?.disconnect())
     </div>
     <div v-if="frame?.map_config" class="map-legend">
       <template v-if="activeScale?.mode === 'configured'">
-        <span v-for="band in scaleBands" :key="`${band.minimum}-${band.maximum}`" class="band-legend">
+        <button v-for="(band, index) in scaleBands" :key="`${band.minimum}-${band.maximum}`"
+          type="button" class="band-legend"
+          :class="{ 'is-hidden': hiddenBandIndexes.has(index), 'is-hovered': hoveredBandIndex === index }"
+          :aria-pressed="!hiddenBandIndexes.has(index)"
+          :aria-label="`${formatConfiguredBandRange(band)}，点击${hiddenBandIndexes.has(index) ? '显示' : '隐藏'}该区间点位`"
+          @mouseenter="setHoveredBand(index)" @mouseleave="setHoveredBand(null)"
+          @focus="setHoveredBand(index)" @blur="setHoveredBand(null)"
+          @click="toggleBand(index)">
           <i :style="{ background: band.color }"></i>
-          <small v-if="band.minimum == null">
-            {{ band.maximumInclusive ? '≤' : '<' }} {{ formatMetricValue(band.maximum) }}
-          </small>
-          <small v-else-if="band.maximum == null">
-            {{ band.minimumInclusive ? '≥' : '>' }} {{ formatMetricValue(band.minimum) }}
-          </small>
-          <small v-else>
-            {{ band.minimumInclusive ? '≥' : '>' }} {{ formatMetricValue(band.minimum) }}
-            · {{ band.maximumInclusive ? '≤' : '<' }} {{ formatMetricValue(band.maximum) }}
-          </small>
-        </span>
-          <em :title="activeScale.source?.scale_set_name || ''">
+          <small>{{ formatConfiguredBandRange(band) }}</small>
+        </button>
+        <em :title="activeScale.source?.scale_set_name || ''">
           {{ activeScale.source?.scale_name || '固定标尺' }}
         </em>
       </template>
@@ -315,8 +379,8 @@ onBeforeUnmount(() => observer?.disconnect())
   color: rgba(255, 255, 255, .92); background: rgba(12, 16, 22, .68);
   box-shadow: 0 5px 16px rgba(0, 0, 0, .3); backdrop-filter: blur(6px);
 }
-.point-tooltip.on-right { transform: translate(15px, -50%); }
-.point-tooltip.on-left { transform: translate(calc(-100% - 15px), -50%); }
+.point-tooltip.on-right { transform: translate(15px, calc(-100% - 10px)); }
+.point-tooltip.on-left { transform: translate(calc(-100% - 15px), calc(-100% - 10px)); }
 .point-tooltip > div { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; }
 .point-tooltip > div + div { margin-top: 5px; }
 .point-tooltip span { color: rgba(255, 255, 255, .58); font-size: 11px; white-space: nowrap; }
@@ -330,11 +394,33 @@ onBeforeUnmount(() => observer?.disconnect())
   gap: 10px 18px; color: var(--color-text-3); border-top: 1px solid var(--color-border-1);
 }
 .map-legend span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.band-legend {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 24px;
+  margin: -3px -5px; padding: 3px 5px; border: 1px solid transparent; border-radius: 4px;
+  color: inherit; background: transparent; cursor: pointer; font: inherit; white-space: nowrap;
+  transition: background-color .14s ease, border-color .14s ease, opacity .14s ease;
+}
+.band-legend:hover,
+.band-legend.is-hovered {
+  border-color: var(--color-border-2); background: color-mix(in srgb, var(--color-fill-2) 72%, transparent);
+}
+.band-legend:focus-visible {
+  outline: 2px solid rgba(var(--arcoblue-5), .72); outline-offset: 1px;
+}
+.band-legend.is-hidden { opacity: .42; }
+.band-legend.is-hidden i::after {
+  content: ''; position: absolute; inset: 4px -2px; border-top: 1px solid var(--color-text-2);
+  transform: rotate(-45deg); transform-origin: center;
+}
 .map-legend i { width: 10px; height: 10px; border-radius: 1px; box-shadow: 0 0 0 1px rgba(255,255,255,.16); }
+.band-legend i { position: relative; }
 .map-legend .linear-legend i { width: 132px; height: 8px; }
 .map-legend small { color: var(--color-text-4); font-size: 11px; }
 .map-legend em {
   margin-left: auto; overflow: hidden; color: var(--color-text-4); font-size: 10px;
   font-style: normal; text-overflow: ellipsis; white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .band-legend { transition: none; }
 }
 </style>

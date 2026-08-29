@@ -1,7 +1,13 @@
 const MIN_SEGMENTS = 2
 const MAX_SEGMENTS = 10
 const DEFAULT_COLORS = ['#52e817', '#b7f400', '#ffb20a', '#ff4a0a', '#ff1111']
-const DEFAULT_THRESHOLDS = [100, 200, 300, 400]
+const DEFAULT_SEGMENTS = [
+  { color: '#52e817', expression: '<100' },
+  { color: '#b7f400', expression: '>=100 & <200' },
+  { color: '#ffb20a', expression: '>=200 & <300' },
+  { color: '#ff4a0a', expression: '>=300 & <400' },
+  { color: '#ff1111', expression: '>=400' },
+]
 const NUMBER_PATTERN = '[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?'
 const COMPARISON = new RegExp(`^(<=|>=|<|>)\\s*(${NUMBER_PATTERN})$`)
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
@@ -133,36 +139,18 @@ export function compileScaleSegments(value) {
       color: interval.color,
       expression: canonicalExpression(interval),
     })),
-    thresholds: orderedIntervals.slice(0, -1).map((interval) => interval.upper.value),
-    colors: orderedIntervals.map((interval) => interval.color),
+    bands: orderedIntervals.map((interval) => ({
+      color: interval.color,
+      minimum: interval.lower?.value ?? null,
+      maximum: interval.upper?.value ?? null,
+      minimumInclusive: interval.lower?.inclusive ?? false,
+      maximumInclusive: interval.upper?.inclusive ?? false,
+    })),
   }
-}
-
-export function segmentsFromLegacy(thresholds, colors, direction = 'lower_is_better') {
-  let safeColors = Array.isArray(colors) && colors.length >= MIN_SEGMENTS && colors.length <= MAX_SEGMENTS
-    ? colors.map((color) => String(color).trim().toLowerCase())
-    : [...DEFAULT_COLORS]
-  let safeThresholds = Array.isArray(thresholds) && thresholds.length === safeColors.length - 1
-    ? thresholds.map(Number)
-    : [...DEFAULT_THRESHOLDS]
-  if (safeThresholds.length !== safeColors.length - 1
-    || !safeThresholds.every(Number.isFinite)
-    || safeThresholds.some((value, index) => index && value <= safeThresholds[index - 1])) {
-    safeColors = [...DEFAULT_COLORS]
-    safeThresholds = [...DEFAULT_THRESHOLDS]
-  }
-  if (direction === 'higher_is_better') safeColors.reverse()
-  return compileScaleSegments(safeColors.map((color, index) => {
-    let expression
-    if (index === 0) expression = `<${numberText(safeThresholds[0])}`
-    else if (index === safeColors.length - 1) expression = `>=${numberText(safeThresholds.at(-1))}`
-    else expression = `>=${numberText(safeThresholds[index - 1])} & <${numberText(safeThresholds[index])}`
-    return { color, expression }
-  })).segments
 }
 
 export function defaultScaleSegments(colors = DEFAULT_COLORS) {
   const safeColors = Array.isArray(colors) && colors.length === DEFAULT_COLORS.length
     ? colors : DEFAULT_COLORS
-  return segmentsFromLegacy(DEFAULT_THRESHOLDS, safeColors)
+  return DEFAULT_SEGMENTS.map((segment, index) => ({ ...segment, color: safeColors[index] }))
 }

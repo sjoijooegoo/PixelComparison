@@ -2,11 +2,15 @@ import { defineStore } from 'pinia'
 
 import { api, isRequestCancelled } from '../api'
 import {
+  DATE_RANGE_MODE_FIXED,
+  DATE_RANGE_MODE_ROLLING,
   cloneRequestParams,
   defaultDateRange,
   isDateRangeAllowed,
+  normalizeDateRangeMode,
   normalizeSelectedDates,
   normalizeShadingQuality,
+  refreshRollingDateRange,
 } from '../store'
 import { useProjectStore } from './projectStore'
 import { qualityColumnKey, sameQualityColumn } from '../qualityRuns'
@@ -59,12 +63,14 @@ function queryId(value) {
 
 function routeFilters(project, branchTag, sceneId, requested) {
   const quality = project.settings.default_shading_quality
+  const defaultRangeDays = project.settings.default_date_range_days ?? 7
   const defaults = {
     branch_tag: branchTag,
     scene_id: sceneId,
     shading_quality: (quality === -1 || quality == null) ? '' : quality,
     dateMode: 'range',
-    ...defaultDateRange(project.settings.default_date_range_days ?? 7),
+    rangeMode: DATE_RANGE_MODE_ROLLING,
+    ...defaultDateRange(defaultRangeDays),
     created_dates: [],
   }
   defaults.shading_quality = normalizeShadingQuality(
@@ -82,11 +88,20 @@ function routeFilters(project, branchTag, sceneId, requested) {
       defaults.created_dates = dates
     }
   } else if (
-    requested.dateMode === 'range'
+    (requested.dateMode === 'range'
+      || (!requested.dateMode && (requested.createdFrom || requested.createdTo)))
     && isDateRangeAllowed(requested.createdFrom, requested.createdTo)
   ) {
-    defaults.created_from = requested.createdFrom
-    defaults.created_to = requested.createdTo
+    defaults.rangeMode = normalizeDateRangeMode(
+      requested.rangeMode,
+      requested.createdFrom,
+      requested.createdTo,
+      defaultRangeDays,
+    )
+    if (defaults.rangeMode === DATE_RANGE_MODE_FIXED) {
+      defaults.created_from = requested.createdFrom
+      defaults.created_to = requested.createdTo
+    }
   }
   return defaults
 }
@@ -101,6 +116,7 @@ function normalizedRoute(filters, baseline = null, current = null) {
     currentQuality: current?.shading_quality ?? '',
     shadingQuality: filters.shading_quality,
     dateMode: filters.dateMode,
+    rangeMode: filters.rangeMode,
     createdFrom: filters.created_from,
     createdTo: filters.created_to,
     createdDates: [...filters.created_dates],
@@ -148,6 +164,7 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
       scene_id: '',
       shading_quality: 5,
       dateMode: 'range',
+      rangeMode: DATE_RANGE_MODE_ROLLING,
       ...defaultDateRange(),
       created_dates: [],
     },
@@ -169,7 +186,9 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
 
   getters: {
     requestFilters: (state) => {
-      const { dateMode, created_from, created_to, created_dates, ...rest } = state.filters
+      const {
+        dateMode, rangeMode, created_from, created_to, created_dates, ...rest
+      } = state.filters
       return dateMode === 'days'
         ? { ...rest, created_dates }
         : { ...rest, created_from, created_to }
@@ -199,6 +218,7 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
         scene_id: sceneId,
         shading_quality: (quality === -1 || quality == null) ? '' : quality,
         dateMode: 'range',
+        rangeMode: DATE_RANGE_MODE_ROLLING,
         ...defaultDateRange(project.settings.default_date_range_days ?? 7),
         created_dates: [],
       }
@@ -354,11 +374,17 @@ export const useScreenshotComparisonStore = defineStore('screenshotComparison', 
     },
 
     async refresh() {
+      const project = useProjectStore()
+      refreshRollingDateRange(
+        this.filters,
+        project.settings.default_date_range_days ?? 7,
+      )
       await Promise.all([
         this.loadGrid({ force: true }),
         this.loadSceneAvailability(),
       ])
       await this.loadGridHeatmaps()
+      return normalizedRoute(this.filters, this.baselineBatch, this.currentBatch)
     },
 
     _clearRolesOutsideGrid() {

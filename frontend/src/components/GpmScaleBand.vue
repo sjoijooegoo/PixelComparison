@@ -2,27 +2,29 @@
 import { computed } from 'vue'
 
 import { formatMetricValue } from '../gpmHeatmap/colors'
+import { compileScaleSegments } from '../gpmHeatmap/scaleExpressions'
 
 const props = defineProps({
-  thresholds: { type: Array, default: () => [] },
-  colors: { type: Array, default: () => [] },
+  segments: { type: Array, default: () => [] },
   labels: { type: Array, default: () => [] },
-  direction: { type: String, default: 'lower_is_better' },
   compact: { type: Boolean, default: false },
 })
 
-const bands = computed(() => (props.colors || []).slice(0, 10).map((_, index, colors) => {
-  const paletteIndex = props.direction === 'higher_is_better' ? colors.length - 1 - index : index
-  return {
-  color: colors[paletteIndex],
-  label: props.labels?.[paletteIndex] || `等级 ${paletteIndex + 1}`,
-  range: index === 0
-    ? `< ${formatMetricValue(props.thresholds?.[0])}`
-    : index === colors.length - 1
-      ? `≥ ${formatMetricValue(props.thresholds?.[colors.length - 2])}`
-      : `${formatMetricValue(props.thresholds?.[index - 1])} – ${formatMetricValue(props.thresholds?.[index])}`,
+const bands = computed(() => {
+  try {
+    return compileScaleSegments(props.segments).bands.map((band, index) => ({
+      ...band,
+      label: props.labels?.[index] || `等级 ${index + 1}`,
+      range: band.minimum == null
+        ? `< ${formatMetricValue(band.maximum)}`
+        : band.maximum == null
+          ? `≥ ${formatMetricValue(band.minimum)}`
+          : `${formatMetricValue(band.minimum)} – ${formatMetricValue(band.maximum)}`,
+    }))
+  } catch {
+    return []
   }
-}))
+})
 </script>
 
 <template>

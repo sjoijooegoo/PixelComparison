@@ -2,6 +2,8 @@
 import { computed, reactive, ref } from 'vue'
 
 import GpmDetailNode from './GpmDetailNode.vue'
+import { formatCoordinateValue } from '../gpmHeatmap/colors'
+import { detailNodePath } from '../gpmHeatmap/detailPaths'
 
 const props = defineProps({
   point: { type: Object, default: null },
@@ -12,7 +14,7 @@ const props = defineProps({
   error: { type: String, default: '' },
 })
 
-const openRootIndex = ref(null)
+const openRootPath = ref(null)
 const expansionState = reactive({})
 const tableSortState = reactive({})
 const headerPoint = computed(() => props.summaryPoint || props.point)
@@ -26,19 +28,17 @@ function formatValue(value) {
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(number)
 }
 
-function formatCoordinate(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number)) return value ?? '—'
-  return String(Number(number.toFixed(2)))
-}
-
 function pointLabel(point) {
   const value = point?.index ?? point?.id
   return value == null ? '—' : String(value).padStart(2, '0')
 }
 
-function toggleRoot(index) {
-  openRootIndex.value = openRootIndex.value === index ? null : index
+function rootPath(index) {
+  return detailNodePath('', props.point?.detail_data || [], index)
+}
+
+function toggleRoot(path) {
+  openRootPath.value = openRootPath.value === path ? null : path
 }
 </script>
 
@@ -52,7 +52,7 @@ function toggleRoot(index) {
         </span>
         <span class="meta-block coordinates">
           <small>坐标</small>
-          <b>X: {{ formatCoordinate(headerPoint.position?.[0]) }}, Y: {{ formatCoordinate(headerPoint.position?.[1]) }}</b>
+          <b>X: {{ formatCoordinateValue(headerPoint.position?.[0]) }} Y: {{ formatCoordinateValue(headerPoint.position?.[1]) }}</b>
         </span>
         <span v-if="metricKey" class="meta-block metric-value">
           <small>{{ metricName || metricKey }}</small>
@@ -64,10 +64,10 @@ function toggleRoot(index) {
     <div v-else-if="error && !point" class="panel-state error">{{ error }}</div>
     <div v-else-if="point" class="detail-list">
       <GpmDetailNode v-for="(node, index) in point.detail_data || []"
-        :key="`${point.id}-${node.name}-${index}`" :node="node"
-        :expanded="openRootIndex === index" :expansion-state="expansionState"
+        :key="`${point.id}-${rootPath(index)}`" :node="node"
+        :expanded="openRootPath === rootPath(index)" :expansion-state="expansionState"
         :table-sort-state="tableSortState"
-        :node-path="String(index)" @toggle="toggleRoot(index)" />
+        :node-path="rootPath(index)" @toggle="toggleRoot(rootPath(index))" />
     </div>
     <div v-else class="panel-state">选择地图点位或下方截图查看详细数据</div>
   </section>

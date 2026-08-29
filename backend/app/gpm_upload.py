@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import shutil
 import sqlite3
@@ -20,69 +21,155 @@ from .gpm_common import (
     IMAGE_SUFFIXES, http_error, require_identifier, require_platform, safe_segment,
 )
 from .gpm_storage import connect_gpm_database, gpm_assets_dir
+from .gpm_retention import (
+    GPM_DATA_RETENTION_DAYS,
+    is_expired_capture,
+    prune_expired_gpm_uploads,
+)
 
 
 router = APIRouter()
 
 MAX_REPORT_BYTES = 64 * 1024 * 1024
-MAX_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024
-MAX_ARCHIVE_FILES = 20_000
-MAX_ARCHIVE_UNPACKED_BYTES = 16 * 1024 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
+MAX_POINT_COUNT = 5_000
+MAX_ARCHIVE_FILES = MAX_POINT_COUNT
+MAX_ARCHIVE_UNPACKED_BYTES = 4 * 1024 * 1024 * 1024
+MAX_SCREENSHOT_PIXELS = 40_000_000
+MAX_JSON_DEPTH = 32
 
 
-def _parse_iso_datetime(value: str) -> str:
+def _validate_json_depth(value: object, label: str) -> None:
+    stack = [(value, 0)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > MAX_JSON_DEPTH:
+            raise http_error(422, "GPM_JSON_TOO_DEEP", f"{label} 嵌套不能超过 {MAX_JSON_DEPTH} 层")
+        if isinstance(current, dict):
+            stack.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            stack.extend((item, depth + 1) for item in current)
+
+
+def _require_list(value: object, label: str) -> list:
+    if not isinstance(value, list):
+        raise http_error(422, "INVALID_GPM_REPORT", f"{label} 必须是数组")
+    _validate_json_depth(value, label)
+    return value
+
+
+def _require_object(value: object, label: str) -> dict:
+    if not isinstance(value, dict):
+        raise http_error(422, "INVALID_GPM_REPORT", f"{label} 必须是对象")
+    _validate_json_depth(value, label)
+    return value
+
+
+def _validate_metric_list(value: object, label: str) -> list[dict]:
+    items = _require_list(value, label)
+    keys: set[str] = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise http_error(422, "INVALID_GPM_REPORT", f"{label}[{index}] 必须是对象")
+        key = str(item.get("key") or "").strip()
+        if not key or len(key) > 200 or any(ord(character) < 32 for character in key):
+            raise http_error(422, "INVALID_GPM_METRIC_KEY", f"{label}[{index}].key 无效")
+        if key in keys:
+            raise http_error(422, "DUPLICATE_GPM_METRIC_KEY", f"{label} 存在重复 Key: {key}")
+        keys.add(key)
+    return items
+
+
+def _parse_iso_datetime(value: str) -> tuple[str, int]:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except (AttributeError, TypeError, ValueError):
         raise http_error(422, "INVALID_CAPTURED_AT", "captured_at 必须是 ISO 8601 时间")
-    return parsed.isoformat(timespec="seconds")
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise http_error(422, "INVALID_CAPTURED_AT", "captured_at 必须包含时区")
+    return parsed.isoformat(timespec="seconds"), int(parsed.timestamp())
 
 
 def _validate_report(payload: object) -> list[dict]:
     if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
         raise http_error(422, "INVALID_GPM_REPORT", "GPMHeatmap.json 必须包含 data 数组")
-    scenes = payload["data"]
-    if not scenes:
-        raise http_error(422, "EMPTY_GPM_REPORT", "GPMHeatmap.json 没有场景数据")
-    scene_ids: set[str] = set()
+    maps = payload["data"]
+    if not maps:
+        raise http_error(422, "EMPTY_GPM_REPORT", "GPMHeatmap.json 没有地图数据")
+    point_count = sum(
+        len(item.get("detail", []))
+        for item in maps
+        if isinstance(item, dict) and isinstance(item.get("detail"), list)
+    )
+    if point_count > MAX_POINT_COUNT:
+        raise http_error(
+            413,
+            "TOO_MANY_GPM_POINTS",
+            f"单次上报点位数不能超过 {MAX_POINT_COUNT}",
+        )
+    map_names: set[str] = set()
     all_screenshot_ids: set[str] = set()
-    for scene in scenes:
-        if not isinstance(scene, dict):
-            raise http_error(422, "INVALID_GPM_SCENE", "data 中的场景必须是对象")
-        scene_id = require_identifier(scene.get("pic_name"), "pic_name")
-        map_name = require_identifier(scene.get("map_name") or scene_id, "map_name")
-        scene["map_name"] = map_name
-        details = scene.get("detail")
-        if not scene_id or not isinstance(details, list):
-            raise http_error(422, "INVALID_GPM_SCENE", "每个场景必须包含 pic_name 和 detail 数组")
-        if scene_id in scene_ids:
-            raise http_error(422, "DUPLICATE_GPM_SCENE", f"场景重复: {scene_id}")
-        scene_ids.add(scene_id)
+    for map_item in maps:
+        if not isinstance(map_item, dict):
+            raise http_error(422, "INVALID_GPM_MAP", "data 中的地图必须是对象")
+        canonical_name = map_item.get("map_name")
+        legacy_name = map_item.get("pic_name")
+        if canonical_name is not None and legacy_name is not None:
+            canonical_name = require_identifier(canonical_name, "map_name")
+            legacy_name = require_identifier(legacy_name, "pic_name")
+            if canonical_name != legacy_name:
+                raise http_error(
+                    422,
+                    "GPM_MAP_NAME_CONFLICT",
+                    "map_name 与 pic_name 同时存在时必须一致",
+                )
+        map_name = require_identifier(
+            canonical_name if canonical_name is not None else legacy_name,
+            "map_name",
+        )
+        map_item["map_name"] = map_name
+        details = map_item.get("detail")
+        if not isinstance(details, list):
+            raise http_error(422, "INVALID_GPM_MAP", "每个地图必须包含 map_name 和 detail 数组")
+        if map_name in map_names:
+            raise http_error(422, "DUPLICATE_GPM_MAP", f"地图重复: {map_name}")
+        map_names.add(map_name)
+        _validate_metric_list(map_item.get("heat_map", []), f"{map_name}.heat_map")
+        _validate_metric_list(map_item.get("trend", []), f"{map_name}.trend")
+        show_direction = map_item.get("show_direction", True)
+        if not isinstance(show_direction, bool) and show_direction not in (0, 1):
+            raise http_error(422, "INVALID_GPM_MAP", f"{map_name}.show_direction 必须是布尔值或 0/1")
+        map_item["show_direction"] = bool(show_direction)
         indices: set[int] = set()
         screenshot_ids: set[str] = set()
         point_keys: set[str] = set()
         for point in details:
             if not isinstance(point, dict):
-                raise http_error(422, "INVALID_GPM_POINT", f"{scene_id} 存在无效点位")
+                raise http_error(422, "INVALID_GPM_POINT", f"{map_name} 存在无效点位")
             try:
-                index = int(point["index"])
+                index = point["index"]
                 screenshot_id = require_identifier(point["screenshot_id"], "screenshot_id")
                 position = point["position"]
                 direction = point["direction"]
             except (KeyError, TypeError, ValueError):
-                raise http_error(422, "INVALID_GPM_POINT", f"{scene_id} 点位缺少必要字段")
+                raise http_error(422, "INVALID_GPM_POINT", f"{map_name} 点位缺少必要字段")
+            if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                raise http_error(422, "INVALID_GPM_POINT", f"{map_name} 点位 index 必须是非负整数")
+            _require_object(point.get("heat_map_data"), f"{map_name} 点位 {index}.heat_map_data")
+            _require_object(point.get("trend_data"), f"{map_name} 点位 {index}.trend_data")
+            _require_list(point.get("detail_data"), f"{map_name} 点位 {index}.detail_data")
             normalized_screenshot_id = screenshot_id.casefold()
             if index in indices or normalized_screenshot_id in screenshot_ids:
-                raise http_error(422, "DUPLICATE_GPM_POINT", f"{scene_id} 点位或截图 ID 重复")
+                raise http_error(422, "DUPLICATE_GPM_POINT", f"{map_name} 点位或截图 ID 重复")
             if normalized_screenshot_id in all_screenshot_ids:
                 raise http_error(
                     422, "DUPLICATE_GPM_SCREENSHOT_ID",
-                    f"跨场景 screenshot_id 必须唯一，重复值: {screenshot_id}",
+                    f"跨地图 screenshot_id 必须唯一，重复值: {screenshot_id}",
                 )
             if not isinstance(position, list) or len(position) < 2:
-                raise http_error(422, "INVALID_GPM_POSITION", f"{scene_id} 点位 {index} 坐标无效")
+                raise http_error(422, "INVALID_GPM_POSITION", f"{map_name} 点位 {index} 坐标无效")
             if not isinstance(direction, list) or len(direction) < 2:
-                raise http_error(422, "INVALID_GPM_DIRECTION", f"{scene_id} 点位 {index} 方向无效")
+                raise http_error(422, "INVALID_GPM_DIRECTION", f"{map_name} 点位 {index} 方向无效")
             for values, code, label in (
                 (position, "INVALID_GPM_POSITION", "坐标"),
                 (direction, "INVALID_GPM_DIRECTION", "方向"),
@@ -93,25 +180,23 @@ def _validate_report(payload: object) -> list[dict]:
                     or not math.isfinite(float(value))
                     for value in values[:2]
                 ):
-                    raise http_error(422, code, f"{scene_id} 点位 {index} {label}必须是有限数字")
-            raw_point_key = point.get("point_key") or point.get("teleport_point_id")
+                    raise http_error(422, code, f"{map_name} 点位 {index} {label}必须是有限数字")
+            raw_point_key = point.get("point_key")
             if raw_point_key is not None:
                 point_key = str(raw_point_key).strip()
                 if not point_key or len(point_key) > 200:
-                    raise http_error(422, "INVALID_GPM_POINT_KEY", f"{scene_id} 点位 {index} 的 point_key 无效")
+                    raise http_error(422, "INVALID_GPM_POINT_KEY", f"{map_name} 点位 {index} 的 point_key 无效")
                 if point_key in point_keys:
-                    raise http_error(422, "DUPLICATE_GPM_POINT_KEY", f"{scene_id} point_key 重复: {point_key}")
+                    raise http_error(422, "DUPLICATE_GPM_POINT_KEY", f"{map_name} point_key 重复: {point_key}")
                 point["point_key"] = point_key
                 point_keys.add(point_key)
             indices.add(index)
             screenshot_ids.add(normalized_screenshot_id)
             all_screenshot_ids.add(normalized_screenshot_id)
-    return scenes
+    return maps
 
 
-def _parse_pipeline_data(raw: str | None) -> dict:
-    if raw is None:
-        return {}
+def _parse_pipeline_data(raw: str) -> dict:
     try:
         parsed = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
@@ -121,33 +206,15 @@ def _parse_pipeline_data(raw: str | None) -> dict:
     return parsed
 
 
-def _metadata_value(canonical: object, legacy: object, field: str, *, required: bool = False):
-    """优先使用规范字段，并拒绝两套入口给出互相矛盾的值。"""
-
-    has_canonical = canonical is not None and canonical != ""
-    has_legacy = legacy is not None and legacy != ""
-    if has_canonical and has_legacy and str(canonical) != str(legacy):
-        raise http_error(422, "CONFLICTING_UPLOAD_METADATA", f"{field} 在规范字段和兼容字段中不一致")
-    value = canonical if has_canonical else legacy
-    if required and (value is None or value == ""):
-        raise http_error(422, "INVALID_UPLOAD_METADATA", f"{field} 不能为空")
-    return value
-
-
-def _report_scope_value(scenes: list[dict], key: str) -> object | None:
-    present = [key in scene and scene.get(key) is not None for scene in scenes]
-    if any(present) and not all(present):
-        raise http_error(
-            422, "INCONSISTENT_GPM_SCOPE",
-            f"所有场景必须同时提供 {key}，或全部通过兼容表单字段提供",
-        )
-    values = [scene.get(key) for scene in scenes if scene.get(key) is not None]
-    if not values:
-        return None
-    normalized = {str(value).strip() for value in values}
-    if len(normalized) != 1:
-        raise http_error(422, "INCONSISTENT_GPM_SCOPE", f"所有场景的 {key} 必须一致")
-    return values[0]
+def _report_scope_value(maps: list[dict], key: str) -> object:
+    present = [key in map_item and map_item.get(key) is not None for map_item in maps]
+    if not all(present):
+        raise http_error(422, "INCONSISTENT_GPM_SCOPE", f"所有地图必须提供 {key}")
+    values = [map_item.get(key) for map_item in maps if map_item.get(key) is not None]
+    reference = values[0]
+    if any(type(value) is not type(reference) or value != reference for value in values[1:]):
+        raise http_error(422, "INCONSISTENT_GPM_SCOPE", f"所有地图的 {key} 必须一致")
+    return reference
 
 
 def _archive_images(archive_path: Path) -> dict[str, zipfile.ZipInfo]:
@@ -184,6 +251,12 @@ def _create_thumbnail(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
         with Image.open(source) as image:
+            if image.width * image.height > MAX_SCREENSHOT_PIXELS:
+                raise http_error(
+                    413,
+                    "SCREENSHOT_PIXEL_LIMIT_EXCEEDED",
+                    f"截图 {source.name} 像素数超过限制",
+                )
             image = image.convert("RGB")
             image.thumbnail((480, 270), Image.Resampling.LANCZOS)
             image.save(target, "WEBP", quality=78, method=4)
@@ -194,14 +267,15 @@ def _create_thumbnail(source: Path, target: Path) -> None:
 def _insert_upload_graph(
     connection: sqlite3.Connection,
     *,
-    scenes: list[dict],
+    maps: list[dict],
     image_entries: dict[str, zipfile.ZipInfo],
     relative_root: PurePosixPath,
     batch_id: str,
     branch_tag: str,
     batch_url: str | None,
     captured_at: str,
-    p4_version: int | None,
+    captured_at_epoch: int,
+    p4_version: int,
     platform: str,
     shading_quality: int,
     source_sha256: str,
@@ -209,62 +283,58 @@ def _insert_upload_graph(
     cursor = connection.execute(
         """
         INSERT INTO gpm_uploads (
-            batch_id, branch_tag, batch_url, captured_at, p4_version,
+            batch_id, branch_tag, batch_url, captured_at, captured_at_epoch, p4_version,
             platform, shading_quality, source_sha256, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            batch_id, branch_tag, batch_url, captured_at, p4_version,
+            batch_id, branch_tag, batch_url, captured_at, captured_at_epoch, p4_version,
             platform, shading_quality, source_sha256,
             datetime.now().isoformat(timespec="seconds"),
         ),
     )
     upload_id = int(cursor.lastrowid)
-    for scene in scenes:
-        scene_cursor = connection.execute(
+    for map_item in maps:
+        map_cursor = connection.execute(
             """
-            INSERT INTO gpm_scenes (
-                upload_id, scene_id, map_name, pic_id, show_z, show_direction,
-                x_reverse, y_reverse, heat_map_json, trend_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO gpm_upload_maps (
+                upload_id, map_name, show_direction, heat_map_json, trend_json
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             (
-                upload_id, str(scene["pic_name"]), str(scene["map_name"]), scene.get("pic_id"),
-                int(bool(scene.get("show_z", 0))), int(bool(scene.get("show_direction", 1))),
-                int(bool(scene.get("x_reverse", 0))), int(bool(scene.get("y_reverse", 1))),
-                json.dumps(scene.get("heat_map", []), ensure_ascii=False),
-                json.dumps(scene.get("trend", []), ensure_ascii=False),
+                upload_id, str(map_item["map_name"]), int(bool(map_item.get("show_direction", 1))),
+                json.dumps(map_item.get("heat_map", []), ensure_ascii=False),
+                json.dumps(map_item.get("trend", []), ensure_ascii=False),
             ),
         )
-        scene_row_id = int(scene_cursor.lastrowid)
-        for point in scene["detail"]:
+        upload_map_id = int(map_cursor.lastrowid)
+        point_rows = []
+        for point in map_item["detail"]:
             screenshot_id = str(point["screenshot_id"])
             info = image_entries[screenshot_id]
             safe_id = safe_segment(screenshot_id, "point")
             original = relative_root / "originals" / f"{safe_id}{PurePosixPath(info.filename).suffix.lower()}"
             thumb = relative_root / "thumbs" / f"{safe_id}.webp"
-            point_key = point.get("point_key") or point.get("teleport_point_id")
-            connection.execute(
-                """
-                INSERT INTO gpm_points (
-                    scene_row_id, point_index, screenshot_id, point_key,
-                    position_json, direction_json, view_json,
-                    heat_map_data_json, trend_data_json, detail_data_json,
-                    screenshot_path, thumbnail_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    scene_row_id, int(point["index"]), screenshot_id,
-                    str(point_key) if point_key is not None else None,
-                    json.dumps(point["position"], ensure_ascii=False),
-                    json.dumps(point["direction"], ensure_ascii=False),
-                    json.dumps(point.get("view", {}), ensure_ascii=False),
-                    json.dumps(point.get("heat_map_data", {}), ensure_ascii=False),
-                    json.dumps(point.get("trend_data", {}), ensure_ascii=False),
-                    json.dumps(point.get("detail_data", []), ensure_ascii=False),
-                    original.as_posix(), thumb.as_posix(),
-                ),
-            )
+            point_rows.append((
+                upload_map_id, int(point["index"]), screenshot_id, point.get("point_key"),
+                float(point["position"][0]), float(point["position"][1]),
+                float(point["direction"][0]), float(point["direction"][1]),
+                json.dumps(point["heat_map_data"], ensure_ascii=False),
+                json.dumps(point["trend_data"], ensure_ascii=False),
+                json.dumps(point["detail_data"], ensure_ascii=False),
+                original.as_posix(), thumb.as_posix(),
+            ))
+        connection.executemany(
+            """
+            INSERT INTO gpm_points (
+                upload_map_id, point_index, screenshot_id, point_key,
+                position_x, position_y, direction_x, direction_y,
+                heat_map_data_json, trend_data_json, detail_data_json,
+                screenshot_path, thumbnail_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            point_rows,
+        )
     return upload_id
 
 
@@ -289,14 +359,7 @@ def _remove_replaced_asset_dirs(relative_dirs: set[PurePosixPath], batch_root: P
 def upload_gpm_heatmap(
     report: Annotated[UploadFile, File(description="GPMHeatmap.json")],
     screenshots: Annotated[UploadFile, File(description="GPMScreenshot.zip")],
-    pipeline_data: Annotated[str | None, Form(description="流水线元数据 JSON")] = None,
-    batch_id: Annotated[str | None, Form(description="兼容旧调用；新调用写入 pipeline_data")] = None,
-    captured_at: Annotated[str | None, Form(description="兼容旧调用；新调用写入 pipeline_data")] = None,
-    platform: Annotated[str | None, Form(description="兼容旧报告；新报告在场景中携带")] = None,
-    shading_quality: Annotated[int | None, Form(description="兼容旧报告；新报告在场景中携带")] = None,
-    branch_tag: Annotated[str | None, Form(description="兼容旧调用；新调用写入 pipeline_data")] = None,
-    batch_url: Annotated[str | None, Form()] = None,
-    p4_version: Annotated[int | None, Form()] = None,
+    pipeline_data: Annotated[str, Form(description="流水线元数据 JSON")],
     overwrite: Annotated[bool, Form()] = False,
 ):
     report_bytes = report.file.read(MAX_REPORT_BYTES + 1)
@@ -306,45 +369,41 @@ def upload_gpm_heatmap(
         payload = json.loads(report_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise http_error(422, "INVALID_GPM_JSON", "GPMHeatmap.json 无法解析")
-    scenes = _validate_report(payload)
+    maps = _validate_report(payload)
 
     pipeline = _parse_pipeline_data(pipeline_data)
     batch_id = require_identifier(
-        str(_metadata_value(pipeline.get("batch_id"), batch_id, "batch_id", required=True)),
+        str(pipeline.get("batch_id") or ""),
         "batch_id", maximum=120,
     )
-    resolved_branch = _metadata_value(pipeline.get("branch_tag"), branch_tag, "branch_tag") or "main"
-    branch_tag = require_identifier(str(resolved_branch).strip().lower(), "branch_tag", maximum=120)
-    captured_at = _parse_iso_datetime(str(_metadata_value(
-        pipeline.get("captured_at"), captured_at, "captured_at", required=True,
-    )))
-    batch_url = _metadata_value(pipeline.get("batch_url"), batch_url, "batch_url")
+    branch_tag = require_identifier(
+        str(pipeline.get("branch_tag") or "main").strip().lower(), "branch_tag", maximum=120,
+    )
+    captured_at, captured_at_epoch = _parse_iso_datetime(str(pipeline.get("captured_at") or ""))
+    if is_expired_capture(captured_at):
+        raise http_error(
+            422,
+            "GPM_CAPTURE_EXPIRED",
+            f"captured_at 已超出最近 {GPM_DATA_RETENTION_DAYS} 天保留范围，拒绝上报",
+        )
+    batch_url = pipeline.get("batch_url")
     if batch_url is not None:
         batch_url = str(batch_url).strip() or None
         if batch_url and len(batch_url) > 2048:
             raise http_error(422, "INVALID_BATCH_URL", "batch_url 不能超过 2048 个字符")
 
-    platform = require_platform(_metadata_value(
-        _report_scope_value(scenes, "platform"), platform, "platform", required=True,
-    ))
-    raw_quality = _metadata_value(
-        _report_scope_value(scenes, "shading_quality"), shading_quality,
-        "shading_quality", required=True,
-    )
-    try:
-        shading_quality = int(raw_quality)
-    except (TypeError, ValueError):
+    platform = require_platform(_report_scope_value(maps, "platform"))
+    raw_quality = _report_scope_value(maps, "shading_quality")
+    if isinstance(raw_quality, bool) or not isinstance(raw_quality, int):
         raise http_error(422, "INVALID_SHADING_QUALITY", "shading_quality 必须在 0 到 5 之间")
+    shading_quality = raw_quality
     if not 0 <= shading_quality <= 5:
         raise http_error(422, "INVALID_SHADING_QUALITY", "shading_quality 必须在 0 到 5 之间")
-    raw_p4 = _metadata_value(
-        _report_scope_value(scenes, "p4_version"), p4_version, "p4_version", required=True,
-    )
-    try:
-        p4_version = int(raw_p4) if raw_p4 not in (None, "") else None
-    except (TypeError, ValueError):
+    raw_p4 = _report_scope_value(maps, "p4_version")
+    if isinstance(raw_p4, bool) or not isinstance(raw_p4, int):
         raise http_error(422, "INVALID_P4_VERSION", "p4_version 必须是非负整数")
-    if p4_version is not None and p4_version < 0:
+    p4_version = raw_p4
+    if p4_version < 0:
         raise http_error(422, "INVALID_P4_VERSION", "p4_version 不能为负数")
 
     if not overwrite:
@@ -378,8 +437,8 @@ def upload_gpm_heatmap(
         image_entries = _archive_images(archive_path)
         expected_ids = {
             str(point["screenshot_id"])
-            for scene in scenes
-            for point in scene["detail"]
+            for map_item in maps
+            for point in map_item["detail"]
         }
         missing = sorted(expected_ids - set(image_entries))
         extras = sorted(set(image_entries) - expected_ids)
@@ -430,8 +489,8 @@ def upload_gpm_heatmap(
                     """
                     SELECT p.screenshot_path, p.thumbnail_path
                     FROM gpm_points p
-                    JOIN gpm_scenes s ON s.id = p.scene_row_id
-                    WHERE s.upload_id = ?
+                    JOIN gpm_upload_maps m ON m.id = p.upload_map_id
+                    WHERE m.upload_id = ?
                     """,
                     (existing["id"],),
                 ).fetchall()
@@ -446,13 +505,14 @@ def upload_gpm_heatmap(
             published_new = True
             upload_id = _insert_upload_graph(
                 connection,
-                scenes=scenes,
+                maps=maps,
                 image_entries=image_entries,
                 relative_root=relative_root,
                 batch_id=batch_id,
                 branch_tag=branch_tag,
                 batch_url=batch_url,
                 captured_at=captured_at,
+                captured_at_epoch=captured_at_epoch,
                 p4_version=p4_version,
                 platform=platform,
                 shading_quality=shading_quality,
@@ -460,12 +520,20 @@ def upload_gpm_heatmap(
             )
             connection.commit()
             _remove_replaced_asset_dirs(old_asset_dirs, batch_root)
+            try:
+                # 本次写入已经提交；保留清理失败只记录并由小时任务重试，不能把
+                # 已成功的流水线上报伪装成失败。
+                prune_expired_gpm_uploads()
+            except Exception:  # noqa: BLE001
+                logging.getLogger("pixelcomp").exception(
+                    "GPMHeatmap 上报成功，但过期数据清理失败，稍后自动重试"
+                )
             return {
                 "id": upload_id,
                 "batch_id": batch_id,
                 "branch_tag": branch_tag,
-                "scene_count": len(scenes),
-                "point_count": sum(len(scene["detail"]) for scene in scenes),
+                "map_count": len(maps),
+                "point_count": sum(len(map_item["detail"]) for map_item in maps),
                 "updated": existing is not None,
             }
         except Exception:

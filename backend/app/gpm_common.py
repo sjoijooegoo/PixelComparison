@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 QUALITY_LABELS = {0: "节能", 1: "流畅", 2: "均衡", 3: "精美", 4: "极致", 5: "电影"}
+PLATFORMS = ("IOS", "Android", "Windows")
 SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._-]+")
 SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9._-]{1,200}")
 
@@ -39,17 +40,18 @@ def require_identifier(value: str, label: str, *, maximum: int = 200) -> str:
 
 
 def require_platform(value: object, label: str = "platform", *, maximum: int = 120) -> str:
-    """Validate a display-name platform consistently across upload and configuration APIs."""
+    """校验 GPMHeatmap 当前支持的平台规范名称。"""
 
     normalized = str(value or "").strip()
     if (
         not normalized
         or len(normalized) > maximum
         or any(ord(character) < 32 for character in normalized)
+        or normalized not in PLATFORMS
     ):
         raise http_error(
             422, "INVALID_GPM_PLATFORM",
-            f"{label} 不能为空、不能包含控制字符且不能超过 {maximum} 个字符",
+            f"{label} 必须是 IOS、Android 或 Windows",
         )
     return normalized
 

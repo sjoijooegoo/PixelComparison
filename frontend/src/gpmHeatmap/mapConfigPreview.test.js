@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { projectedPointStyle } from './projectConfig'
+import { projectedPointStyle } from './mapConfigPreview'
 
-describe('GPM project config preview math', () => {
+describe('GPM map config preview math', () => {
   it('按地图反转配置投影预览点位', () => {
     expect(projectedPointStyle(
       { origin: [10, 20], range: [100, 200], x_reverse: false, y_reverse: true },

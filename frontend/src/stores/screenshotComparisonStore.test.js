@@ -116,6 +116,7 @@ describe('screenshot comparison route hydration', () => {
       currentQuality: '5',
       shadingQuality: '5',
       dateMode: 'range',
+      rangeMode: 'fixed',
       createdFrom: '2026-08-01',
       createdTo: '2026-08-07',
     })
@@ -140,6 +141,7 @@ describe('screenshot comparison route hydration', () => {
       currentId: '20', currentQuality: 5,
       shadingQuality: 5,
       dateMode: 'range',
+      rangeMode: 'fixed',
       createdFrom: '2026-08-01',
       createdTo: '2026-08-07',
     })
@@ -243,6 +245,63 @@ describe('screenshot comparison route hydration', () => {
 
     expect(normalized.dateMode).toBe('range')
     expect(store.filters.created_dates).toEqual([])
+  })
+
+  it('旧版默认日期 URL 迁移为滚动范围并在刷新时推进到今天', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-29T12:00:00'))
+    apiMock.sceneGrid.mockResolvedValue({ total: 0, batches: [], rows: [] })
+    const store = useScreenshotComparisonStore()
+
+    const normalized = await store.applyRoute({
+      branchTag: 'main',
+      sceneId: 'SceneA',
+      dateMode: 'range',
+      createdFrom: '2026-08-23',
+      createdTo: '2026-08-29',
+    })
+
+    expect(normalized.rangeMode).toBe('rolling')
+    vi.setSystemTime(new Date('2026-08-30T12:00:00'))
+    const refreshed = await store.refresh()
+
+    expect(refreshed).toMatchObject({
+      rangeMode: 'rolling',
+      createdFrom: '2026-08-24',
+      createdTo: '2026-08-30',
+    })
+    expect(apiMock.sceneGrid).toHaveBeenLastCalledWith(
+      'SceneA',
+      expect.objectContaining({
+        created_from: '2026-08-24',
+        created_to: '2026-08-30',
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
+  })
+
+  it('刷新时保留用户明确选择的固定历史范围', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-29T12:00:00'))
+    apiMock.sceneGrid.mockResolvedValue({ total: 0, batches: [], rows: [] })
+    const store = useScreenshotComparisonStore()
+    await store.applyRoute({
+      branchTag: 'main',
+      sceneId: 'SceneA',
+      dateMode: 'range',
+      rangeMode: 'fixed',
+      createdFrom: '2026-08-01',
+      createdTo: '2026-08-07',
+    })
+
+    vi.setSystemTime(new Date('2026-08-30T12:00:00'))
+    await store.refresh()
+
+    expect(store.filters).toMatchObject({
+      rangeMode: 'fixed',
+      created_from: '2026-08-01',
+      created_to: '2026-08-07',
+    })
   })
 })
 

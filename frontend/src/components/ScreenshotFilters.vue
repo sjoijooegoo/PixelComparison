@@ -4,6 +4,8 @@ import { Message } from '@arco-design/web-vue'
 import { useRouter } from 'vue-router'
 
 import {
+  DATE_RANGE_MODE_FIXED,
+  DATE_RANGE_MODE_ROLLING,
   MAX_DATE_RANGE_DAYS,
   defaultDateRange,
   isDateRangeAllowed,
@@ -70,9 +72,16 @@ function onDateChange(value) {
       Message.warning(`连续范围最多选择 ${MAX_DATE_RANGE_DAYS} 天；如需跨较长时间，请使用「指定日期」`)
       return
     }
-    void replaceFilters({ created_from: value[0], created_to: value[1] })
+    void replaceFilters({
+      rangeMode: DATE_RANGE_MODE_FIXED,
+      created_from: value[0],
+      created_to: value[1],
+    })
   } else {
-    void replaceFilters(defaultDateRange(project.settings.default_date_range_days))
+    void replaceFilters({
+      rangeMode: DATE_RANGE_MODE_ROLLING,
+      ...defaultDateRange(project.settings.default_date_range_days),
+    })
   }
 }
 

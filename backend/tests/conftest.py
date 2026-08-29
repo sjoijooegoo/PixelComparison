@@ -1,6 +1,7 @@
 import importlib
 import io
 import os
+from datetime import datetime, timezone
 
 import pytest
 
@@ -19,6 +20,7 @@ def client(tmp_path, monkeypatch):
     import app.service
     import app.settings
     import app.cleanup
+    import app.gpm_retention
     import app.thumbnails
     import app.main
     importlib.reload(app.db)
@@ -29,8 +31,15 @@ def client(tmp_path, monkeypatch):
     importlib.reload(app.service)
     importlib.reload(app.settings)
     importlib.reload(app.cleanup)   # app.main 从中导入 prune_orphans,须先于 app.main 重载
+    importlib.reload(app.gpm_retention)
     importlib.reload(app.thumbnails)
     importlib.reload(app.main)
+    # GPM 样本以 2026-08-26 为基准；固定保留策略时钟，避免测试随运行日期漂移。
+    monkeypatch.setattr(
+        app.gpm_retention,
+        "_utc_now",
+        lambda: datetime(2026, 8, 29, tzinfo=timezone.utc),
+    )
 
     from fastapi.testclient import TestClient
     with TestClient(app.main.app) as c:

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   compileScaleSegments,
-  segmentsFromLegacy,
+  defaultScaleSegments,
 } from './scaleExpressions'
 
 describe('GPM scale interval expressions', () => {
@@ -13,14 +13,12 @@ describe('GPM scale interval expressions', () => {
       { color: '#00ff00', expression: '<365' },
     ])
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       segments: [
         { color: '#ff0000', expression: '>=390' },
         { color: '#00ffff', expression: '>=365 & <390' },
         { color: '#00ff00', expression: '<365' },
       ],
-      thresholds: [365, 390],
-      colors: ['#00ff00', '#00ffff', '#ff0000'],
     })
   })
 
@@ -60,13 +58,13 @@ describe('GPM scale interval expressions', () => {
     ])).toThrow('仅支持 <、<=、>、>= 和 &')
   })
 
-  it('把高值更优的旧标尺转换成等价的升序颜色区间', () => {
-    expect(segmentsFromLegacy(
-      [100, 200], ['#ff0000', '#ffff00', '#00ff00'], 'higher_is_better',
-    )).toEqual([
-      { color: '#00ff00', expression: '<100' },
-      { color: '#ffff00', expression: '>=100 & <200' },
-      { color: '#ff0000', expression: '>=200' },
+  it('提供最终契约使用的默认五段标尺', () => {
+    expect(defaultScaleSegments()).toEqual([
+      { color: '#52e817', expression: '<100' },
+      { color: '#b7f400', expression: '>=100 & <200' },
+      { color: '#ffb20a', expression: '>=200 & <300' },
+      { color: '#ff4a0a', expression: '>=300 & <400' },
+      { color: '#ff1111', expression: '>=400' },
     ])
   })
 })

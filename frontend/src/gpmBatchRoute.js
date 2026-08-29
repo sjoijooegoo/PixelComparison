@@ -19,18 +19,34 @@ function validDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : ''
 }
 
+function inclusiveDays(from, to) {
+  const start = Date.parse(`${validDate(from)}T00:00:00Z`)
+  const end = Date.parse(`${validDate(to)}T00:00:00Z`)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null
+  return Math.floor((end - start) / 86_400_000) + 1
+}
+
 export function parseGpmBatchRoute(route) {
   const defaults = defaultGpmCapturedRange()
+  const requestedFrom = validDate(firstValue(route.query.from))
+  const requestedTo = validDate(firstValue(route.query.to))
+  const requestedRangeMode = firstValue(route.query.range_mode)
+  const rangeMode = requestedRangeMode === 'rolling' || requestedRangeMode === 'fixed'
+    ? requestedRangeMode
+    : !requestedFrom && !requestedTo
+      ? 'rolling'
+      : inclusiveDays(requestedFrom, requestedTo) === 30 ? 'rolling' : 'fixed'
   const quality = Number(firstValue(route.query.quality))
   const page = Number(firstValue(route.query.page))
   return {
     returnTo: firstValue(route.query.return_to) || '',
     branchTag: firstValue(route.query.branch_tag) || 'main',
     platform: firstValue(route.query.platform) || '',
-    sceneId: firstValue(route.query.scene_id) || '',
+    mapName: firstValue(route.query.map_name) || '',
     shadingQuality: Number.isInteger(quality) && quality >= 0 && quality <= 5 ? quality : '',
-    capturedFrom: validDate(firstValue(route.query.from)) || defaults.capturedFrom,
-    capturedTo: validDate(firstValue(route.query.to)) || defaults.capturedTo,
+    rangeMode,
+    capturedFrom: rangeMode === 'rolling' ? defaults.capturedFrom : requestedFrom || defaults.capturedFrom,
+    capturedTo: rangeMode === 'rolling' ? defaults.capturedTo : requestedTo || defaults.capturedTo,
     page: Number.isInteger(page) && page > 0 ? page : 1,
   }
 }
@@ -38,23 +54,25 @@ export function parseGpmBatchRoute(route) {
 export function gpmBatchRouteKey(state) {
   return JSON.stringify({
     returnTo: state.returnTo || '', branchTag: state.branchTag || 'main',
-    platform: state.platform || '', sceneId: state.sceneId || '',
+    platform: state.platform || '', mapName: state.mapName || '',
     shadingQuality: state.shadingQuality === '' ? '' : Number(state.shadingQuality),
+    rangeMode: state.rangeMode === 'fixed' ? 'fixed' : 'rolling',
     capturedFrom: state.capturedFrom || '', capturedTo: state.capturedTo || '',
     page: Number(state.page) || 1,
   })
 }
 
 export function gpmBatchLocation(state) {
-  const query = { branch_tag: state.branchTag || 'main' }
+  const rangeMode = state.rangeMode === 'fixed' ? 'fixed' : 'rolling'
+  const query = { branch_tag: state.branchTag || 'main', range_mode: rangeMode }
   if (state.returnTo) query.return_to = state.returnTo
   if (state.platform) query.platform = state.platform
-  if (state.sceneId) query.scene_id = state.sceneId
+  if (state.mapName) query.map_name = state.mapName
   if (state.shadingQuality !== '' && state.shadingQuality != null) {
     query.quality = String(state.shadingQuality)
   }
-  if (state.capturedFrom) query.from = state.capturedFrom
-  if (state.capturedTo) query.to = state.capturedTo
+  if (rangeMode === 'fixed' && state.capturedFrom) query.from = state.capturedFrom
+  if (rangeMode === 'fixed' && state.capturedTo) query.to = state.capturedTo
   if (Number(state.page) > 1) query.page = String(state.page)
   return { path: '/batch-management/gpm', query }
 }

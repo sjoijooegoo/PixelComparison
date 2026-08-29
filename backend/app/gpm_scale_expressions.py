@@ -1,7 +1,7 @@
 """GPMHeatmap 颜色区间表达式的解析与编译。
 
-模块接口只暴露“表达式列表 -> 可执行标尺”和旧标尺转换；语法、边界归属、
-完整覆盖与冲突判定都集中在这里，接口层和迁移代码无需重复解释表达式。
+模块接口只接受当前表达式结构；语法、边界归属、完整覆盖与冲突判定全部封装
+在这里，调用方不需要理解区间实现。
 """
 
 from __future__ import annotations
@@ -13,8 +13,13 @@ from dataclasses import dataclass
 
 MIN_SEGMENTS = 2
 MAX_SEGMENTS = 10
-DEFAULT_COLORS = ["#52e817", "#b7f400", "#ffb20a", "#ff4a0a", "#ff1111"]
-DEFAULT_THRESHOLDS = [100.0, 200.0, 300.0, 400.0]
+DEFAULT_SEGMENTS = [
+    {"color": "#52e817", "expression": "<100"},
+    {"color": "#b7f400", "expression": ">=100 & <200"},
+    {"color": "#ffb20a", "expression": ">=200 & <300"},
+    {"color": "#ff4a0a", "expression": ">=300 & <400"},
+    {"color": "#ff1111", "expression": ">=400"},
+]
 
 _NUMBER = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 _COMPARISON = re.compile(rf"^(<=|>=|<|>)\s*({_NUMBER})$")
@@ -41,8 +46,6 @@ class _Interval:
 @dataclass(frozen=True)
 class CompiledScale:
     segments: list[dict]
-    thresholds: list[float]
-    boundary_owners: list[str]
     colors: list[str]
 
 
@@ -107,7 +110,7 @@ def _sort_key(interval: _Interval) -> tuple[float, int]:
 
 
 def compile_scale_segments(value: object) -> CompiledScale:
-    """解析颜色段并返回按数值升序规范化的表达式和运行时阈值。"""
+    """解析颜色段并返回规范化表达式与按数值升序的颜色。"""
 
     if not isinstance(value, list) or not MIN_SEGMENTS <= len(value) <= MAX_SEGMENTS:
         raise ScaleExpressionError(f"颜色标尺必须包含 {MIN_SEGMENTS} 到 {MAX_SEGMENTS} 个颜色段")
@@ -157,63 +160,9 @@ def compile_scale_segments(value: object) -> CompiledScale:
             {"color": interval.color, "expression": _canonical_expression(interval)}
             for interval in intervals
         ],
-        thresholds=[
-            interval.upper.value for interval in ordered_intervals[:-1] if interval.upper
-        ],
-        # A shared boundary belongs to exactly one adjacent segment. Preserve that
-        # ownership so clients do not silently turn ``<= n / > n`` into
-        # ``< n / >= n`` when they render or evaluate the scale.
-        boundary_owners=[
-            "lower" if interval.upper and interval.upper.inclusive else "upper"
-            for interval in ordered_intervals[:-1]
-        ],
         colors=[interval.color for interval in ordered_intervals],
     )
 
 
-def segments_from_legacy(
-    thresholds: object,
-    colors: object,
-    direction: object = "lower_is_better",
-) -> list[dict]:
-    """把旧阈值标尺转换为等价的表达式列表。"""
-
-    if not isinstance(colors, list) or not MIN_SEGMENTS <= len(colors) <= MAX_SEGMENTS:
-        colors = list(DEFAULT_COLORS)
-    if not isinstance(thresholds, list) or len(thresholds) != len(colors) - 1:
-        thresholds = list(DEFAULT_THRESHOLDS)
-        colors = list(DEFAULT_COLORS)
-
-    numeric_thresholds: list[float] = []
-    for item in thresholds:
-        try:
-            number = float(item)
-        except (TypeError, ValueError) as exc:
-            raise ScaleExpressionError("旧标尺阈值无法转换为区间表达式") from exc
-        if not math.isfinite(number):
-            raise ScaleExpressionError("旧标尺阈值无法转换为区间表达式")
-        numeric_thresholds.append(number)
-    if any(right <= left for left, right in zip(numeric_thresholds, numeric_thresholds[1:])):
-        raise ScaleExpressionError("旧标尺阈值必须严格递增")
-
-    normalized_colors = [str(color).strip().lower() for color in colors]
-    if str(direction or "lower_is_better") == "higher_is_better":
-        normalized_colors.reverse()
-
-    segments: list[dict] = []
-    for index, color in enumerate(normalized_colors):
-        if index == 0:
-            expression = f"<{_number_text(numeric_thresholds[0])}"
-        elif index == len(normalized_colors) - 1:
-            expression = f">={_number_text(numeric_thresholds[-1])}"
-        else:
-            expression = (
-                f">={_number_text(numeric_thresholds[index - 1])}"
-                f" & <{_number_text(numeric_thresholds[index])}"
-            )
-        segments.append({"color": color, "expression": expression})
-    return compile_scale_segments(segments).segments
-
-
 def default_scale_segments() -> list[dict]:
-    return segments_from_legacy(DEFAULT_THRESHOLDS, DEFAULT_COLORS)
+    return [dict(segment) for segment in DEFAULT_SEGMENTS]

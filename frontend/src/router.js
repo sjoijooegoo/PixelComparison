@@ -24,17 +24,13 @@ const routes = [
   },
   { path: '/screenshot/:sceneId?', component: () => import('./views/ScreenshotComparisonView.vue') },
   { path: '/map-build/:sceneId?', component: () => import('./views/MapBuildView.vue') },
-  { path: '/gpm-heatmap/:sceneId?', component: () => import('./views/GpmHeatmapView.vue') },
+  { path: '/gpm-heatmap/:mapName?', component: () => import('./views/GpmHeatmapView.vue') },
   {
     path: '/settings/screenshot-comparison',
     component: () => import('./components/ProjectSettings.vue'),
   },
   {
     path: '/settings/gpm-heatmap',
-    component: () => import('./views/GpmProjectSettingsView.vue'),
-  },
-  {
-    path: '/settings/gpm-heatmap/scales',
     component: () => import('./views/GpmScaleSettingsView.vue'),
   },
   {

@@ -26,7 +26,7 @@ describe('GpmDetailPanel', () => {
     })
 
     expect(wrapper.get('.point-meta').text()).toContain('序号08')
-    expect(wrapper.get('.coordinates').text()).toContain('X: -192711, Y: 240138')
+    expect(wrapper.get('.coordinates').text()).toContain('X: -192711 Y: 240138')
     expect(wrapper.get('.metric-value').text()).toContain('场景DC421')
   })
 

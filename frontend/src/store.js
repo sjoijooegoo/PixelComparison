@@ -1,5 +1,7 @@
 export const PAGE_SIZE = 10
 export const MAX_DATE_RANGE_DAYS = 14
+export const DATE_RANGE_MODE_ROLLING = 'rolling'
+export const DATE_RANGE_MODE_FIXED = 'fixed'
 
 function ymd(date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -42,6 +44,26 @@ export function defaultDateRange(days = 7) {
   const from = new Date(today)
   from.setDate(today.getDate() - (count - 1))
   return { created_from: ymd(from), created_to: ymd(today) }
+}
+
+export function normalizeDateRangeMode(value, from, to, defaultDays = 7) {
+  if (value === DATE_RANGE_MODE_ROLLING || value === DATE_RANGE_MODE_FIXED) return value
+  // 旧版默认范围只在 URL 中保存了 from/to。无法与同长度的手动范围完全区分，
+  // 因此按项目默认天数迁移为滚动范围；新版手动选择会显式写入 fixed。
+  return inclusiveDateRangeDays(from, to) === normalizeDateRangeDays(defaultDays)
+    ? DATE_RANGE_MODE_ROLLING
+    : DATE_RANGE_MODE_FIXED
+}
+
+export function refreshRollingDateRange(filters, defaultDays = 7) {
+  if (filters?.dateMode !== 'range'
+      || filters?.rangeMode !== DATE_RANGE_MODE_ROLLING) return false
+  const next = defaultDateRange(defaultDays)
+  const changed = filters.created_from !== next.created_from
+    || filters.created_to !== next.created_to
+  filters.created_from = next.created_from
+  filters.created_to = next.created_to
+  return changed
 }
 
 export const SHADING_QUALITY_OPTIONS = [

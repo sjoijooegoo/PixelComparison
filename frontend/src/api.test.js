@@ -147,6 +147,36 @@ describe('api request encoding', () => {
     })
   })
 
+  it('支持热力图配置包导出、检查和应用', async () => {
+    const archive = new Blob(['zip'], { type: 'application/zip' })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: vi.fn().mockReturnValue("attachment; filename*=UTF-8''gpm-config.zip") },
+        blob: vi.fn().mockResolvedValue(archive),
+      })
+      .mockResolvedValueOnce(jsonResponse({ valid: true, import_id: 'abc' }))
+      .mockResolvedValueOnce(jsonResponse({ applied: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const exported = await api.exportGpmConfiguration('maps')
+    expect(exported).toEqual({ blob: archive, filename: 'gpm-config.zip' })
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/gpm-heatmaps/configuration/export?scope=maps',
+    )
+
+    const file = new File(['zip'], 'edited.zip', { type: 'application/zip' })
+    await api.inspectGpmConfiguration(file)
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/gpm-heatmaps/configuration/imports/inspect')
+    expect(fetchMock.mock.calls[1][1].body).toBeInstanceOf(FormData)
+    expect(fetchMock.mock.calls[1][1].body.get('package')).toBe(file)
+
+    await api.applyGpmConfigurationImport('import / 7')
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      '/api/gpm-heatmaps/configuration/imports/import%20%2F%207/apply',
+    )
+  })
+
   it('接口超过统一时限后中止请求并返回可重试的中文错误', async () => {
     vi.useFakeTimers()
     const fetchMock = vi.fn((_url, options) => new Promise((_resolve, reject) => {

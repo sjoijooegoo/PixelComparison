@@ -532,7 +532,8 @@ async function refresh() {
     return
   }
   const [loadedOverview] = await Promise.all([
-    loadOverview(filters.batchId, { preserveOnError: true }),
+    // 刷新代表获取当前筛选下的最新烘培批次；空 batch_id 由后端选择最新项。
+    loadOverview('', { preserveOnError: true }),
     loadTrend({ preserveOnError: true }),
   ])
   if (loadedOverview) await syncAnalysisRoute()
@@ -648,7 +649,7 @@ function formatCount(value) {
 }
 function batchLabel(batch, isLatest = false) {
   const date = batch.created_at?.replace('T', ' ').slice(0, 16) || '—'
-  return `#${batch.id} · ${date} · ${p4Label(batch.p4_version)}${isLatest ? '（最新）' : ''}`
+  return `${p4Label(batch.p4_version)} · ${date}${isLatest ? '（最新）' : ''}`
 }
 
 onMounted(async () => {
@@ -665,6 +666,9 @@ onMounted(async () => {
   }
   filters.branchTag = availableBranchTag(requestedBranchTag)
   applyAnalysisState(routeAnalysisState())
+  // 与热力图一致，浏览器重新进入/刷新工作区时跳到最新批次；
+  // 用户在页面内主动选择历史批次仍会立即生效并同步 URL。
+  filters.batchId = ''
   const loaded = await loadMeta(routeSceneId())
   if (loaded && filters.sceneId && selectedSceneHasData.value) {
     const loadedOverview = await loadOverview(filters.batchId)

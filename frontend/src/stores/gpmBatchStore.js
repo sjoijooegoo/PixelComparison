@@ -1,5 +1,11 @@
 import { defineStore } from 'pinia'
 import { api } from '../api'
+import {
+  gpmMapValues,
+  mergeGpmPlatforms,
+  mergeGpmQualities,
+} from '../gpmHeatmap/filterOptions'
+import { defaultGpmCapturedRange } from '../gpmBatchRoute'
 import { PAGE_SIZE } from '../store'
 
 function optionValues(items) {
@@ -12,10 +18,10 @@ function keep(value, items) {
 
 export const useGpmBatchStore = defineStore('gpmBatch', {
   state: () => ({
-    meta: { branch_tags: ['main'], platforms: [], scene_ids: [], shading_qualities: [] },
+    meta: { branch_tags: ['main'], platforms: [], maps: [], shading_qualities: [] },
     filters: {
-      branchTag: 'main', platform: '', sceneId: '', shadingQuality: '',
-      capturedFrom: '', capturedTo: '',
+      branchTag: 'main', platform: '', mapName: '', shadingQuality: '',
+      rangeMode: 'rolling', capturedFrom: '', capturedTo: '',
     },
     batches: [],
     batchTotal: 0,
@@ -33,7 +39,7 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
     requestParams: (state) => ({
       branch_tag: state.filters.branchTag,
       platform: state.filters.platform,
-      scene_id: state.filters.sceneId,
+      map_name: state.filters.mapName,
       shading_quality: state.filters.shadingQuality,
       captured_from: state.filters.capturedFrom,
       captured_to: state.filters.capturedTo,
@@ -45,7 +51,13 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
   actions: {
     async loadMeta(branchTag = this.filters.branchTag || 'main') {
       const sequence = ++this.metaSequence
-      const data = await api.gpmHeatmapUploadMeta({ branch_tag: branchTag })
+      const heatmapMeta = await api.gpmHeatmapCatalog({ branch_tag: branchTag })
+      const data = {
+        branch_tags: heatmapMeta.branch_tags || ['main'],
+        platforms: mergeGpmPlatforms(heatmapMeta.platforms || []),
+        maps: gpmMapValues(heatmapMeta.maps),
+        shading_qualities: mergeGpmQualities(heatmapMeta.shading_qualities || []),
+      }
       if (sequence === this.metaSequence) this.meta = data
       return data
     },
@@ -63,10 +75,11 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
       }
       this.filters.branchTag = branchTag
       this.filters.platform = keep(requested.platform || '', meta.platforms)
-      this.filters.sceneId = keep(requested.sceneId || '', meta.scene_ids)
+      this.filters.mapName = keep(requested.mapName || '', meta.maps)
       this.filters.shadingQuality = keep(requested.shadingQuality, meta.shading_qualities)
       this.filters.capturedFrom = requested.capturedFrom || ''
       this.filters.capturedTo = requested.capturedTo || ''
+      this.filters.rangeMode = requested.rangeMode === 'fixed' ? 'fixed' : 'rolling'
       this.batchPage = Number(requested.page) || 1
       await this.loadBatches()
       if (!isLatest()) return null
@@ -102,9 +115,14 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
     },
 
     async refresh() {
+      if (this.filters.rangeMode === 'rolling') {
+        const { capturedFrom, capturedTo } = defaultGpmCapturedRange()
+        this.filters.capturedFrom = capturedFrom
+        this.filters.capturedTo = capturedTo
+      }
       const meta = await this.loadMeta(this.filters.branchTag)
       this.filters.platform = keep(this.filters.platform, meta.platforms)
-      this.filters.sceneId = keep(this.filters.sceneId, meta.scene_ids)
+      this.filters.mapName = keep(this.filters.mapName, meta.maps)
       this.filters.shadingQuality = keep(this.filters.shadingQuality, meta.shading_qualities)
       return await this.loadBatches()
     },

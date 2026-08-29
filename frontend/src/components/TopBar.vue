@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { runPageRefresh } from '../pageActions'
+import GpmConfigurationTransfer from './GpmConfigurationTransfer.vue'
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useScreenshotComparisonStore } from '../stores/screenshotComparisonStore'
@@ -38,6 +39,9 @@ const showScreenshotSettings = computed(() => (
 ))
 const showGpmSettings = computed(() => (
   context.value.isDataPage && context.value.workspace === 'gpm'
+))
+const showGpmConfigurationTransfer = computed(() => (
+  context.value.isSettings && context.value.workspace === 'gpm'
 ))
 const supportsAutoRefresh = computed(() => (
   showRefresh.value && context.value.workspace !== 'gpm'
@@ -158,6 +162,7 @@ onUnmounted(() => {
         </button>
       </a-tooltip>
       <span v-if="showWorkspaceReturn" class="action-divider" aria-hidden="true"></span>
+      <GpmConfigurationTransfer v-if="showGpmConfigurationTransfer" />
       <template v-if="showRefresh">
         <a-tooltip content="刷新">
           <button class="icon-btn" aria-label="刷新" @click="refresh">

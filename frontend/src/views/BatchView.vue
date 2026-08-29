@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   batchLocation,
   batchRouteKey,
+  batchStateFromFilters,
   parseBatchRoute,
 } from '../batchRoute'
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
@@ -58,6 +59,11 @@ function registerRefresh() {
   unregisterPageRefresh?.()
   unregisterPageRefresh = registerPageRefresh(async () => {
     await store.refresh({ refreshMeta: false })
+    await replaceUrl(batchStateFromFilters(
+      store.filters,
+      store.batchPage,
+      route.query.return_to || '',
+    ))
   })
 }
 

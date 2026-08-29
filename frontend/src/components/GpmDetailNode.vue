@@ -1,6 +1,8 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 
+import { detailNodePath } from '../gpmHeatmap/detailPaths'
+
 defineOptions({ name: 'GpmDetailNode' })
 const props = defineProps({
   node: { type: Object, required: true },
@@ -15,7 +17,7 @@ const localExpansionState = reactive({})
 const localTableSortState = reactive({})
 const state = computed(() => props.expansionState || localExpansionState)
 const sortState = computed(() => props.tableSortState || localTableSortState)
-const openChildIndex = computed(() => state.value[props.nodePath] ?? null)
+const openChildPath = computed(() => state.value[props.nodePath] ?? null)
 const children = computed(() => {
   if (Array.isArray(props.node.children) && props.node.children.length) return props.node.children
   if (Array.isArray(props.node.treeData) && props.node.treeData.length) return props.node.treeData
@@ -80,9 +82,13 @@ watch(() => sortedRows.value.length, () => {
   currentPage.value = Math.min(currentPage.value, totalPages.value)
 })
 
-function toggleChild(index) {
-  if (openChildIndex.value === index) delete state.value[props.nodePath]
-  else state.value[props.nodePath] = index
+function childPath(index) {
+  return detailNodePath(props.nodePath, children.value, index)
+}
+
+function toggleChild(path) {
+  if (openChildPath.value === path) delete state.value[props.nodePath]
+  else state.value[props.nodePath] = path
 }
 
 function compareValues(left, right) {
@@ -136,11 +142,11 @@ function goToPage(page) {
     <div v-if="effectiveExpanded" class="detail-content"
       :class="{ paginated: columns.length && totalPages > 1 }">
       <div v-if="children.length" class="children-stack">
-        <GpmDetailNode v-for="(child, index) in children" :key="`${child.name}-${index}`"
-          :node="child" :depth="depth + 1" :expanded="openChildIndex === index"
+        <GpmDetailNode v-for="(child, index) in children" :key="childPath(index)"
+          :node="child" :depth="depth + 1" :expanded="openChildPath === childPath(index)"
           :expansion-state="state" :table-sort-state="sortState"
-          :node-path="`${nodePath}.${index}`"
-          @toggle="toggleChild(index)" />
+          :node-path="childPath(index)"
+          @toggle="toggleChild(childPath(index))" />
       </div>
       <div v-if="columns.length" class="table-scroll">
         <table class="detail-table">

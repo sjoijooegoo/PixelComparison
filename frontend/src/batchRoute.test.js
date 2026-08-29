@@ -63,8 +63,26 @@ describe('batch catalog route state', () => {
       query: {
         branch_tag: 'main',
         date_mode: 'range',
+        range_mode: 'fixed',
         from: '2026-08-14',
         to: '2026-08-20',
+      },
+    })
+  })
+
+  it('滚动日期范围只保存语义，不把当天日期写死', () => {
+    expect(batchLocation({
+      branchTag: 'main',
+      dateMode: 'range',
+      rangeMode: 'rolling',
+      createdFrom: '2026-08-23',
+      createdTo: '2026-08-29',
+    })).toEqual({
+      path: '/batch-management/capture',
+      query: {
+        branch_tag: 'main',
+        date_mode: 'range',
+        range_mode: 'rolling',
       },
     })
   })

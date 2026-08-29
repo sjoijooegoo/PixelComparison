@@ -24,6 +24,14 @@ describe('GPM map projection', () => {
     expect(projection.project([120, 50]).inBounds).toBe(false)
     const direction = projection.projectDirection([1, 1])
     expect(direction.x).toBeCloseTo(-Math.SQRT1_2)
-    expect(direction.y).toBeCloseTo(-Math.SQRT1_2)
+    expect(direction.y).toBeCloseTo(Math.SQRT1_2)
+  })
+
+  it('把上报朝向的向上正方向转换为 Canvas 的向上方向', () => {
+    const projection = createMapProjection(
+      { origin: [0, 0], range: [100, 100], x_reverse: false, y_reverse: true },
+      { left: 0, top: 0, width: 100, height: 100 },
+    )
+    expect(projection.projectDirection([0, 1])).toEqual({ x: 0, y: -1 })
   })
 })

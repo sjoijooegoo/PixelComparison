@@ -46,7 +46,7 @@ describe('GpmTrendCard', () => {
     expect(wrapper.get('header .series-selector').exists()).toBe(true)
   })
 
-  it('鼠标经过点位时显示日期、P4、批次和所有可见指标', async () => {
+  it('鼠标经过点位时显示日期、P4 和所有可见指标', async () => {
     const wrapper = mountCard()
 
     await wrapper.findAll('.point-hit-area')[1].trigger('mouseenter')
@@ -54,10 +54,20 @@ describe('GpmTrendCard', () => {
     const tooltip = wrapper.get('.chart-tooltip')
     expect(tooltip.text()).toContain('2026-08-20 15:00')
     expect(tooltip.text()).toContain('P4 2960783')
-    expect(tooltip.text()).toContain('批次 gpm-2')
+    expect(tooltip.text()).not.toContain('批次')
     expect(tooltip.text()).toContain('258')
     expect(tooltip.text()).toContain('321')
     expect(wrapper.findAll('.series-dot').every((dot) => !dot.classes().includes('hovered'))).toBe(true)
+  })
+
+  it('通过稳定批次键把悬停点同步给另一张趋势图', async () => {
+    const source = mountCard()
+    await source.findAll('.point-hit-area')[1].trigger('mouseenter')
+    const hoveredPointKey = source.emitted('hover-point')[0][0]
+
+    const linked = mountCard({ hoveredPointKey })
+    expect(linked.get('.chart-tooltip').text()).toContain('P4 2960783')
+    expect(linked.get('.cursor-line').exists()).toBe(true)
   })
 
   it('图例按钮控制曲线显示并至少保留一项', async () => {
@@ -95,5 +105,26 @@ describe('GpmTrendCard', () => {
     const labels = wrapper.findAll('.axis-label').map((item) => item.text())
     expect(labels).toContain('1,000,000')
     expect(labels.every((label) => !label.includes('万'))).toBe(true)
+  })
+
+  it('切换到不同指标集后不会被旧的显隐状态过滤成空图', async () => {
+    const wrapper = mountCard()
+    await wrapper.findAll('.series-selector button')[0].trigger('click')
+
+    await wrapper.setProps({
+      series: [
+        { key: 'Scene_Tris', label: '场景面数', color: '#57c3c2' },
+        { key: 'Triangle', label: '全部面数', color: '#3491fa' },
+      ],
+      points: [{
+        batch_id: 'gpm-3', captured_at: '2026-08-21T09:00:00+08:00',
+        metrics: { Scene_Tris: 1000, Triangle: 2000 },
+      }],
+    })
+
+    expect(wrapper.findAll('.series-dot')).toHaveLength(2)
+    expect(wrapper.findAll('.series-selector button').every(
+      (button) => button.attributes('aria-pressed') === 'true',
+    )).toBe(true)
   })
 })

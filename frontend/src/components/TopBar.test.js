@@ -38,6 +38,9 @@ import TopBar from './TopBar.vue'
 import { registerPageRefresh } from '../pageActions'
 
 const TooltipStub = defineComponent({ template: '<span><slot/></span>' })
+const ConfigurationTransferStub = defineComponent({
+  template: '<button aria-label="导入热力图配置"/><button aria-label="导出热力图配置"/>',
+})
 
 function setRoute(path, { query = {}, params = {}, fullPath = path } = {}) {
   routeMock.path = path
@@ -47,7 +50,12 @@ function setRoute(path, { query = {}, params = {}, fullPath = path } = {}) {
 }
 
 function mountTopBar() {
-  return mount(TopBar, { global: { stubs: { 'a-tooltip': TooltipStub } } })
+  return mount(TopBar, {
+    global: { stubs: {
+      'a-tooltip': TooltipStub,
+      GpmConfigurationTransfer: ConfigurationTransferStub,
+    } },
+  })
 }
 
 beforeEach(() => {
@@ -190,7 +198,7 @@ describe('TopBar contextual workspace tools', () => {
     expect(wrapper.findAll('.tab').find((tab) => tab.classes('active')).text()).toBe('热力图')
     expect(wrapper.find('.actions').findAll('button').map(
       (button) => button.attributes('aria-label'),
-    )).toEqual(['返回热力图'])
+    )).toEqual(['返回热力图', '导入热力图配置', '导出热力图配置'])
     await wrapper.get('button[aria-label="返回热力图"]').trigger('click')
     expect(routerMock.push).toHaveBeenCalledWith(
       '/gpm-heatmap/Village_Dimension_Main?batch=gpm-1',

@@ -2,11 +2,15 @@ import { defineStore } from 'pinia'
 
 import { api, isRequestCancelled } from '../api'
 import {
+  DATE_RANGE_MODE_FIXED,
+  DATE_RANGE_MODE_ROLLING,
   PAGE_SIZE,
   cloneRequestParams,
   defaultDateRange,
   isDateRangeAllowed,
+  normalizeDateRangeMode,
   normalizeSelectedDates,
+  refreshRollingDateRange,
 } from '../store'
 import { useProjectStore } from './projectStore'
 
@@ -30,11 +34,13 @@ function routeFilters(project, requested) {
   const requestedBranch = String(requested.branchTag || 'main').trim().toLowerCase()
   const branchTag = project.meta.branch_tags.includes(requestedBranch) ? requestedBranch : 'main'
   const sceneId = project.meta.scene_ids.includes(requested.sceneId) ? requested.sceneId : ''
+  const defaultRangeDays = project.settings.default_date_range_days ?? 7
   const filters = {
     branch_tag: branchTag,
     scene_id: sceneId,
     dateMode: 'range',
-    ...defaultDateRange(project.settings.default_date_range_days ?? 7),
+    rangeMode: DATE_RANGE_MODE_ROLLING,
+    ...defaultDateRange(defaultRangeDays),
     created_dates: [],
   }
   if (requested.dateMode === 'days') {
@@ -47,11 +53,20 @@ function routeFilters(project, requested) {
       filters.created_dates = dates
     }
   } else if (
-    requested.dateMode === 'range'
+    (requested.dateMode === 'range'
+      || (!requested.dateMode && (requested.createdFrom || requested.createdTo)))
     && isDateRangeAllowed(requested.createdFrom, requested.createdTo)
   ) {
-    filters.created_from = requested.createdFrom
-    filters.created_to = requested.createdTo
+    filters.rangeMode = normalizeDateRangeMode(
+      requested.rangeMode,
+      requested.createdFrom,
+      requested.createdTo,
+      defaultRangeDays,
+    )
+    if (filters.rangeMode === DATE_RANGE_MODE_FIXED) {
+      filters.created_from = requested.createdFrom
+      filters.created_to = requested.createdTo
+    }
   }
   return filters
 }
@@ -66,6 +81,7 @@ function normalizedRoute(filters, page) {
     branchTag: filters.branch_tag,
     sceneId: filters.scene_id,
     dateMode: filters.dateMode,
+    rangeMode: filters.rangeMode,
     createdFrom: filters.created_from,
     createdTo: filters.created_to,
     createdDates: [...filters.created_dates],
@@ -79,6 +95,7 @@ export const useBatchCatalogStore = defineStore('batchCatalog', {
       branch_tag: 'main',
       scene_id: '',
       dateMode: 'range',
+      rangeMode: DATE_RANGE_MODE_ROLLING,
       ...defaultDateRange(),
       created_dates: [],
     },
@@ -97,7 +114,9 @@ export const useBatchCatalogStore = defineStore('batchCatalog', {
 
   getters: {
     requestFilters: (state) => {
-      const { dateMode, created_from, created_to, created_dates, ...rest } = state.filters
+      const {
+        dateMode, rangeMode, created_from, created_to, created_dates, ...rest
+      } = state.filters
       return dateMode === 'days'
         ? { ...rest, created_dates }
         : { ...rest, created_from, created_to }
@@ -114,6 +133,7 @@ export const useBatchCatalogStore = defineStore('batchCatalog', {
         branch_tag: 'main',
         scene_id: '',
         dateMode: 'range',
+        rangeMode: DATE_RANGE_MODE_ROLLING,
         ...defaultDateRange(project.settings.default_date_range_days ?? 7),
         created_dates: [],
       }
@@ -222,6 +242,10 @@ export const useBatchCatalogStore = defineStore('batchCatalog', {
     async refresh({ refreshMeta = true } = {}) {
       const project = useProjectStore()
       if (refreshMeta) await project.loadMeta()
+      refreshRollingDateRange(
+        this.filters,
+        project.settings.default_date_range_days ?? 7,
+      )
       const [result] = await Promise.all([
         this.loadBatches(),
         this.loadSceneAvailability(),

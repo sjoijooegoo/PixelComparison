@@ -31,14 +31,16 @@ function change(field, value) {
 
 function changeRange(value) {
   if (!value?.[0] || !value?.[1]) return
-  return router.push(target({ capturedFrom: value[0], capturedTo: value[1] }))
+  return router.push(target({
+    rangeMode: 'fixed', capturedFrom: value[0], capturedTo: value[1],
+  }))
 }
 
 function reset() {
   return router.replace(gpmBatchLocation({
     returnTo: route.query.return_to || '',
-    branchTag: 'main', platform: '', sceneId: '', shadingQuality: '',
-    ...defaultGpmCapturedRange(), page: 1,
+    branchTag: 'main', platform: '', mapName: '', shadingQuality: '',
+    rangeMode: 'rolling', ...defaultGpmCapturedRange(), page: 1,
   }))
 }
 </script>
@@ -64,10 +66,10 @@ function reset() {
       </a-select>
     </label>
     <label class="filter-field">
-      <span>场景 ID</span>
-      <a-select class="select-scene" :model-value="store.filters.sceneId" size="small"
-        placeholder="全部场景" allow-clear allow-search @change="change('sceneId', $event)">
-        <a-option v-for="item in store.meta.scene_ids" :key="item" :value="item">
+      <span>地图名称</span>
+      <a-select class="select-scene" :model-value="store.filters.mapName" size="small"
+        placeholder="全部地图" allow-clear allow-search @change="change('mapName', $event)">
+        <a-option v-for="item in store.meta.maps" :key="item" :value="item">
           {{ item }}
         </a-option>
       </a-select>
@@ -101,6 +103,6 @@ function reset() {
 .filter-field :deep(.select-branch), .filter-field :deep(.select-platform) { width: 120px; }
 .filter-field :deep(.select-scene) { width: 280px; }
 .filter-field :deep(.select-quality) { width: 100px; }
-.filter-field :deep(.select-range) { width: 220px; }
+.filter-field :deep(.select-range) { width: 260px; }
 .reset-button { margin-left: auto; }
 </style>

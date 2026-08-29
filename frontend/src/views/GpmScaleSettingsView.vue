@@ -1,13 +1,16 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 
+import { api } from '../api'
+import GpmMapLibraryPane from '../components/GpmMapLibraryPane.vue'
+import GpmMetricScaleLibraryPane from '../components/GpmMetricScaleLibraryPane.vue'
 import GpmScaleBand from '../components/GpmScaleBand.vue'
-import GpmSettingsNav from '../components/GpmSettingsNav.vue'
+import GpmScaleSetLibraryPane from '../components/GpmScaleSetLibraryPane.vue'
+import { projectedPointStyle } from '../gpmHeatmap/mapConfigPreview'
 import {
   compileScaleSegments,
   defaultScaleSegments,
-  segmentsFromLegacy,
 } from '../gpmHeatmap/scaleExpressions'
 import { SHADING_QUALITY_OPTIONS } from '../store'
 import { useGpmScaleConfigStore } from '../stores/gpmScaleConfigStore'
@@ -22,8 +25,8 @@ const QUALITY_LABELS = Object.fromEntries(
 const metricScales = computed(() => store.catalog.metric_scales || [])
 const scaleSets = computed(() => store.catalog.scale_sets || [])
 const maps = computed(() => store.catalog.maps || [])
-const sortedMetricScales = computed(() => [...metricScales.value].sort((a, b) => b.id - a.id))
-const sortedScaleSets = computed(() => [...scaleSets.value].sort((a, b) => b.id - a.id))
+const sortedMetricScales = computed(() => [...metricScales.value].sort((a, b) => a.id - b.id))
+const sortedScaleSets = computed(() => [...scaleSets.value].sort((a, b) => a.id - b.id))
 const scaleOptions = computed(() => metricScales.value.map((scale) => ({
   value: scale.id,
   label: scale.name,
@@ -55,9 +58,7 @@ function scaleById(id) {
 function cloneSegments(scale) {
   const source = Array.isArray(scale?.segments) && scale.segments.length
     ? scale.segments
-    : scale
-      ? segmentsFromLegacy(scale.thresholds, scale.colors, scale.direction)
-      : defaultScaleSegments(store.catalog.palette?.colors)
+    : defaultScaleSegments(store.catalog.palette?.colors)
   return source.map((segment, index) => ({
     key: `${Date.now()}-${index}-${Math.random()}`,
     color: segment.color,
@@ -108,6 +109,10 @@ function beginSegmentDrag(index) {
   draggedSegment = index
 }
 
+function endSegmentDrag() {
+  draggedSegment = -1
+}
+
 function dropSegment(index) {
   if (draggedSegment < 0 || draggedSegment === index) return
   const [segment] = scaleForm.segments.splice(draggedSegment, 1)
@@ -125,10 +130,10 @@ async function saveScale() {
     const compiled = compileScaleSegments(scaleForm.segments)
     await store.saveMetricScale(scaleForm.id, {
       name, segments: compiled.segments,
-      ...(scaleForm.id ? { expected_revision: scaleForm.revision } : {}),
+      ...(scaleForm.id != null ? { expected_revision: scaleForm.revision } : {}),
     })
     scaleEditorOpen.value = false
-    Message.success(scaleForm.id ? '指标标尺已更新' : '指标标尺已创建')
+    Message.success(scaleForm.id != null ? '指标标尺已更新' : '指标标尺已创建')
   } catch (error) {
     showError(error, '指标标尺保存失败')
   }
@@ -218,10 +223,10 @@ async function saveScaleSet() {
     const items = validateSetItems()
     await store.saveScaleSet(scaleSetForm.id, {
       name, items,
-      ...(scaleSetForm.id ? { expected_revision: scaleSetForm.revision } : {}),
+      ...(scaleSetForm.id != null ? { expected_revision: scaleSetForm.revision } : {}),
     })
     scaleSetEditorOpen.value = false
-    Message.success(scaleSetForm.id ? '指标标尺集已更新' : '指标标尺集已创建')
+    Message.success(scaleSetForm.id != null ? '指标标尺集已更新' : '指标标尺集已创建')
   } catch (error) {
     showError(error, '指标标尺集保存失败')
   }
@@ -230,7 +235,7 @@ async function saveScaleSet() {
 function deleteScaleSet(scaleSet) {
   Modal.confirm({
     title: `删除“${scaleSet.name}”`,
-    content: '删除后无法恢复；被地图应用引用时将禁止删除。',
+    content: '删除后无法恢复；被地图配置引用时将禁止删除。',
     okText: '删除',
     cancelText: '取消',
     onOk: async () => {
@@ -244,17 +249,56 @@ function deleteScaleSet(scaleSet) {
   })
 }
 
-// 地图作用域绑定编辑器
+// 地图定义、图片、坐标预览与标尺绑定编辑器
 const mapEditorOpen = ref(false)
+const mapEditorIntent = ref('create')
 const selectedMapName = ref('')
-const mapSearch = ref('')
-const mapForm = reactive({ map_name: '', revision: '', bindings: [] })
-let mapBindingSequence = 0
-const filteredMaps = computed(() => {
-  const query = mapSearch.value.trim().toLocaleLowerCase()
-  return maps.value.filter((map) => !query || `${map.map_name} ${map.map_id}`.toLocaleLowerCase().includes(query))
+const mapImageInput = ref(null)
+const pendingMapImage = ref(null)
+const mapPreview = ref({ source: null, points: [], point_count: 0 })
+const mapPreviewLoading = ref(false)
+let mapPreviewSequence = 0
+let imageInspectionSequence = 0
+const mapForm = reactive({
+  map_name: '', description: '',
+  origin_x: 0, origin_y: 0, range_x: 1, range_y: 1,
+  x_reverse: false, y_reverse: true,
+  revision: null, bindings: [],
 })
+let mapBindingSequence = 0
 const selectedMap = computed(() => maps.value.find((map) => map.map_name === selectedMapName.value) || null)
+const mapEditorTitle = computed(() => (
+  mapEditorIntent.value === 'create' ? '新建地图' : `配置地图 · ${mapForm.map_name}`
+))
+const displayedMapImage = computed(() => pendingMapImage.value || (
+  selectedMap.value?.image ? {
+    url: selectedMap.value.image.url,
+    width: selectedMap.value.image.width,
+    height: selectedMap.value.image.height,
+  } : null
+))
+const previewMapDefinition = computed(() => ({
+  origin: [Number(mapForm.origin_x), Number(mapForm.origin_y)],
+  range: [Number(mapForm.range_x), Number(mapForm.range_y)],
+  x_reverse: mapForm.x_reverse,
+  y_reverse: mapForm.y_reverse,
+}))
+const projectedMapPoints = computed(() => (mapPreview.value.points || []).map((point) => ({
+  ...point,
+  style: projectedPointStyle(previewMapDefinition.value, point.position),
+})).filter((point) => point.style?.inBounds))
+const coordinateFrameStyle = computed(() => {
+  const rangeX = Number(mapForm.range_x)
+  const rangeY = Number(mapForm.range_y)
+  return rangeX > 0 && rangeY > 0 ? { aspectRatio: `${rangeX} / ${rangeY}` } : {}
+})
+
+function formatNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number)
+    ? new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2, useGrouping: false }).format(number)
+    : '—'
+}
 
 function editableMapBindings(bindings) {
   const scopesBySet = new Map()
@@ -287,16 +331,87 @@ function editableMapBindings(bindings) {
   return rows
 }
 
-function openMapEditor(map) {
-  selectedMapName.value = map.map_name
-  mapForm.map_name = map.map_name
-  mapForm.revision = map.binding_revision || ''
-  mapForm.bindings = editableMapBindings(map.bindings)
+function clearPendingMapImage() {
+  imageInspectionSequence += 1
+  if (pendingMapImage.value?.url) URL.revokeObjectURL(pendingMapImage.value.url)
+  pendingMapImage.value = null
+  if (mapImageInput.value) mapImageInput.value.value = ''
+}
+
+async function loadMapPreview(mapName) {
+  const sequence = ++mapPreviewSequence
+  mapPreview.value = { source: null, points: [], point_count: 0 }
+  if (!mapName) return
+  mapPreviewLoading.value = true
+  try {
+    const result = await api.gpmMapPreview(mapName)
+    if (sequence === mapPreviewSequence) mapPreview.value = result
+  } catch (error) {
+    if (sequence === mapPreviewSequence) showError(error, '点位预览加载失败')
+  } finally {
+    if (sequence === mapPreviewSequence) mapPreviewLoading.value = false
+  }
+}
+
+function openMapEditor(map = null) {
+  clearPendingMapImage()
+  mapEditorIntent.value = map ? 'edit' : 'create'
+  selectedMapName.value = map?.map_name || ''
+  Object.assign(mapForm, {
+    map_name: map?.map_name || '',
+    description: map?.description || '',
+    origin_x: map?.origin?.[0] ?? 0,
+    origin_y: map?.origin?.[1] ?? 0,
+    range_x: map?.range?.[0] ?? 1,
+    range_y: map?.range?.[1] ?? 1,
+    x_reverse: map?.x_reverse ?? false,
+    y_reverse: map?.y_reverse ?? true,
+    revision: map?.revision ?? null,
+  })
+  mapForm.bindings = editableMapBindings(map?.bindings)
   mapEditorOpen.value = true
+  if (map) void loadMapPreview(map.map_name)
+  else mapPreview.value = { source: null, points: [], point_count: 0 }
 }
 
 function closeMapEditor() {
-  if (!store.saving) mapEditorOpen.value = false
+  if (store.saving) return
+  mapEditorOpen.value = false
+  mapPreviewSequence += 1
+  clearPendingMapImage()
+}
+
+function inspectMapImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const image = new Image()
+    image.onload = () => resolve({
+      url, width: image.naturalWidth, height: image.naturalHeight, file,
+    })
+    image.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('地图图片无法预览'))
+    }
+    image.src = url
+  })
+}
+
+async function chooseMapImage(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  clearPendingMapImage()
+  const sequence = ++imageInspectionSequence
+  try {
+    const inspected = await inspectMapImage(file)
+    if (sequence !== imageInspectionSequence) {
+      URL.revokeObjectURL(inspected.url)
+      return
+    }
+    pendingMapImage.value = inspected
+  } catch (error) {
+    showError(error, '地图图片无法预览')
+  }
 }
 
 function addMapBinding() {
@@ -337,18 +452,39 @@ function validateMapBindings() {
   return bindings
 }
 
-async function saveMapBindings() {
-  if (!mapForm.map_name) return
+function validatedMapDefinition() {
+  const mapName = mapForm.map_name.trim()
+  if (!mapName) throw new Error('请输入地图名称')
+  const origin = [Number(mapForm.origin_x), Number(mapForm.origin_y)]
+  const range = [Number(mapForm.range_x), Number(mapForm.range_y)]
+  if (![...origin, ...range].every(Number.isFinite)) throw new Error('坐标起点和范围必须是有效数字')
+  if (range.some((value) => value <= 0)) throw new Error('坐标范围必须大于 0')
+  return {
+    map_name: mapName,
+    description: mapForm.description.trim() || mapName,
+    origin,
+    range,
+    x_reverse: mapForm.x_reverse,
+    y_reverse: mapForm.y_reverse,
+    ...(mapEditorIntent.value === 'edit'
+      ? { expected_revision: mapForm.revision } : {}),
+  }
+}
+
+async function saveMapConfiguration() {
   try {
+    const definition = validatedMapDefinition()
     const bindings = validateMapBindings()
-    await store.saveMapBindings(mapForm.map_name, {
-      bindings,
-      expected_revision: mapForm.revision,
+    await store.saveMapConfiguration({
+      mapName: definition.map_name,
+      configuration: { ...definition, bindings },
+      image: pendingMapImage.value?.file || null,
     })
     mapEditorOpen.value = false
-    Message.success('地图应用已保存')
+    clearPendingMapImage()
+    Message.success(mapEditorIntent.value === 'create' ? '地图已创建' : '地图配置已保存')
   } catch (error) {
-    showError(error, '地图应用保存失败')
+    showError(error, '地图配置保存失败')
   }
 }
 
@@ -359,12 +495,15 @@ onMounted(async () => {
     // 使用页内错误和重试入口。
   }
 })
+onBeforeUnmount(() => {
+  mapPreviewSequence += 1
+  clearPendingMapImage()
+})
+
 </script>
 
 <template>
   <main class="scale-settings-page app-body">
-    <GpmSettingsNav />
-
     <section class="scale-workspace card">
       <div v-if="store.error && !metricScales.length && !scaleSets.length" class="load-error">
         <span>{{ store.error }}</span>
@@ -374,94 +513,13 @@ onMounted(async () => {
       </div>
 
       <div v-else class="library-layout">
-        <section class="library-pane scale-pane">
-          <header class="section-toolbar">
-            <div>
-              <h3>指标标尺库</h3>
-              <span>{{ metricScales.length }} 个</span>
-            </div>
-            <a-button type="primary" size="small" @click="openScaleEditor()">新建标尺</a-button>
-          </header>
-          <div class="data-table-shell library-table-scroll">
-            <table class="library-table scale-library-table">
-              <thead><tr><th>ID</th><th>名称</th><th>颜色段</th><th>操作</th></tr></thead>
-              <tbody>
-                <tr v-for="scale in sortedMetricScales" :key="scale.id">
-                  <td class="numeric-cell">{{ scale.id }}</td>
-                  <td><strong :title="scale.name">{{ scale.name }}</strong></td>
-                  <td>
-                    <GpmScaleBand class="scale-preview" :thresholds="scale.thresholds"
-                      :colors="scale.colors" :direction="scale.direction" compact />
-                  </td>
-                  <td class="action-cell compact-actions">
-                    <a-button size="mini" type="text" @click="openScaleEditor(scale, 'copy')">复制</a-button>
-                    <a-button size="mini" type="text" @click="openScaleEditor(scale, 'edit')">编辑</a-button>
-                    <a-button size="mini" type="text" status="danger" @click="deleteScale(scale)">删除</a-button>
-                  </td>
-                </tr>
-                <tr v-if="!sortedMetricScales.length"><td colspan="4" class="empty-cell">暂无指标标尺</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="library-pane set-pane">
-          <header class="section-toolbar">
-            <div>
-              <h3>指标标尺集</h3>
-              <span>{{ scaleSets.length }} 个</span>
-            </div>
-            <a-button type="primary" size="small" :disabled="!metricScales.length"
-              @click="openScaleSetEditor()">新建标尺集</a-button>
-          </header>
-          <div class="data-table-shell library-table-scroll">
-            <table class="library-table set-library-table">
-              <thead><tr><th>ID</th><th>名称</th><th>应用</th><th>操作</th></tr></thead>
-              <tbody>
-                <tr v-for="scaleSet in sortedScaleSets" :key="scaleSet.id">
-                  <td class="numeric-cell">{{ scaleSet.id }}</td>
-                  <td><strong :title="scaleSet.name">{{ scaleSet.name }}</strong></td>
-                  <td class="numeric-cell">{{ scaleSet.bindings?.length || 0 }}</td>
-                  <td class="action-cell compact-actions">
-                    <a-button size="mini" type="text" @click="openScaleSetEditor(scaleSet, 'copy')">复制</a-button>
-                    <a-button size="mini" type="text" @click="openScaleSetEditor(scaleSet, 'edit')">编辑</a-button>
-                    <a-button size="mini" type="text" status="danger" @click="deleteScaleSet(scaleSet)">删除</a-button>
-                  </td>
-                </tr>
-                <tr v-if="!sortedScaleSets.length"><td colspan="4" class="empty-cell">暂无指标标尺集</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="library-pane map-pane">
-          <header class="section-toolbar map-list-toolbar">
-            <div>
-              <h3>地图应用</h3>
-              <span>{{ maps.length }} 张地图</span>
-            </div>
-            <a-input v-model="mapSearch" class="map-search" size="small" allow-clear placeholder="搜索地图" />
-          </header>
-          <div class="data-table-shell library-table-scroll">
-            <table class="library-table map-library-table">
-              <thead><tr><th>地图名称</th><th>配置状态</th><th>操作</th></tr></thead>
-              <tbody>
-                <tr v-for="map in filteredMaps" :key="map.map_name">
-                  <td><strong :title="map.map_name">{{ map.map_name }}</strong></td>
-                  <td>
-                    <span class="config-status" :class="{ configured: map.bindings?.length }">
-                      {{ map.bindings?.length ? '已配置' : '未配置' }}
-                    </span>
-                  </td>
-                  <td class="action-cell">
-                    <a-button size="mini" type="text" @click="openMapEditor(map)">配置</a-button>
-                  </td>
-                </tr>
-                <tr v-if="!filteredMaps.length"><td colspan="3" class="empty-cell">暂无地图</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
+        <GpmMapLibraryPane :maps="maps" @create="openMapEditor()" @edit="openMapEditor" />
+        <GpmScaleSetLibraryPane :items="sortedScaleSets" :can-create="Boolean(metricScales.length)"
+          @create="openScaleSetEditor()" @copy="openScaleSetEditor($event, 'copy')"
+          @edit="openScaleSetEditor($event, 'edit')" @delete="deleteScaleSet" />
+        <GpmMetricScaleLibraryPane :items="sortedMetricScales" @create="openScaleEditor()"
+          @copy="openScaleEditor($event, 'copy')" @edit="openScaleEditor($event, 'edit')"
+          @delete="deleteScale" />
       </div>
     </section>
 
@@ -481,9 +539,9 @@ onMounted(async () => {
         </div>
         <div class="segment-list">
           <div v-for="(segment, index) in scaleForm.segments" :key="segment.key"
-            class="segment-row" draggable="true" @dragstart="beginSegmentDrag(index)"
-            @dragover.prevent @drop="dropSegment(index)">
-            <span class="drag-handle" title="拖拽调整顺序">⋮⋮</span>
+            class="segment-row" @dragover.prevent @drop="dropSegment(index)">
+            <span class="drag-handle" title="拖拽调整顺序" draggable="true"
+              @dragstart.stop="beginSegmentDrag(index)" @dragend="endSegmentDrag">⋮⋮</span>
             <input v-model="segment.color" type="color" class="color-picker" aria-label="颜色">
             <a-input v-model="segment.color" class="color-text" size="small" />
             <a-input v-model="segment.expression" class="expression-input" size="small"
@@ -517,9 +575,7 @@ onMounted(async () => {
             <a-select v-model="item.scale_id" :options="scaleOptions" allow-search
               size="small" placeholder="选择指标标尺" />
             <GpmScaleBand v-if="scaleById(item.scale_id)" class="set-scale-preview"
-              :thresholds="scaleById(item.scale_id).thresholds"
-              :colors="scaleById(item.scale_id).colors"
-              :direction="scaleById(item.scale_id).direction" compact />
+              :segments="scaleById(item.scale_id).segments" compact />
             <span v-else class="preview-placeholder">—</span>
             <a-button size="mini" type="text" status="danger" @click="removeSetItem(index)">删除</a-button>
           </div>
@@ -532,37 +588,94 @@ onMounted(async () => {
     </a-modal>
 
     <a-modal :visible="mapEditorOpen" :footer="false" :closable="!store.saving"
-      :mask-closable="false" width="760px" modal-class="gpm-editor-modal"
+      :mask-closable="false" width="1180px" modal-class="gpm-editor-modal map-config-modal"
       @cancel="closeMapEditor">
-      <template #title>配置地图 · {{ selectedMap?.map_name }}</template>
-      <div class="modal-editor-body map-binding-editor">
-        <div class="map-binding-toolbar">
-          <strong>配置项</strong>
-          <a-button size="mini" type="text" :disabled="!scaleSets.length" @click="addMapBinding">
-            添加配置项
-          </a-button>
-        </div>
-        <div v-if="mapForm.bindings.length" class="map-binding-head">
-          <span>平台</span><span>画质</span><span>指标标尺集</span><span></span>
-        </div>
-        <div class="map-binding-list">
-          <div v-for="(binding, index) in mapForm.bindings" :key="binding.key" class="map-binding-row">
-            <a-select v-model="binding.platforms" :options="platformOptions" multiple allow-search
-              size="small" placeholder="选择平台" />
-            <a-select v-model="binding.shading_qualities" :options="qualities" multiple
-              size="small" placeholder="选择画质" />
-            <a-select v-model="binding.scale_set_id" :options="scaleSetOptions" allow-search
-              size="small" placeholder="选择指标标尺集" />
-            <a-button size="mini" type="text" status="danger" @click="removeMapBinding(index)">删除</a-button>
+      <template #title>{{ mapEditorTitle }}</template>
+      <div class="modal-editor-body map-config-editor">
+        <section class="map-definition-editor editor-panel">
+          <header><strong>基础与坐标</strong></header>
+          <div class="map-fields">
+            <label class="map-field map-name-field">
+              <span>地图名称</span>
+              <a-input v-model="mapForm.map_name" size="small" :disabled="mapEditorIntent === 'edit'"
+                placeholder="必须与上报 map_name 一致" />
+            </label>
+            <label class="map-field description-field">
+              <span>描述</span>
+              <a-input v-model="mapForm.description" size="small" placeholder="可选" />
+            </label>
+            <label class="map-field"><span>起点 X</span><a-input-number v-model="mapForm.origin_x" size="small" /></label>
+            <label class="map-field"><span>起点 Y</span><a-input-number v-model="mapForm.origin_y" size="small" /></label>
+            <label class="map-field"><span>范围 X</span><a-input-number v-model="mapForm.range_x" size="small" :min="0.000001" /></label>
+            <label class="map-field"><span>范围 Y</span><a-input-number v-model="mapForm.range_y" size="small" :min="0.000001" /></label>
+            <label class="axis-toggle"><a-switch v-model="mapForm.x_reverse" size="small" />反转 X 轴</label>
+            <label class="axis-toggle"><a-switch v-model="mapForm.y_reverse" size="small" />反转 Y 轴</label>
           </div>
-        </div>
-        <div v-if="!mapForm.bindings.length" class="map-binding-empty">
-          暂无配置，热力图将使用动态线性着色
+        </section>
+
+        <div class="map-config-columns">
+          <section class="map-preview-editor editor-panel">
+            <header>
+              <strong>地图图片与点位预览</strong>
+              <div>
+                <input ref="mapImageInput" type="file" accept="image/png,image/jpeg,image/webp"
+                  hidden @change="chooseMapImage">
+                <a-button v-if="pendingMapImage" size="mini" type="text" @click="clearPendingMapImage">取消替换</a-button>
+                <a-button size="mini" type="text" @click="mapImageInput?.click()">
+                  {{ displayedMapImage ? '替换图片' : '选择图片' }}
+                </a-button>
+              </div>
+            </header>
+            <div class="map-preview-stage">
+              <div v-if="displayedMapImage" class="map-coordinate-frame" :style="coordinateFrameStyle">
+                <img :src="displayedMapImage.url" alt="地图坐标匹配预览">
+                <span v-for="point in projectedMapPoints" :key="point.id" class="map-preview-point"
+                  :style="point.style" :title="`点位 ${point.index}`"></span>
+              </div>
+              <button v-else type="button" class="map-image-empty" @click="mapImageInput?.click()">
+                <strong>选择地图图片</strong><span>PNG、JPEG 或 WebP，最大 32 MiB</span>
+              </button>
+            </div>
+            <footer class="map-preview-facts">
+              <span>图片 {{ displayedMapImage ? `${displayedMapImage.width} × ${displayedMapImage.height}` : '未上传' }}</span>
+              <span>坐标 {{ formatNumber(mapForm.range_x) }} × {{ formatNumber(mapForm.range_y) }}</span>
+              <span v-if="mapPreviewLoading">读取点位中…</span>
+              <span v-else>{{ projectedMapPoints.length }} / {{ mapPreview.point_count }} 个点位在范围内</span>
+            </footer>
+          </section>
+
+          <section class="map-binding-editor editor-panel">
+            <div class="map-binding-toolbar">
+              <strong>平台、画质与指标标尺集</strong>
+              <a-button size="mini" type="text" :disabled="!scaleSets.length" @click="addMapBinding">
+                添加配置项
+              </a-button>
+            </div>
+            <div v-if="mapForm.bindings.length" class="map-binding-head">
+              <span>平台</span><span>画质</span><span>指标标尺集</span><span></span>
+            </div>
+            <div class="map-binding-list">
+              <div v-for="(binding, index) in mapForm.bindings" :key="binding.key" class="map-binding-row">
+                <a-select v-model="binding.platforms" :options="platformOptions" multiple allow-search
+                  size="small" placeholder="选择平台" />
+                <a-select v-model="binding.shading_qualities" :options="qualities" multiple
+                  size="small" placeholder="选择画质" />
+                <a-select v-model="binding.scale_set_id" :options="scaleSetOptions" allow-search
+                  size="small" placeholder="选择指标标尺集" />
+                <a-button size="mini" type="text" status="danger" @click="removeMapBinding(index)">删除</a-button>
+              </div>
+            </div>
+            <div v-if="!mapForm.bindings.length" class="map-binding-empty">
+              暂无配置，热力图将使用动态线性着色
+            </div>
+          </section>
         </div>
       </div>
       <footer class="modal-editor-footer">
         <a-button size="small" :disabled="store.saving" @click="closeMapEditor">取消</a-button>
-        <a-button size="small" type="primary" :loading="store.saving" @click="saveMapBindings">保存配置</a-button>
+        <a-button size="small" type="primary" :loading="store.saving" @click="saveMapConfiguration">
+          {{ mapEditorIntent === 'create' ? '创建地图' : '保存配置' }}
+        </a-button>
       </footer>
     </a-modal>
   </main>
@@ -571,59 +684,12 @@ onMounted(async () => {
 <style scoped>
 .scale-settings-page { min-width: 1240px; flex-direction: column; }
 .scale-workspace { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
-.section-toolbar {
-  min-height: 48px; padding: 6px 12px; display: flex; align-items: center;
-  justify-content: space-between; gap: 10px;
-}
-.section-toolbar > div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
-.section-toolbar h3 { margin: 0; color: var(--color-text-1); font-size: 14px; }
-.section-toolbar span { color: var(--color-text-4); font-size: 11px; }
 .load-error { min-height: 180px; display: flex; align-items: center; justify-content: center; gap: 12px; color: rgb(var(--red-6)); }
 .library-layout {
   height: 100%; min-height: 0; display: grid;
-  grid-template-columns: minmax(440px, 1.04fr) minmax(360px, 0.84fr) minmax(410px, 0.98fr);
+  grid-template-columns: minmax(500px, 1.16fr) minmax(250px, .55fr) minmax(490px, 1.08fr);
 }
-.library-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .library-pane + .library-pane { border-left: 1px solid var(--color-border-1); }
-.library-pane .section-toolbar { border-bottom: 1px solid var(--color-border-1); }
-.library-pane .data-table-shell { margin: 10px; }
-.library-table-scroll { flex: 1; min-height: 0; max-height: none; overflow: auto; }
-.data-table-shell { margin: 0 16px 16px; overflow: hidden; border: 1px solid var(--color-border-1); border-radius: 4px; }
-.library-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.library-table th,
-.library-table td { height: 42px; padding: 0 8px; border-bottom: 1px solid var(--color-border-1); text-align: left; }
-.library-table th { background: var(--color-fill-2); color: var(--color-text-2); font-size: 11px; font-weight: 600; }
-.library-table td { color: var(--color-text-2); font-size: 12px; }
-.library-table tbody tr:last-child td { border-bottom: 0; }
-.library-table tbody tr:hover td { background: color-mix(in srgb, var(--color-fill-2) 45%, transparent); }
-.library-table strong { color: var(--color-text-1); font-weight: 500; }
-.library-table td:nth-child(2) strong {
-  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.scale-library-table th:nth-child(1), .scale-library-table td:nth-child(1) { width: 38px; }
-.scale-library-table th:nth-child(2), .scale-library-table td:nth-child(2) { width: 190px; }
-.scale-library-table th:last-child, .scale-library-table td:last-child { width: 142px; }
-.set-library-table th:nth-child(1), .set-library-table td:nth-child(1) { width: 38px; }
-.set-library-table th:nth-child(2), .set-library-table td:nth-child(2) { width: 112px; }
-.set-library-table th:nth-child(3), .set-library-table td:nth-child(3) { width: 54px; }
-.set-library-table th:last-child, .set-library-table td:last-child { width: 142px; }
-.numeric-cell { color: var(--color-text-3); font-variant-numeric: tabular-nums; }
-.action-cell { white-space: nowrap; }
-.action-cell :deep(.arco-btn) { padding: 0 4px; }
-.compact-actions :deep(.arco-btn) { padding: 0 4px; }
-.compact-actions :deep(.arco-btn + .arco-btn) { margin-left: 4px; }
-.scale-preview { max-width: 300px; }
-.empty-cell { height: 160px !important; color: var(--color-text-4) !important; text-align: center !important; }
-.map-list-toolbar > div { flex: 0 0 auto; }
-.map-search { width: 132px; }
-.map-library-table th:nth-child(1), .map-library-table td:nth-child(1) { width: auto; }
-.map-library-table th:nth-child(2), .map-library-table td:nth-child(2) { width: 104px; }
-.map-library-table th:last-child, .map-library-table td:last-child { width: 82px; }
-.map-library-table td:first-child strong {
-  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.config-status { color: var(--color-text-4); font-size: 11px; white-space: nowrap; }
-.config-status.configured { color: rgb(var(--arcoblue-6)); }
 
 .modal-editor-body { max-height: min(68vh, 650px); padding: 2px 2px 12px; overflow: auto; }
 .field-label { display: block; margin: 0 0 6px; color: var(--color-text-3); font-size: 11px; }
@@ -654,7 +720,7 @@ onMounted(async () => {
 .map-binding-toolbar strong { color: var(--color-text-2); font-size: 12px; }
 .map-binding-head,
 .map-binding-row {
-  display: grid; grid-template-columns: 150px 118px minmax(250px, 1fr) 48px;
+  display: grid; grid-template-columns: 170px 132px minmax(180px, 1fr) 44px;
   align-items: center; gap: 8px;
 }
 .map-binding-head { padding: 0 8px 5px; color: var(--color-text-4); font-size: 10px; }
@@ -663,9 +729,69 @@ onMounted(async () => {
   min-height: 44px; padding: 6px 7px; border: 1px solid var(--color-border-1);
   border-radius: 4px; background: var(--color-fill-1);
 }
+.map-binding-row :deep(.arco-tag) { white-space: nowrap; }
 .map-binding-empty {
   min-height: 104px; display: flex; align-items: center; justify-content: center;
   border: 1px dashed var(--color-border-2); border-radius: 4px;
   color: var(--color-text-4); font-size: 12px;
 }
+.map-config-editor { display: grid; gap: 10px; }
+.map-config-editor .editor-panel {
+  min-width: 0; border: 1px solid var(--color-border-1); border-radius: 5px;
+  background: color-mix(in srgb, var(--color-fill-1) 62%, transparent);
+}
+.map-config-editor .editor-panel > header {
+  min-height: 34px; padding: 6px 10px; display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--color-border-1);
+}
+.map-config-editor .editor-panel > header strong { color: var(--color-text-2); font-size: 11px; }
+.map-config-editor .editor-panel > header > div { display: flex; align-items: center; gap: 5px; }
+.map-definition-editor { padding-bottom: 10px; }
+.map-fields {
+  padding: 10px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  align-items: end; gap: 9px;
+}
+.map-field { min-width: 0; display: grid; gap: 5px; }
+.map-field > span { color: var(--color-text-4); font-size: 10px; }
+.map-name-field { grid-column: span 3; }
+.description-field { grid-column: span 3; }
+.map-field :deep(.arco-input-number) { width: 100%; }
+.axis-toggle {
+  min-height: 28px; display: flex; align-items: center; justify-content: center; gap: 6px;
+  color: var(--color-text-3); font-size: 10px;
+}
+.map-config-columns {
+  min-height: 330px; display: grid; grid-template-columns: minmax(400px, .9fr) minmax(0, 1.18fr);
+  gap: 10px;
+}
+.map-preview-editor { display: flex; flex-direction: column; }
+.map-preview-stage {
+  flex: 1; min-height: 250px; padding: 14px; display: grid; place-items: center;
+  overflow: hidden; background: var(--color-bg-2);
+}
+.map-coordinate-frame {
+  position: relative; max-width: 100%; max-height: 260px; height: 100%; width: auto;
+  border: 1px solid var(--color-border-2); background: var(--color-fill-1);
+}
+.map-coordinate-frame img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; }
+.map-preview-point {
+  position: absolute; z-index: 1; width: 6px; height: 6px; transform: translate(-50%, -50%);
+  border-radius: 1px; background: rgb(var(--arcoblue-5)); box-shadow: 0 0 0 1px rgba(0, 0, 0, .72);
+}
+.map-image-empty {
+  width: 100%; height: 100%; min-height: 220px; border: 1px dashed var(--color-border-2);
+  border-radius: 4px; display: grid; place-content: center; gap: 5px;
+  background: transparent; color: var(--color-text-3); cursor: pointer; font: inherit;
+}
+.map-image-empty:hover { border-color: rgba(var(--arcoblue-5), .55); background: var(--color-fill-1); }
+.map-image-empty strong { font-size: 12px; }
+.map-image-empty span { color: var(--color-text-4); font-size: 10px; }
+.map-preview-facts {
+  min-height: 34px; padding: 6px 10px; display: flex; align-items: center;
+  justify-content: space-between; gap: 8px; border-top: 1px solid var(--color-border-1);
+  color: var(--color-text-4); font-size: 9px; font-variant-numeric: tabular-nums;
+}
+.map-binding-editor { padding: 9px; overflow: auto; }
+.map-binding-editor .map-binding-toolbar { min-height: 24px; margin-bottom: 7px; }
+.map-config-modal .modal-editor-body { max-height: min(72vh, 720px); }
 </style>

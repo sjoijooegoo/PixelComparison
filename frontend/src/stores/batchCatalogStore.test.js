@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMock = vi.hoisted(() => ({
   batches: vi.fn(),
@@ -36,6 +36,10 @@ beforeEach(() => {
     default_shading_quality: 5,
     default_date_range_days: 7,
   }
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe('batch catalog requests', () => {
@@ -109,6 +113,27 @@ describe('batch catalog requests', () => {
     await expect(oldApply).resolves.toBeNull()
     expect(store.filters.scene_id).toBe('SceneB')
     expect(store.batches).toEqual([{ id: 'new' }])
+  })
+
+  it('刷新滚动日期范围时重新以当天为结束日期', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-29T12:00:00'))
+    apiMock.batches.mockResolvedValue({ items: [], total: 0 })
+    const store = useBatchCatalogStore()
+    await store.applyRoute({
+      dateMode: 'range',
+      createdFrom: '2026-08-23',
+      createdTo: '2026-08-29',
+    })
+
+    expect(store.filters.rangeMode).toBe('rolling')
+    vi.setSystemTime(new Date('2026-08-30T12:00:00'))
+    await store.refresh({ refreshMeta: false })
+
+    expect(apiMock.batches).toHaveBeenLastCalledWith(expect.objectContaining({
+      created_from: '2026-08-24',
+      created_to: '2026-08-30',
+    }))
   })
 
   it('动态页大小变化后只接受最新分页响应', async () => {

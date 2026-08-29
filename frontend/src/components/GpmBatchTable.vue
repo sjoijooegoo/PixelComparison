@@ -18,24 +18,24 @@ let mounted = false
 const columns = [
   { title: '批次 ID', dataIndex: 'batch_id', slotName: 'batch', width: 150 },
   { title: '分支', dataIndex: 'branch_tag', width: 120 },
-  { title: '场景', slotName: 'scenes', width: 260 },
+  { title: '地图', slotName: 'maps', width: 260 },
   { title: '平台', dataIndex: 'platform', slotName: 'platform', width: 100 },
   { title: '画质', dataIndex: 'shading_quality_label', slotName: 'quality', width: 90 },
   { title: 'P4 版本', dataIndex: 'p4_version', slotName: 'p4', width: 110 },
   { title: '采集时间', dataIndex: 'captured_at', slotName: 'captured', width: 170 },
   { title: '点位 / 截图', slotName: 'counts', width: 120 },
-  { title: '地图配置', slotName: 'maps', width: 130 },
-  { title: '操作', slotName: 'ops', width: 240, align: 'center' },
+  { title: '地图配置', slotName: 'mapStatus', width: 130 },
+  { title: '操作', slotName: 'ops', width: 180, align: 'center' },
 ]
 
 function formatTime(value) {
   return String(value || '').replace('T', ' ').slice(0, 19) || '——'
 }
 
-function sceneLabel(record) {
-  const scenes = record.scene_ids || []
-  if (!scenes.length) return '——'
-  return scenes.length === 1 ? scenes[0] : `${scenes[0]} 等 ${scenes.length} 个场景`
+function mapNamesLabel(record) {
+  const mapNames = record.map_names || []
+  if (!mapNames.length) return '——'
+  return mapNames.length === 1 ? mapNames[0] : `${mapNames[0]} 等 ${mapNames.length} 张地图`
 }
 
 function mapLabel(record) {
@@ -51,10 +51,10 @@ function mapColor(record) {
 }
 
 function openHeatmap(record) {
-  const sceneId = record.scene_ids?.[0]
-  if (!sceneId) return
+  const mapName = record.map_names?.[0]
+  if (!mapName) return
   router.push({
-    path: `/gpm-heatmap/${encodeURIComponent(sceneId)}`,
+    path: `/gpm-heatmap/${encodeURIComponent(mapName)}`,
     query: {
       branch_tag: record.branch_tag,
       platform: record.platform,
@@ -109,9 +109,15 @@ onUnmounted(() => { mounted = false; tableSizer.disconnect() })
       </div>
       <a-table :columns="columns" :data="store.batches" :pagination="false"
         :loading="store.loading" row-key="id" size="medium">
-        <template #batch="{ record }"><span class="mono batch-id">{{ record.batch_id }}</span></template>
-        <template #scenes="{ record }">
-          <span class="scene-label" :title="(record.scene_ids || []).join('\n')">{{ sceneLabel(record) }}</span>
+        <template #batch="{ record }">
+          <a v-if="record.batch_url" class="batch-link mono" :href="record.batch_url"
+            target="_blank" rel="noopener noreferrer" title="查看流水线">
+            #{{ record.batch_id }}
+          </a>
+          <span v-else class="mono batch-id">#{{ record.batch_id }}</span>
+        </template>
+        <template #maps="{ record }">
+          <span class="scene-label" :title="(record.map_names || []).join('\n')">{{ mapNamesLabel(record) }}</span>
         </template>
         <template #platform="{ record }"><a-tag size="small">{{ record.platform }}</a-tag></template>
         <template #quality="{ record }"><a-tag size="small" color="arcoblue">{{ record.shading_quality_label }}</a-tag></template>
@@ -120,15 +126,13 @@ onUnmounted(() => { mounted = false; tableSizer.disconnect() })
         <template #counts="{ record }">
           <span class="mono">{{ record.point_count }} / {{ record.screenshot_count }}</span>
         </template>
-        <template #maps="{ record }">
+        <template #mapStatus="{ record }">
           <a-tag size="small" :color="mapColor(record)">{{ mapLabel(record) }}</a-tag>
         </template>
         <template #ops="{ record }">
           <a-button size="mini" type="text" @click="openHeatmap(record)">查看热力图</a-button>
-          <a-button size="mini" type="text" :disabled="!record.batch_url"
-            :href="record.batch_url || undefined" target="_blank">流水线</a-button>
           <a-popconfirm position="br" type="warning" ok-text="删除" cancel-text="取消"
-            :content="`删除批次 ${record.batch_id}？将删除其全部场景、点位、指标和截图；独立地图配置不会删除。`"
+            :content="`删除批次 ${record.batch_id}？将删除其全部地图数据、点位、指标和截图；独立地图配置不会删除。`"
             @ok="remove(record)">
             <a-button size="mini" type="text" class="delete-button" title="删除批次"
               :loading="deletingId === record.id">
@@ -154,7 +158,9 @@ onUnmounted(() => { mounted = false; tableSizer.disconnect() })
 .gpm-batch-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .table-wrap { flex: 1; min-height: 0; overflow: auto; margin: 12px 16px 0; }
 .table-footer { display: flex; justify-content: flex-end; padding: 10px 16px; }
-.batch-id { color: rgb(var(--arcoblue-6)); }
+.batch-id { color: var(--color-text-2); }
+.batch-link { color: rgb(var(--arcoblue-6)); text-decoration: none; }
+.batch-link:hover { text-decoration: underline; }
 .scene-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .delete-button { margin-left: 2px; color: var(--color-text-4); }
 .delete-button:hover { color: rgb(var(--red-6)); background: var(--color-fill-2); }

@@ -192,17 +192,18 @@ beforeEach(() => {
 })
 
 describe('MapBuildView', () => {
-  it('网格批次支持按日期、批次 ID 或 P4 搜索', async () => {
+  it('网格批次使用 P4 和采集时间展示并标记最新项', async () => {
     const wrapper = mountView()
     await flushPromises()
 
     expect(wrapper.get('.batch-select').attributes('allow-search')).toBeDefined()
     expect(wrapper.get('.batch-select').text()).toContain(
-      '#2 · 2026-08-05 10:00 · P4 2（最新）',
+      'P4 2 · 2026-08-05 10:00（最新）',
     )
     expect(wrapper.get('.batch-select').text()).toContain(
-      '#1 · 2026-08-04 10:00 · P4 1',
+      'P4 1 · 2026-08-04 10:00',
     )
+    expect(wrapper.get('.batch-select').text()).not.toContain('#2')
     expect(wrapper.get('.batch-select').text()).not.toContain('P4 1（最新）')
   })
 
@@ -516,7 +517,7 @@ describe('MapBuildView', () => {
     }))
   })
 
-  it('从 URL 恢复批次、分块、统计口径和趋势天数', async () => {
+  it('重新进入页面时选择最新批次并恢复分块、统计口径和趋势天数', async () => {
     routeMock.path = '/map-build/Coral_WP'
     routeMock.params.sceneId = 'Coral_WP'
     routeMock.query = {
@@ -536,7 +537,7 @@ describe('MapBuildView', () => {
 
     expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
       branch_tag: 'main',
-      batch_id: '1',
+      batch_id: '',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
       branch_tag: 'main',
@@ -612,13 +613,26 @@ describe('MapBuildView', () => {
     const wrapper = mountView()
     await flushPromises()
     vi.clearAllMocks()
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overview,
+      batch: batch('3', '2026-08-06T10:00'),
+      available_batches: [
+        batch('3', '2026-08-06T10:00'),
+        ...overview.available_batches,
+      ],
+    })
 
     expect(wrapper.find('.refresh-button').exists()).toBe(false)
     expect(await runPageRefresh()).toBe(true)
     await flushPromises()
     expect(apiMock.mapBuildMeta).toHaveBeenCalledTimes(1)
     expect(apiMock.mapBuildOverview).toHaveBeenCalledTimes(1)
+    expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
+      batch_id: '',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(apiMock.mapBuildTrend).toHaveBeenCalledTimes(1)
+    expect(wrapper.findComponent('.batch-select').props('modelValue')).toBe('3')
 
     wrapper.unmount()
     expect(await runPageRefresh()).toBe(false)

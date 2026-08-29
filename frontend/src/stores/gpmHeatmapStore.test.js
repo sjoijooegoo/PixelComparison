@@ -2,9 +2,9 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const apiMock = vi.hoisted(() => ({
-  gpmHeatmapMeta: vi.fn(),
+  gpmHeatmapCatalog: vi.fn(),
   gpmHeatmapFrame: vi.fn(),
-  gpmHeatmapSceneTrends: vi.fn(),
+  gpmHeatmapMapTrends: vi.fn(),
   gpmHeatmapPoint: vi.fn(),
   gpmHeatmapTrends: vi.fn(),
 }))
@@ -23,24 +23,24 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function frame(sceneId, pointId, batchId = sceneId) {
+function frame(mapName, pointId, batchId = mapName, p4Version = 2960783) {
   return {
-    batch: { batch_id: batchId },
+    batch: { batch_id: batchId, p4_version: p4Version },
     available_batches: [{ batch_id: batchId }],
-    scene: { id: sceneId },
+    map: { map_name: mapName },
     heat_map: [{ key: 'Scene_DC', name: '场景 DC' }],
     trend: [{ key: 'Scene_DC', name: 'Scene_DC' }],
     points: [{ id: pointId, index: 1, heat_map_data: { Scene_DC: pointId } }],
   }
 }
 
-function meta(sceneId) {
+function meta(mapName) {
   return {
     branch_tag: 'main',
     platforms: ['Android'],
     shading_qualities: [{ value: 5, label: '电影' }],
-    scene_ids: [{
-      value: sceneId,
+    maps: [{
+      value: mapName,
       platforms: ['Android'],
       shading_qualities: [{ value: 5, label: '电影' }],
       platform_qualities: [{
@@ -53,7 +53,7 @@ function meta(sceneId) {
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
-  apiMock.gpmHeatmapSceneTrends.mockResolvedValue({ available: true, points: [] })
+  apiMock.gpmHeatmapMapTrends.mockResolvedValue({ available: true, points: [] })
 })
 
 describe('GPMHeatmap store request ordering', () => {
@@ -67,16 +67,16 @@ describe('GPMHeatmap store request ordering', () => {
     store.filters.platform = 'Android'
     store.filters.shadingQuality = 5
 
-    store.filters.sceneId = 'OldScene'
+    store.filters.mapName = 'OldScene'
     const oldLoad = store.loadFrame()
-    store.filters.sceneId = 'NewScene'
+    store.filters.mapName = 'NewScene'
     const newLoad = store.loadFrame()
     newRequest.resolve(frame('NewScene', 22))
     await newLoad
     oldRequest.resolve(frame('OldScene', 11))
     await oldLoad
 
-    expect(store.frame.scene.id).toBe('NewScene')
+    expect(store.frame.map.map_name).toBe('NewScene')
     expect(store.selectedPointId).toBe(22)
   })
 
@@ -85,7 +85,7 @@ describe('GPMHeatmap store request ordering', () => {
     apiMock.gpmHeatmapFrame.mockReturnValue(pending.promise)
     const store = useGpmHeatmapStore()
     Object.assign(store.filters, {
-      sceneId: 'Village_Dimension_Main', platform: 'Android', shadingQuality: 5,
+      mapName: 'Village_Dimension_Main', platform: 'Android', shadingQuality: 5,
     })
 
     const first = store.loadFrame()
@@ -138,19 +138,19 @@ describe('GPMHeatmap store request ordering', () => {
   })
 
   it('整体平均按场景筛选加载，切换点位不重复请求整体趋势', async () => {
-    apiMock.gpmHeatmapSceneTrends.mockResolvedValue({ available: true, points: [] })
+    apiMock.gpmHeatmapMapTrends.mockResolvedValue({ available: true, points: [] })
     apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 8, detail_data: [] })
     const store = useGpmHeatmapStore()
     Object.assign(store.filters, {
-      branchTag: 'main', sceneId: 'Village_Dimension_Main',
+      branchTag: 'main', mapName: 'Village_Dimension_Main',
       platform: 'Android', shadingQuality: 5,
     })
 
     await store.changeTrendMode('average')
     await store.selectPoint(8)
 
-    expect(apiMock.gpmHeatmapSceneTrends).toHaveBeenCalledTimes(1)
-    expect(apiMock.gpmHeatmapSceneTrends).toHaveBeenCalledWith(
+    expect(apiMock.gpmHeatmapMapTrends).toHaveBeenCalledTimes(1)
+    expect(apiMock.gpmHeatmapMapTrends).toHaveBeenCalledWith(
       'Village_Dimension_Main',
       {
         branch_tag: 'main', platform: 'Android', shading_quality: 5, days: 14,
@@ -183,22 +183,200 @@ describe('GPMHeatmap store request ordering', () => {
   })
 
   it('路由仅接受 7、14、30 天并默认 14 天', async () => {
-    apiMock.gpmHeatmapMeta.mockResolvedValue(meta('Village_Dimension_Main'))
+    apiMock.gpmHeatmapCatalog.mockResolvedValue(meta('Village_Dimension_Main'))
     apiMock.gpmHeatmapFrame.mockResolvedValue(frame('Village_Dimension_Main', 8, 'gpm-1'))
     apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 8, detail_data: [] })
     apiMock.gpmHeatmapTrends.mockResolvedValue({ available: true, points: [] })
     const store = useGpmHeatmapStore()
 
-    await store.applyRoute({ sceneId: 'Village_Dimension_Main', days: 60 })
+    await store.applyRoute({ mapName: 'Village_Dimension_Main', days: 60 })
 
     expect(store.days).toBe(14)
     expect(store.routeState().trendMode).toBe('average')
   })
 
+  it('无显式场景路由时跳过无数据地图并选择首个有数据地图', async () => {
+    const response = meta('DataMap')
+    response.maps.unshift({
+      id: 1,
+      value: 'EmptyMap',
+      has_data: false,
+      platforms: [],
+      shading_qualities: [],
+      platform_qualities: [],
+    })
+    response.maps[1].id = 2
+    response.maps[1].has_data = true
+    apiMock.gpmHeatmapCatalog.mockResolvedValue(response)
+    apiMock.gpmHeatmapFrame.mockResolvedValue(frame('DataMap', 8, 'gpm-1'))
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 8, detail_data: [] })
+    const store = useGpmHeatmapStore()
+
+    await store.applyRoute({})
+
+    expect(store.filters.mapName).toBe('DataMap')
+    expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledWith(
+      'DataMap', expect.any(Object), expect.any(Object),
+    )
+  })
+
+  it('从其他页面进入时默认选择 IOS 下首个有数据场景、首个有数据画质和最新批次', async () => {
+    const response = {
+      branch_tag: 'main',
+      platforms: ['IOS', 'Android', 'Windows'],
+      shading_qualities: [
+        { value: 5, label: '电影' },
+        { value: 3, label: '高' },
+        { value: 1, label: '低' },
+      ],
+      maps: [
+        {
+          id: 0, value: 'AndroidOnly', has_data: true,
+          platforms: ['Android'],
+          platform_qualities: [{
+            platform: 'Android', shading_qualities: [{ value: 5, label: '电影' }],
+          }],
+        },
+        {
+          id: 1, value: 'FirstIOSMap', has_data: true,
+          platforms: ['IOS'],
+          platform_qualities: [{
+            platform: 'IOS',
+            shading_qualities: [{ value: 3, label: '高' }, { value: 1, label: '低' }],
+          }],
+        },
+        {
+          id: 2, value: 'SecondIOSMap', has_data: true,
+          platforms: ['IOS'],
+          platform_qualities: [{
+            platform: 'IOS', shading_qualities: [{ value: 5, label: '电影' }],
+          }],
+        },
+      ],
+    }
+    apiMock.gpmHeatmapCatalog.mockResolvedValue(response)
+    apiMock.gpmHeatmapFrame.mockResolvedValue(frame('FirstIOSMap', 8, 'ios-latest'))
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 8, detail_data: [] })
+    const store = useGpmHeatmapStore()
+
+    await store.applyRoute({})
+
+    expect(store.filters).toMatchObject({
+      platform: 'IOS', mapName: 'FirstIOSMap', shadingQuality: 3, batchId: 'ios-latest',
+    })
+    expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledWith(
+      'FirstIOSMap',
+      expect.objectContaining({
+        platform: 'IOS', shading_quality: 3, batch_id: '', nearest_p4_version: null,
+      }),
+      expect.any(Object),
+    )
+  })
+
+  it('空数据组合保留平台画质筛选并进入正常空状态', async () => {
+    const response = meta('EmptyMap')
+    response.platforms = []
+    response.shading_qualities = []
+    response.maps[0] = {
+      id: 0,
+      value: 'EmptyMap',
+      has_data: false,
+      platforms: [],
+      shading_qualities: [],
+      platform_qualities: [],
+    }
+    apiMock.gpmHeatmapCatalog.mockResolvedValue(response)
+    const store = useGpmHeatmapStore()
+
+    await store.applyRoute({ mapName: 'EmptyMap', platform: 'IOS', shadingQuality: 4 })
+
+    expect(store.filters).toMatchObject({
+      mapName: 'EmptyMap', platform: 'IOS', shadingQuality: 4, batchId: '',
+    })
+    expect(store.platformOptions).toEqual(['IOS', 'Android', 'Windows'])
+    expect(store.qualityOptions.map((item) => item.value)).toEqual([5, 4, 3, 2, 1, 0])
+    expect(store.mapHasBatches('EmptyMap')).toBe(false)
+    expect(store.qualityHasBatches(4)).toBe(false)
+    expect(store.scopeEmpty).toBe(true)
+    expect(store.errors.frame).toBe('')
+    expect(apiMock.gpmHeatmapFrame).not.toHaveBeenCalled()
+    expect(apiMock.gpmHeatmapPoint).not.toHaveBeenCalled()
+    expect(apiMock.gpmHeatmapMapTrends).not.toHaveBeenCalled()
+  })
+
+  it('按当前平台和关联筛选判断场景、画质是否存在采集批次', () => {
+    const store = useGpmHeatmapStore()
+    store.meta = meta('DataMap')
+    Object.assign(store.filters, {
+      mapName: 'DataMap', platform: 'Android', shadingQuality: 5,
+    })
+
+    expect(store.mapHasBatches('DataMap')).toBe(true)
+    expect(store.qualityHasBatches(5)).toBe(true)
+    expect(store.qualityHasBatches(4)).toBe(false)
+
+    store.filters.platform = 'IOS'
+    expect(store.mapHasBatches('DataMap')).toBe(false)
+    expect(store.qualityHasBatches(5)).toBe(false)
+  })
+
+  it('切换筛选范围时清除旧批次并按当前 P4 请求最近批次', async () => {
+    const pending = deferred()
+    apiMock.gpmHeatmapFrame.mockReturnValue(pending.promise)
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 9, detail_data: [] })
+    const store = useGpmHeatmapStore()
+    Object.assign(store.filters, {
+      mapName: 'Village_Dimension_Main', platform: 'Android',
+      shadingQuality: 5, batchId: 'gpm-demo-20260826',
+    })
+    store.frame = frame(
+      'Village_Dimension_Main', 8, 'gpm-demo-20260826', 2960783,
+    )
+
+    const changing = store.changeScope({ platform: 'IOS' })
+
+    expect(store.filters.batchId).toBe('')
+    expect(store.batchOptions).toEqual([])
+    expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledWith(
+      'Village_Dimension_Main',
+      expect.objectContaining({
+        platform: 'IOS', batch_id: '', nearest_p4_version: 2960783,
+      }),
+      expect.any(Object),
+    )
+
+    pending.resolve(frame('Village_Dimension_Main', 9, 'ios-nearest', 2960785))
+    await changing
+    expect(store.filters.batchId).toBe('ios-nearest')
+  })
+
+  it('刷新时忽略当前批次并切换到筛选范围内最新批次', async () => {
+    apiMock.gpmHeatmapCatalog.mockResolvedValue(meta('Village_Dimension_Main'))
+    apiMock.gpmHeatmapFrame.mockResolvedValue(
+      frame('Village_Dimension_Main', 9, 'gpm-latest', 2960900),
+    )
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 9, detail_data: [] })
+    const store = useGpmHeatmapStore()
+    Object.assign(store.filters, {
+      branchTag: 'main', mapName: 'Village_Dimension_Main', platform: 'Android',
+      shadingQuality: 5, batchId: 'gpm-demo-20260826',
+    })
+
+    await store.refresh()
+
+    expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledWith(
+      'Village_Dimension_Main',
+      expect.objectContaining({ batch_id: '', nearest_p4_version: null }),
+      expect.any(Object),
+    )
+    expect(store.filters.batchId).toBe('gpm-latest')
+    expect(store.selectedPointId).toBe(9)
+  })
+
   it('重叠路由中已取消的 meta 响应不能再改筛选或发起旧 frame 请求', async () => {
     const oldMeta = deferred()
     const newMeta = deferred()
-    apiMock.gpmHeatmapMeta
+    apiMock.gpmHeatmapCatalog
       .mockReturnValueOnce(oldMeta.promise)
       .mockReturnValueOnce(newMeta.promise)
     apiMock.gpmHeatmapFrame.mockResolvedValue(frame('NewScene', 22, 'new-batch'))
@@ -206,15 +384,15 @@ describe('GPMHeatmap store request ordering', () => {
     apiMock.gpmHeatmapTrends.mockResolvedValue({ available: false, points: [] })
     const store = useGpmHeatmapStore()
 
-    const oldRoute = store.applyRoute({ sceneId: 'OldScene', platform: 'Android', shadingQuality: 5 })
-    const newRoute = store.applyRoute({ sceneId: 'NewScene', platform: 'Android', shadingQuality: 5 })
+    const oldRoute = store.applyRoute({ mapName: 'OldScene', platform: 'Android', shadingQuality: 5 })
+    const newRoute = store.applyRoute({ mapName: 'NewScene', platform: 'Android', shadingQuality: 5 })
     newMeta.resolve(meta('NewScene'))
     await newRoute
     oldMeta.resolve(meta('OldScene'))
     await oldRoute
 
-    expect(store.filters.sceneId).toBe('NewScene')
-    expect(store.frame.scene.id).toBe('NewScene')
+    expect(store.filters.mapName).toBe('NewScene')
+    expect(store.frame.map.map_name).toBe('NewScene')
     expect(store.initialized).toBe(true)
     expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledTimes(1)
     expect(apiMock.gpmHeatmapFrame.mock.calls[0][0]).toBe('NewScene')
@@ -222,11 +400,11 @@ describe('GPMHeatmap store request ordering', () => {
 
   it('页面离开后使进行中的路由初始化失效且不再发后续请求', async () => {
     const pendingMeta = deferred()
-    apiMock.gpmHeatmapMeta.mockReturnValue(pendingMeta.promise)
+    apiMock.gpmHeatmapCatalog.mockReturnValue(pendingMeta.promise)
     const store = useGpmHeatmapStore()
 
     const applying = store.applyRoute({
-      sceneId: 'Village_Dimension_Main', platform: 'Android', shadingQuality: 5,
+      mapName: 'Village_Dimension_Main', platform: 'Android', shadingQuality: 5,
     })
     store.dispose()
     pendingMeta.resolve(meta('Village_Dimension_Main'))

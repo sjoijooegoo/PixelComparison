@@ -85,7 +85,8 @@ async function syncRoleUrl() {
 function registerRefresh() {
   unregisterPageRefresh?.()
   unregisterPageRefresh = registerPageRefresh(async () => {
-    await store.refresh()
+    const normalized = await store.refresh()
+    if (normalized) await replaceUrl(normalized)
   })
 }
 

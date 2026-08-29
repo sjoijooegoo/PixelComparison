@@ -8,7 +8,9 @@ const props = defineProps({
   emptyLabel: { type: String, default: '当前范围' },
   currentBatchId: { type: [String, Number], default: '' },
   storageKey: { type: String, required: true },
+  hoveredPointKey: { type: String, default: '' },
 })
+const emit = defineEmits(['hover-point'])
 
 const DEFAULT_WIDTH = 1200
 const HEIGHT = 255
@@ -18,7 +20,7 @@ const chartCanvas = ref(null)
 const chartWidth = ref(DEFAULT_WIDTH)
 const plotWidth = computed(() => chartWidth.value - PLOT.left - PLOT.right)
 const plotHeight = HEIGHT - PLOT.top - PLOT.bottom
-const hoveredIndex = ref(null)
+const localHoveredPointKey = ref('')
 const blockedKey = ref('')
 let blockedTimer = null
 let resizeObserver = null
@@ -38,6 +40,24 @@ function loadVisibleKeys() {
 const visibleKeys = ref(loadVisibleKeys())
 const visibleKeySet = computed(() => new Set(visibleKeys.value))
 const visibleSeries = computed(() => props.series.filter((item) => visibleKeySet.value.has(item.key)))
+
+watch(
+  () => [props.storageKey, props.series.map((item) => item.key)],
+  ([storageKey, keys], previous) => {
+    const [previousStorageKey, previousKeys = []] = previous || []
+    if (storageKey !== previousStorageKey) {
+      visibleKeys.value = loadVisibleKeys()
+      return
+    }
+    const available = new Set(keys)
+    const previouslyAvailable = new Set(previousKeys)
+    const retained = visibleKeys.value.filter((key) => available.has(key))
+    const newlyAvailable = keys.filter((key) => !previouslyAvailable.has(key))
+    visibleKeys.value = [...retained, ...newlyAvailable]
+    if (!visibleKeys.value.length) visibleKeys.value = [...keys]
+  },
+  { flush: 'sync' },
+)
 
 function toggleSeries(key) {
   if (visibleKeys.value.length === 1 && visibleKeySet.value.has(key)) {
@@ -84,9 +104,30 @@ const maximum = computed(() => niceMaximum(Math.max(
 )))
 const ticks = computed(() => Array.from({ length: 5 }, (_, index) => maximum.value * index / 4))
 const hasValues = computed(() => chartSeries.value.some((item) => item.values.some((value) => value != null)))
+function pointKey(point) {
+  if (!point) return ''
+  return JSON.stringify([String(point.batch_id ?? ''), String(point.captured_at ?? '')])
+}
+
+const activeHoveredPointKey = computed(() => props.hoveredPointKey || localHoveredPointKey.value)
+const hoveredIndex = computed(() => {
+  if (!activeHoveredPointKey.value) return null
+  const index = props.points.findIndex((point) => pointKey(point) === activeHoveredPointKey.value)
+  return index < 0 ? null : index
+})
 const hoveredPoint = computed(() => (
   hoveredIndex.value == null ? null : props.points[hoveredIndex.value]
 ))
+
+function hoverPoint(point) {
+  const key = pointKey(point)
+  localHoveredPointKey.value = key
+  emit('hover-point', key)
+}
+
+function clearLocalHover() {
+  localHoveredPointKey.value = ''
+}
 
 function xAt(index) {
   if (props.points.length <= 1) return PLOT.left + plotWidth.value / 2
@@ -201,7 +242,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div v-if="hasValues" ref="chartCanvas" class="chart-canvas" @mouseleave="hoveredIndex = null">
+    <div v-if="hasValues" ref="chartCanvas" class="chart-canvas" @mouseleave="clearLocalHover">
       <svg :viewBox="`0 0 ${chartWidth} ${HEIGHT}`" role="img" :aria-label="`${title}版本趋势折线图`">
         <g v-for="tick in ticks" :key="tick">
           <line :x1="PLOT.left" :x2="chartWidth - PLOT.right"
@@ -233,16 +274,14 @@ onBeforeUnmount(() => {
             text-anchor="middle" class="x-label">{{ shortDate(point.captured_at) }}</text>
           <rect :x="bandStart(index)" :y="PLOT.top" :width="bandWidth(index)"
             :height="plotHeight" fill="transparent" class="point-hit-area"
-            @mouseenter="hoveredIndex = index" />
+            @mouseenter="hoverPoint(point)" />
         </g>
       </svg>
 
       <div v-if="hoveredPoint" class="chart-tooltip" :style="tooltipStyle">
-        <time :datetime="hoveredPoint.captured_at">{{ fullDate(hoveredPoint.captured_at) }}</time>
-        <div class="tooltip-meta">
+        <div class="tooltip-heading">
+          <time :datetime="hoveredPoint.captured_at">{{ fullDate(hoveredPoint.captured_at) }}</time>
           <span>P4 {{ hoveredPoint.p4_version ?? '—' }}</span>
-          <i>·</i>
-          <span>批次 {{ hoveredPoint.batch_id ?? '—' }}</span>
         </div>
         <div v-for="item in visibleSeries" :key="item.key" class="tooltip-value">
           <span><i :style="{ backgroundColor: item.color }"></i>{{ item.label }}</span>
@@ -323,22 +362,22 @@ svg { display: block; width: 100%; height: 100%; overflow: visible; }
 }
 .point-hit-area { cursor: crosshair; }
 .chart-tooltip {
-  position: absolute; top: 7px; z-index: 3; transform: translateX(-50%); width: 200px;
+  position: absolute; top: -22px; z-index: 3; transform: translateX(-50%); width: 200px;
   padding: 10px 11px; border: 1px solid var(--color-border-3); border-radius: 7px;
-  background: color-mix(in srgb, var(--color-bg-5) 94%, transparent);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .28); backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--color-bg-5) 68%, transparent);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, .16); backdrop-filter: blur(5px);
   pointer-events: none;
 }
-.chart-tooltip time {
-  display: block; color: rgb(var(--arcoblue-5));
+.tooltip-heading {
+  padding-bottom: 7px; display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; border-bottom: 1px solid var(--color-border-2);
+  color: var(--color-text-2); font: 600 10px/1.35 "Bahnschrift", "Segoe UI", sans-serif;
+  white-space: nowrap;
+}
+.tooltip-heading time {
+  color: rgb(var(--arcoblue-5));
   font: 600 12px/1.35 "Bahnschrift", "Segoe UI", sans-serif;
 }
-.tooltip-meta {
-  margin-top: 3px; padding-bottom: 7px; display: flex; align-items: center; gap: 5px;
-  border-bottom: 1px solid var(--color-border-2); color: var(--color-text-2);
-  font: 600 10px/1.35 "Bahnschrift", "Segoe UI", sans-serif;
-}
-.tooltip-meta i { color: var(--color-text-4); font-style: normal; font-weight: 400; }
 .tooltip-value {
   padding-top: 6px; display: flex; align-items: center; justify-content: space-between;
   gap: 10px; color: var(--color-text-3); font-size: 11px;

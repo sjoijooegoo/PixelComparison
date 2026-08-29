@@ -12,29 +12,39 @@ describe('GPM batch management route state', () => {
       capturedFrom: '2026-07-30', capturedTo: '2026-08-28',
     })
     const parsed = parseGpmBatchRoute({ query: {} })
-    expect(parsed).toMatchObject({ branchTag: 'main', page: 1, shadingQuality: '' })
+    expect(parsed).toMatchObject({
+      branchTag: 'main', page: 1, shadingQuality: '', rangeMode: 'rolling',
+    })
   })
 
   it('序列化筛选、分页和返回地址', () => {
     const location = gpmBatchLocation({
       returnTo: '/gpm-heatmap/SceneA?batch=gpm-1',
-      branchTag: 'engine-ue5', platform: 'Android', sceneId: 'SceneA',
-      shadingQuality: 5, capturedFrom: '2026-08-01', capturedTo: '2026-08-28', page: 2,
+      branchTag: 'engine-ue5', platform: 'Android', mapName: 'SceneA',
+      shadingQuality: 5, rangeMode: 'fixed',
+      capturedFrom: '2026-08-01', capturedTo: '2026-08-28', page: 2,
     })
     expect(location).toEqual({
       path: '/batch-management/gpm',
       query: {
         return_to: '/gpm-heatmap/SceneA?batch=gpm-1', branch_tag: 'engine-ue5',
-        platform: 'Android', scene_id: 'SceneA', quality: '5',
-        from: '2026-08-01', to: '2026-08-28', page: '2',
+        platform: 'Android', map_name: 'SceneA', quality: '5',
+        range_mode: 'fixed', from: '2026-08-01', to: '2026-08-28', page: '2',
       },
     })
     expect(gpmBatchRouteKey(parseGpmBatchRoute({ query: location.query }))).toBe(
       gpmBatchRouteKey({
         returnTo: '/gpm-heatmap/SceneA?batch=gpm-1', branchTag: 'engine-ue5',
-        platform: 'Android', sceneId: 'SceneA', shadingQuality: 5,
-        capturedFrom: '2026-08-01', capturedTo: '2026-08-28', page: 2,
+        platform: 'Android', mapName: 'SceneA', shadingQuality: 5,
+        rangeMode: 'fixed', capturedFrom: '2026-08-01', capturedTo: '2026-08-28', page: 2,
       }),
     )
+  })
+
+  it('滚动范围 URL 不固化日期，避免后续刷新永远看不到新批次', () => {
+    expect(gpmBatchLocation({ branchTag: 'main', rangeMode: 'rolling', page: 1 })).toEqual({
+      path: '/batch-management/gpm',
+      query: { branch_tag: 'main', range_mode: 'rolling' },
+    })
   })
 })

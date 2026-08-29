@@ -15,6 +15,7 @@ const storeMock = vi.hoisted(() => ({
     branch_tag: 'main',
     scene_id: '',
     dateMode: 'range',
+    rangeMode: 'rolling',
     created_from: '2026-08-14',
     created_to: '2026-08-20',
     created_dates: [],
@@ -27,6 +28,7 @@ const storeMock = vi.hoisted(() => ({
       branch_tag: requested.branchTag || 'main',
       scene_id: requested.sceneId || '',
       dateMode: requested.dateMode || 'range',
+      rangeMode: requested.rangeMode || 'rolling',
       created_from: requested.createdFrom || '2026-08-14',
       created_to: requested.createdTo || '2026-08-20',
       created_dates: [...(requested.createdDates || [])],
@@ -37,6 +39,7 @@ const storeMock = vi.hoisted(() => ({
       branchTag: storeMock.filters.branch_tag,
       sceneId: storeMock.filters.scene_id,
       dateMode: storeMock.filters.dateMode,
+      rangeMode: storeMock.filters.rangeMode,
       createdFrom: storeMock.filters.created_from,
       createdTo: storeMock.filters.created_to,
       createdDates: [...storeMock.filters.created_dates],
@@ -97,6 +100,7 @@ describe('BatchView route synchronization', () => {
       branchTag: 'main',
       sceneId: '',
       dateMode: undefined,
+      rangeMode: undefined,
       createdFrom: undefined,
       createdTo: undefined,
       createdDates: [],
@@ -105,8 +109,7 @@ describe('BatchView route synchronization', () => {
     expect(router.currentRoute.value.query).toEqual({
       branch_tag: 'main',
       date_mode: 'range',
-      from: '2026-08-14',
-      to: '2026-08-20',
+      range_mode: 'rolling',
     })
     wrapper.unmount()
   })
@@ -131,6 +134,7 @@ describe('BatchView route synchronization', () => {
       branchTag: 'engine-ue5',
       sceneId: 'SceneB',
       dateMode: 'days',
+      rangeMode: undefined,
       createdFrom: undefined,
       createdTo: undefined,
       createdDates: ['2026-08-01', '2026-08-03'],

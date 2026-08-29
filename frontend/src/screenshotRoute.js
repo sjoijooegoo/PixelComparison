@@ -20,6 +20,7 @@ export function parseScreenshotRoute(route) {
     currentQuality: firstValue(route.query.current_quality),
     shadingQuality: firstValue(route.query.quality),
     dateMode: firstValue(route.query.date_mode),
+    rangeMode: firstValue(route.query.range_mode),
     createdFrom: firstValue(route.query.from),
     createdTo: firstValue(route.query.to),
     createdDates: dateValues(route.query.dates),
@@ -36,6 +37,7 @@ export function screenshotStateFromFilters(filters, roles = {}) {
     currentQuality: roles.currentQuality ?? '',
     shadingQuality: filters.shading_quality == null ? '' : filters.shading_quality,
     dateMode: filters.dateMode,
+    rangeMode: filters.rangeMode,
     createdFrom: filters.created_from,
     createdTo: filters.created_to,
     createdDates: [...(filters.created_dates || [])],
@@ -52,6 +54,7 @@ export function screenshotRouteKey(state) {
     currentQuality: state.currentQuality ?? '',
     shadingQuality: state.shadingQuality,
     dateMode: state.dateMode,
+    rangeMode: state.rangeMode,
     createdFrom: state.createdFrom,
     createdTo: state.createdTo,
     createdDates: [...(state.createdDates || [])],
@@ -69,8 +72,13 @@ export function screenshotLocation(state) {
     query.date_mode = state.dateMode
     if (state.dateMode === 'days') query.dates = (state.createdDates || []).join(',')
     else {
-      query.from = state.createdFrom || ''
-      query.to = state.createdTo || ''
+      const rangeMode = state.rangeMode
+        || (state.createdFrom && state.createdTo ? 'fixed' : 'rolling')
+      query.range_mode = rangeMode
+      if (rangeMode === 'fixed') {
+        query.from = state.createdFrom || ''
+        query.to = state.createdTo || ''
+      }
     }
   }
   if (state.baselineId) {
