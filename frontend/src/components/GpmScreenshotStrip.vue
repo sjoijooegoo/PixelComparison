@@ -49,6 +49,8 @@ function revealPoint(pointId) {
   )
 }
 
+defineExpose({ revealPoint })
+
 watch(
   () => props.selectedPointId,
   async (pointId) => {

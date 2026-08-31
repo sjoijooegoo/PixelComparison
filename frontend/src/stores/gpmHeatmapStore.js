@@ -95,6 +95,19 @@ function firstDataQuality(meta, mapName, platform) {
   return firstValue(dataQualities(map, platform))
 }
 
+function pointSelectionIdentity(point) {
+  if (!point) return null
+  const pointKey = String(point.point_key || '').trim()
+  return pointKey ? { pointKey } : null
+}
+
+function matchingPoint(points, identity) {
+  if (!identity?.pointKey) return null
+  return points?.find(
+    (point) => String(point.point_key || '').trim() === identity.pointKey,
+  ) || null
+}
+
 export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
   state: () => ({
     meta: { branch_tag: 'main', platforms: [], shading_qualities: [], maps: [] },
@@ -203,7 +216,11 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       }
     },
 
-    async loadFrame(requestedBatchId = this.filters.batchId, nearestP4Version = null) {
+    async loadFrame(
+      requestedBatchId = this.filters.batchId,
+      nearestP4Version = null,
+      preferredPoint = null,
+    ) {
       if (!this.filters.mapName) {
         cancelChannel(this, 'frame')
         this.frame = null
@@ -246,10 +263,12 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
         this.metricKey = data.heat_map?.some((item) => item.key === this.metricKey)
           ? this.metricKey
           : firstValue(data.heat_map?.map((item) => item.key))
+        const restoredPoint = matchingPoint(data.points, preferredPoint)
         const currentStillExists = data.points?.some(
           (point) => Number(point.id) === Number(this.selectedPointId),
         )
-        this.selectedPointId = currentStillExists ? this.selectedPointId : (data.points?.[0]?.id ?? null)
+        this.selectedPointId = restoredPoint?.id
+          ?? (currentStillExists ? this.selectedPointId : (data.points?.[0]?.id ?? null))
         return data
       } catch (error) {
         if (isRequestCancelled(error) || !request.isLatest()) return null
@@ -415,6 +434,10 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       const isCurrent = () => routeSequence === runtime(this).routeSequence
       const nearestP4Version = this.frame?.batch?.p4_version ?? null
       const selectingBatch = batchId !== undefined
+      const keepsMap = mapName === undefined || mapName === this.filters.mapName
+      const keepsPointScope = keepsMap
+        && (platform === undefined || platform === this.filters.platform)
+      const preferredPoint = keepsPointScope ? pointSelectionIdentity(this.selectedPoint) : null
       cancelChannel(this, 'detail')
       cancelChannel(this, 'trends')
       if (mapName !== undefined) this.filters.mapName = mapName
@@ -423,12 +446,15 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       this.filters.platform = keepValue(this.filters.platform, this.platformOptions, 'Android')
       this.filters.shadingQuality = keepValue(this.filters.shadingQuality, this.qualityOptions, 5)
       this.filters.batchId = selectingBatch ? batchId : ''
-      this.selectedPointId = null
-      this.pointDetail = null
-      this.trends = null
+      if (!keepsPointScope) {
+        this.selectedPointId = null
+        this.pointDetail = null
+        this.trends = null
+      }
       await this.loadFrame(
         selectingBatch ? batchId : '',
         selectingBatch ? null : nearestP4Version,
+        preferredPoint,
       )
       if (!isCurrent()) return null
       await Promise.all([this.loadPoint(), this.loadTrends()])
@@ -438,9 +464,10 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
 
     async refresh() {
       invalidateRouteApplication(this)
+      const preferredPoint = pointSelectionIdentity(this.selectedPoint)
       this.cancelAll()
       await this.loadMeta()
-      await this.loadFrame('')
+      await this.loadFrame('', null, preferredPoint)
       await Promise.all([this.loadPoint(), this.loadTrends()])
     },
 

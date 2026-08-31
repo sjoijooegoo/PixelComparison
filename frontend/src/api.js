@@ -209,6 +209,11 @@ export const api = {
       'PUT',
     )
   },
+  deleteGpmMapConfiguration: (mapName, expectedRevision) =>
+    del(
+      `/api/gpm-heatmaps/configuration/maps/${encodeURIComponent(mapName)}`
+      + `?expected_revision=${encodeURIComponent(expectedRevision)}`,
+    ),
   gpmMapPreview: (mapName, options = {}) =>
     get(
       `/api/gpm-heatmaps/configuration/maps/${encodeURIComponent(mapName)}/preview`,

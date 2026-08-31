@@ -22,6 +22,8 @@ PixelComparison 是面向游戏截图与场景烘培数据的回归平台。采�
 
 ## 文档导航
 
+- [业务领域与修改指南](docs/业务领域与修改指南.md)：领域关系、数据生命周期、关键约束、现有偏差与修改回归入口。
+- [领域术语](CONTEXT.md)：截图批次、画质运行、烘培数据和 GPMHeatmap 的统一含义。
 - [完整使用文档](docs/使用文档.md)：安装、启动、界面操作、项目设置、数据目录、备份恢复和故障排查。
 - [数据上报接入指南](docs/上报接入指南.md)：manifest 格式、接口字段、异步对比和错误处理。
 - [GPMHeatmap 使用与接入](docs/GPMHeatmap使用与接入.md)：点位数据、地图配置、独立存储与接口示例。
@@ -228,7 +230,7 @@ backend/data/backup/YYYY-MM-DD/db/gpm_heatmap.db
 
 ## 比较规则
 
-- 两个批次必须具有相同 `branch_tag`、相同 `scene_id` 和相同 `shading_quality`，且该画质在两侧都已完整上传；平台可以不同。
+- 两个批次必须具有相同 `branch_tag`、相同 `scene_id`、相同平台和相同 `shading_quality`，且该画质在两侧都已完整上传。
 - 批次内的 `scene_name` 是检查点唯一键，两个版本按该字段配对。
 - 两侧都有截图时计算像素差异；只有当前侧时为 `added`，只有参照侧时为 `missing`。
 - 任一 `fail` 或 `missing` 使整体状态为失败；否则任一 `warn` 或 `added` 使整体状态为警告；其余为通过。

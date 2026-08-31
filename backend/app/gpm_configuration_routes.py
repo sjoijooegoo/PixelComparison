@@ -17,7 +17,7 @@ from .gpm_configuration_package import (
     inspect_configuration_package,
     remove_transfer,
 )
-from .gpm_map_config import map_preview, save_map_configuration
+from .gpm_map_config import delete_map_configuration, map_preview, save_map_configuration
 
 
 router = APIRouter()
@@ -67,6 +67,11 @@ def put_map_configuration(
     except (TypeError, json.JSONDecodeError) as exc:
         raise http_error(422, "INVALID_GPM_MAP_CONFIGURATION", "地图配置必须是 JSON 对象") from exc
     return save_map_configuration(map_name, payload, image)
+
+
+@router.delete("/api/gpm-heatmaps/configuration/maps/{map_name}")
+def delete_map(map_name: str, expected_revision: Annotated[int, Query(ge=1)]):
+    return delete_map_configuration(map_name, expected_revision)
 
 
 @router.get("/api/gpm-heatmaps/configuration/maps/{map_name}/preview")

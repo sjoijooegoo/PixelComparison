@@ -23,14 +23,14 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function frame(mapName, pointId, batchId = mapName, p4Version = 2960783) {
+function frame(mapName, pointId, batchId = mapName, p4Version = 2960783, points = null) {
   return {
     batch: { batch_id: batchId, p4_version: p4Version },
     available_batches: [{ batch_id: batchId }],
     map: { map_name: mapName },
     heat_map: [{ key: 'Scene_DC', name: '场景 DC' }],
     trend: [{ key: 'Scene_DC', name: 'Scene_DC' }],
-    points: [{ id: pointId, index: 1, heat_map_data: { Scene_DC: pointId } }],
+    points: points || [{ id: pointId, index: 1, heat_map_data: { Scene_DC: pointId } }],
   }
 }
 
@@ -348,6 +348,86 @@ describe('GPMHeatmap store request ordering', () => {
     pending.resolve(frame('Village_Dimension_Main', 9, 'ios-nearest', 2960785))
     await changing
     expect(store.filters.batchId).toBe('ios-nearest')
+  })
+
+  it('同一场景切换画质或批次时按稳定身份保留当前点位', async () => {
+    const oldPoints = [
+      { id: 11, index: 1, screenshot_id: '01', point_key: 'route-1' },
+      { id: 12, index: 2, screenshot_id: '02', point_key: 'route-2' },
+    ]
+    const newPoints = [
+      { id: 21, index: 1, screenshot_id: '01', point_key: 'route-1' },
+      { id: 22, index: 2, screenshot_id: '02', point_key: 'route-2' },
+    ]
+    apiMock.gpmHeatmapFrame.mockResolvedValue(
+      frame('Village_Dimension_Main', 21, 'quality-3', 2960800, newPoints),
+    )
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 22, detail_data: [] })
+    const store = useGpmHeatmapStore()
+    Object.assign(store.filters, {
+      mapName: 'Village_Dimension_Main', platform: 'Android',
+      shadingQuality: 5, batchId: 'quality-5',
+    })
+    store.frame = frame(
+      'Village_Dimension_Main', 11, 'quality-5', 2960783, oldPoints,
+    )
+    store.selectedPointId = 12
+    store.pointDetail = { id: 12, detail_data: [{ name: 'old' }] }
+
+    await store.changeScope({ shadingQuality: 3 })
+
+    expect(store.selectedPointId).toBe(22)
+    expect(store.pointDetail.id).toBe(22)
+    expect(apiMock.gpmHeatmapPoint).toHaveBeenCalledWith(22, expect.any(Object))
+  })
+
+  it('点位没有稳定 point_key 时不按截图 ID 或序号误配', async () => {
+    const store = useGpmHeatmapStore()
+    Object.assign(store.filters, {
+      mapName: 'Village_Dimension_Main', platform: 'Android',
+      shadingQuality: 5, batchId: 'old',
+    })
+    store.frame = frame('Village_Dimension_Main', 31, 'old', 2960783, [
+      { id: 31, index: 1, screenshot_id: '01' },
+      { id: 32, index: 2, screenshot_id: '02' },
+    ])
+    store.selectedPointId = 32
+    apiMock.gpmHeatmapFrame.mockResolvedValue(
+      frame('Village_Dimension_Main', 41, 'new', 2960784, [
+        { id: 41, index: 1, screenshot_id: '01' },
+        { id: 42, index: 2, screenshot_id: '02' },
+      ]),
+    )
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 41, detail_data: [] })
+
+    await store.changeScope({ batchId: 'new' })
+
+    expect(store.selectedPointId).toBe(41)
+    expect(store.pointDetail.id).toBe(41)
+  })
+
+  it('切换平台时不把其他平台的同名 point_key 当成当前点位', async () => {
+    const store = useGpmHeatmapStore()
+    Object.assign(store.filters, {
+      mapName: 'Village_Dimension_Main', platform: 'Android',
+      shadingQuality: 5, batchId: 'android',
+    })
+    store.frame = frame('Village_Dimension_Main', 31, 'android', 2960783, [
+      { id: 31, index: 1, point_key: 'route-1' },
+      { id: 32, index: 2, point_key: 'route-2' },
+    ])
+    store.selectedPointId = 32
+    apiMock.gpmHeatmapFrame.mockResolvedValue(
+      frame('Village_Dimension_Main', 41, 'ios', 2960784, [
+        { id: 41, index: 1, point_key: 'route-1' },
+        { id: 42, index: 2, point_key: 'route-2' },
+      ]),
+    )
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 41, detail_data: [] })
+
+    await store.changeScope({ platform: 'IOS' })
+
+    expect(store.selectedPointId).toBe(41)
   })
 
   it('刷新时忽略当前批次并切换到筛选范围内最新批次', async () => {

@@ -1,19 +1,21 @@
 """GPMHeatmap 地图配置深模块。
 
-唯一外部接口是保存完整地图配置、读取配置目录和解析运行时地图。地图定义、
-标尺绑定和可选图片在一次命令中提交，调用方不需要处理半保存状态。
+模块统一管理地图的自动登记、完整配置保存、删除与运行时解析。地图定义、
+标尺绑定和可选图片由模块保持原子一致，调用方不需要处理半保存状态。
 """
 
 from __future__ import annotations
 
 import io
 import json
+import logging
 import math
 import os
 import sqlite3
 import uuid
 from datetime import datetime
 from pathlib import Path, PurePosixPath
+from typing import Iterable
 
 from fastapi import UploadFile
 from PIL import Image, UnidentifiedImageError
@@ -23,6 +25,7 @@ from .gpm_storage import connect_gpm_database, gpm_assets_dir
 
 
 MAX_MAP_IMAGE_BYTES = 32 * 1024 * 1024
+_LOG = logging.getLogger("pixelcomp")
 
 
 def _now() -> str:
@@ -190,6 +193,53 @@ def _next_map_id(connection: sqlite3.Connection) -> int:
     ).fetchone()[0])
 
 
+def ensure_map_definitions(
+    connection: sqlite3.Connection,
+    map_names: Iterable[str],
+) -> list[str]:
+    """在上报事务中登记尚未出现的地图身份。
+
+    自动登记只创建“待配置”记录：不猜测图片、坐标范围或标尺绑定。
+    当前 schema 要求坐标为正数范围，因此使用不会被运行时解析的 1x1
+    占位范围；只有上传图片后 runtime_map_config 才会返回地图投影配置。
+    调用方必须持有写事务，以保证 ID 分配与上报数据一起提交。
+    """
+
+    normalized_names: list[str] = []
+    seen: set[str] = set()
+    for raw_name in map_names:
+        map_name = require_identifier(raw_name, "map_name")
+        if map_name in seen:
+            continue
+        seen.add(map_name)
+        normalized_names.append(map_name)
+
+    rows = connection.execute(
+        "SELECT map_name, map_id FROM gpm_map_definitions"
+    ).fetchall()
+    existing_names = {row["map_name"] for row in rows}
+    next_map_id = max((int(row["map_id"]) for row in rows), default=-1) + 1
+    created: list[str] = []
+    now = _now()
+    for map_name in normalized_names:
+        if map_name in existing_names:
+            continue
+        connection.execute(
+            """
+            INSERT INTO gpm_map_definitions (
+                map_name, map_id, description, origin_x, origin_y, range_x, range_y,
+                x_reverse, y_reverse, image_path, image_width, image_height,
+                revision, created_at, updated_at
+            ) VALUES (?, ?, ?, 0, 0, 1, 1, 0, 1, NULL, NULL, NULL, 1, ?, ?)
+            """,
+            (map_name, next_map_id, map_name, now, now),
+        )
+        existing_names.add(map_name)
+        created.append(map_name)
+        next_map_id += 1
+    return created
+
+
 def save_map_configuration(
     map_name: str,
     payload: object,
@@ -299,6 +349,71 @@ def save_map_configuration(
             old_file.unlink(missing_ok=True)
         except OSError:
             pass
+    return result
+
+
+def _remove_map_image(image_path: str | None) -> None:
+    if not image_path:
+        return
+    relative = PurePosixPath(image_path)
+    if relative.is_absolute() or ".." in relative.parts:
+        _LOG.warning("忽略不安全的 GPM 地图图片路径: %s", image_path)
+        return
+    assets = gpm_assets_dir().resolve()
+    target = (assets / Path(*relative.parts)).resolve()
+    if target == assets or assets not in target.parents:
+        _LOG.warning("忽略超出 GPM 资源目录的地图图片路径: %s", image_path)
+        return
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        # 数据库删除已经提交；资源清理失败不能伪装成用户操作失败。
+        _LOG.exception("清理 GPM 地图图片失败: %s", target)
+        return
+    try:
+        target.parent.rmdir()
+    except OSError:
+        # 目录中可能还有历史文件，不影响当前图片已被删除。
+        pass
+
+
+def delete_map_configuration(map_name: str, expected_revision: int) -> dict:
+    """删除独立地图配置，保留同 map_name 的历史上报图。"""
+
+    map_name = require_identifier(map_name, "map_name")
+    connection = connect_gpm_database()
+    image_path: str | None = None
+    result: dict
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        current = connection.execute(
+            "SELECT map_id, revision, image_path FROM gpm_map_definitions WHERE map_name = ?",
+            (map_name,),
+        ).fetchone()
+        if not current:
+            raise http_error(404, "GPM_MAP_DEFINITION_NOT_FOUND", "地图配置不存在")
+        if expected_revision != current["revision"]:
+            raise http_error(409, "GPM_MAP_REVISION_CONFLICT", "地图配置已更新，请刷新后重试")
+        image_path = current["image_path"]
+        result = {
+            "deleted": True,
+            "map_name": map_name,
+            "id": current["map_id"],
+            "retained_upload_data": bool(connection.execute(
+                "SELECT 1 FROM gpm_upload_maps WHERE map_name = ? LIMIT 1", (map_name,)
+            ).fetchone()),
+        }
+        # 标尺绑定由外键 ON DELETE CASCADE 原子清理；上报表没有
+        # 指向地图配置的外键，因此历史批次、点位和截图均会保留。
+        connection.execute("DELETE FROM gpm_map_definitions WHERE map_name = ?", (map_name,))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+    _remove_map_image(image_path)
     return result
 
 

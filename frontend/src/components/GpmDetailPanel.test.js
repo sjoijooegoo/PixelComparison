@@ -59,7 +59,7 @@ describe('GpmDetailPanel', () => {
         name: 'ModelUsage',
         children: [
           { name: 'Scene', table_data: table },
-          { name: 'Effect', table_data: table },
+          { name: 'Effect 总DC:3 总面数:3636', table_data: table },
         ],
       }],
     }
@@ -80,7 +80,7 @@ describe('GpmDetailPanel', () => {
           name: 'ModelUsage',
           children: [
             { name: 'Scene', table_data: { ...table, data: [['new-scene']] } },
-            { name: 'Effect', table_data: { ...table, data: [['new-effect']] } },
+            { name: 'Effect 总DC:8 总面数:9240', table_data: { ...table, data: [['new-effect']] } },
           ],
         }],
       },

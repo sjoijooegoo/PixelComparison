@@ -84,7 +84,7 @@ def _configuration_revision_token(connection: sqlite3.Connection) -> str:
         "scale_sets": "SELECT id, name, revision FROM gpm_metric_scale_sets ORDER BY id",
         "scale_set_items": """
             SELECT scale_set_id, metric_key, scale_id
-            FROM gpm_metric_scale_set_items ORDER BY scale_set_id, metric_key
+            FROM gpm_metric_scale_set_items ORDER BY scale_set_id, rowid
         """,
         "maps": """
             SELECT map_name, map_id, revision, image_path
@@ -175,7 +175,7 @@ def _export_payload(connection: sqlite3.Connection) -> tuple[dict, dict, dict, d
         items = [dict(item) for item in connection.execute(
             """
             SELECT metric_key, scale_id FROM gpm_metric_scale_set_items
-            WHERE scale_set_id = ? ORDER BY metric_key
+            WHERE scale_set_id = ? ORDER BY rowid
             """,
             (row["id"],),
         )]
@@ -428,7 +428,7 @@ def _normalize_scale_sets(root: object) -> list[dict]:
         names.add(name)
         result.append({
             "id": set_id, "name": name, "revision": revision,
-            "items": sorted(items, key=lambda item: item["metric_key"]),
+            "items": items,
         })
     return result
 
@@ -649,7 +649,7 @@ def _current_snapshot(connection: sqlite3.Connection) -> dict:
     sets = {}
     for row in connection.execute("SELECT * FROM gpm_metric_scale_sets"):
         items = [dict(item) for item in connection.execute(
-            "SELECT metric_key, scale_id FROM gpm_metric_scale_set_items WHERE scale_set_id = ? ORDER BY metric_key",
+            "SELECT metric_key, scale_id FROM gpm_metric_scale_set_items WHERE scale_set_id = ? ORDER BY rowid",
             (row["id"],),
         )]
         sets[row["id"]] = {

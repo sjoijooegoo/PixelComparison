@@ -25,7 +25,11 @@ def _seed_configuration(client, png):
         "/api/gpm-heatmaps/configuration/scale-sets",
         json={
             "name": "默认标尺集",
-            "items": [{"metric_key": "Scene_DC", "scale_id": scale["id"]}],
+            "items": [
+                {"metric_key": "Scene_Tris", "scale_id": scale["id"]},
+                {"metric_key": "Drawcall", "scale_id": scale["id"]},
+                {"metric_key": "Scene_DC", "scale_id": scale["id"]},
+            ],
         },
     ).json()
     configuration = {
@@ -93,6 +97,10 @@ def test_export_is_readable_and_round_trips_without_changes(client, png_bytes):
     assert set(exported_map["image"]) == {"file"}
     assert exported_map["image"]["file"].startswith("images/")
     assert json.loads(files["map-bindings.json"])["map_bindings"][0]["bindings"]
+    exported_items = json.loads(files["scale-sets.json"])["scale_sets"][0]["items"]
+    assert [item["metric_key"] for item in exported_items] == [
+        "Scene_Tris", "Drawcall", "Scene_DC",
+    ]
 
     inspected = _inspect(client, exported.content)
     assert inspected.status_code == 200, inspected.text
@@ -109,6 +117,9 @@ def test_export_is_readable_and_round_trips_without_changes(client, png_bytes):
     catalog = client.get("/api/gpm-heatmaps/configuration").json()
     assert catalog["metric_scales"][0]["revision"] == 1
     assert catalog["scale_sets"][0]["revision"] == 1
+    assert [item["metric_key"] for item in catalog["scale_sets"][0]["items"]] == [
+        "Scene_Tris", "Drawcall", "Scene_DC",
+    ]
     assert catalog["maps"][0]["revision"] == 1
 
 

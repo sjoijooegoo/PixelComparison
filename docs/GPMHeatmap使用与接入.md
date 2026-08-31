@@ -8,7 +8,7 @@ GPMHeatmap 是与截图对比、截图/烘培批次完全隔离的点位热力�
 
 工作区按平台、地图名称、画质、采集批次筛选。地图选项来自地图配置并按只读数字 ID 升序排列；没有采集数据的地图仍保留，空数据作用域只展示普通空状态，不清空平台、地图或画质选项。切换平台、地图或画质时，以当前 P4 为锚点选择最接近的批次；刷新页面则选择当前范围内最新批次。
 
-地图点位、详情树、横向截图和数据趋势共享当前点位。趋势支持整体平均或稳定 `point_key` 对应的单点趋势，时间范围固定为 7、14、30 天，默认整体平均和 14 天。
+地图点位、详情树、横向截图和数据趋势共享当前点位。同一地图和平台内切换批次或画质时，仅用稳定 `point_key` 恢复逻辑点；没有稳定 Key 时回到新帧首点，切换地图或平台也不继承点位。趋势支持整体平均或稳定 `point_key` 对应的单点趋势，时间范围固定为 7、14、30 天，默认整体平均和 14 天。
 
 ## 2. 存储与生命周期
 
@@ -70,6 +70,8 @@ GPMHeatmap 仍处于 Demo 阶段，只存在一份最终 schema，不提供历�
 
 报告中每个 `data[]` 必须直接提供且保持一致的 `p4_version`、`platform` 和 `shading_quality`，必须提供唯一地图名称和 `detail[]`。地图名称优先读取 `map_name`；仅缺少 `map_name` 时允许用 `pic_name` 作为字段别名，两者同时存在则值必须一致。仍不接受顶层同名表单字段或 `teleport_point_id` 点位回退。平台只支持 `IOS`、`Android`、`Windows`，画质为 0～5，P4 为非负整数。
 
+上报中的未知 `map_name` 会在同一数据库事务内自动登记为待配置地图，按现有最大地图 ID 继续分配；上报失败时登记也会回滚。自动登记不猜测图片、坐标或标尺，需在设置页补充后才会产生地图投影。
+
 每个点位必须包含非负整数 `index`、`screenshot_id`、二维以上 `position` 和 `direction`。`heat_map_data`、`trend_data` 为对象，`detail_data` 为数组；需要单点跨批次趋势时应提供同地图内唯一且稳定的 `point_key`。报告 JSON 最多嵌套 32 层，单次上报最多 5,000 个点位。
 
 ZIP 图片主文件名必须与 `screenshot_id` 精确对应，例如 `screenshot_id=8` 对应 `8.png`。压缩包最大 1 GiB、解压后最大 4 GiB，单张图片最多 4,000 万像素。少图、多图、重复图、不安全路径或不可解码图片都会让整次上报失败，不产生部分数据。
@@ -89,6 +91,8 @@ curl.exe -X POST "http://127.0.0.1:8020/api/gpm-heatmaps/uploads" `
 设置页分为地图配置、指标标尺集、指标标尺库三个组件。地图和两类标尺分别从 ID 0 开始按 ID 排序，引用关系使用数据库外键 ID；修改名称不会断开关系。
 
 地图名称必须与上报 `map_name` 完全一致。地图编辑器一次提交描述、坐标起点、X/Y 范围、轴反转、全部平台/画质标尺绑定和可选新图片。定义、绑定和图片切换由一个后端命令处理，不存在前端分三次保存的半完成状态；替换图片成功后会清理旧图片文件。
+
+地图列表可以删除独立配置。删除使用 revision 防止旧页面覆盖新配置，并清理当前底图和全部标尺绑定；同名历史 GPM 批次、点位和截图不随配置删除，后续再次上报同名地图会重新生成待配置项。
 
 指标标尺只保存名称和 2～10 个 `{color, expression}` 段。表达式支持 `<`、`<=`、`>`、`>=` 和 `&`，必须无重叠、无断档地覆盖完整数轴。标尺集由用户自行维护任意“上报 Key → 标尺”映射，不从历史数据推断固定指标。
 
@@ -138,6 +142,7 @@ images/
 | `POST /api/gpm-heatmaps/configuration/imports/inspect` | 只读检查并暂存候选配置包 |
 | `POST /api/gpm-heatmaps/configuration/imports/{import_id}/apply` | 原子安全合并已检查的配置包 |
 | `PUT /api/gpm-heatmaps/configuration/maps/{map_name}` | 原子保存完整地图配置 |
+| `DELETE /api/gpm-heatmaps/configuration/maps/{map_name}?expected_revision=...` | 删除地图图片、坐标配置和绑定，保留历史上报数据 |
 | `GET /api/gpm-heatmaps/configuration/maps/{map_name}/preview` | 最近点位坐标预览 |
 | `POST/PUT/DELETE /api/gpm-heatmaps/configuration/scales[/{id}]` | 指标标尺命令 |
 | `POST/PUT/DELETE /api/gpm-heatmaps/configuration/scale-sets[/{id}]` | 指标标尺集命令 |

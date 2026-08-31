@@ -10,6 +10,7 @@ const apiMock = vi.hoisted(() => ({
   updateGpmMetricScaleSet: vi.fn(),
   deleteGpmMetricScaleSet: vi.fn(),
   saveGpmMapConfiguration: vi.fn(),
+  deleteGpmMapConfiguration: vi.fn(),
 }))
 
 vi.mock('../api', () => ({ api: apiMock }))
@@ -38,6 +39,9 @@ describe('gpmScaleConfigStore', () => {
     apiMock.createGpmMetricScaleSet.mockResolvedValue({ id: 2 })
     apiMock.updateGpmMetricScaleSet.mockResolvedValue({ id: 0 })
     apiMock.saveGpmMapConfiguration.mockResolvedValue({ map_name: 'Village_Dimension_Main' })
+    apiMock.deleteGpmMapConfiguration.mockResolvedValue({
+      deleted: true, map_name: 'Village_Dimension_Main', id: 0,
+    })
   })
 
   it('用一个原子请求保存地图定义、标尺绑定和图片', async () => {
@@ -110,6 +114,21 @@ describe('gpmScaleConfigStore', () => {
       image: null,
     })).rejects.toThrow('地图保存失败')
     expect(apiMock.gpmScaleCatalog).not.toHaveBeenCalled()
+    expect(store.saving).toBe(false)
+  })
+
+  it('删除地图配置时携带修订号并立即从本地目录移除', async () => {
+    const store = useGpmScaleConfigStore()
+    store.catalog.maps = [{
+      id: 0, map_name: 'Village_Dimension_Main', revision: 3,
+    }]
+
+    await store.removeMapConfiguration('Village_Dimension_Main', 3)
+
+    expect(apiMock.deleteGpmMapConfiguration)
+      .toHaveBeenCalledWith('Village_Dimension_Main', 3)
+    expect(store.catalog.maps).toEqual([])
+    expect(apiMock.gpmScaleCatalog).toHaveBeenCalledOnce()
     expect(store.saving).toBe(false)
   })
 

@@ -144,7 +144,9 @@ def _scale_set_items(connection: sqlite3.Connection, scale_set_id: int) -> list[
         FROM gpm_metric_scale_set_items i
         JOIN gpm_metric_scales s ON s.id = i.scale_id
         WHERE i.scale_set_id = ?
-        ORDER BY i.metric_key
+        -- 条目表按用户提交顺序整组重建，rowid 是当前最终 schema 中的
+        -- 顺序载体；普通读写和配置包导入导出必须统一按它读取。
+        ORDER BY i.rowid
         """,
         (scale_set_id,),
     )]
@@ -211,7 +213,7 @@ def _catalog(connection: sqlite3.Connection) -> dict:
         SELECT i.scale_set_id, i.metric_key, i.scale_id, s.name AS scale_name
         FROM gpm_metric_scale_set_items i
         JOIN gpm_metric_scales s ON s.id = i.scale_id
-        ORDER BY i.scale_set_id, i.metric_key
+        ORDER BY i.scale_set_id, i.rowid
         """
     ):
         items_by_set.setdefault(item["scale_set_id"], []).append({

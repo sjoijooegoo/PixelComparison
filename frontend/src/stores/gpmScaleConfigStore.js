@@ -40,7 +40,9 @@ export const useGpmScaleConfigStore = defineStore('gpmScaleConfig', {
       }
     },
 
-    async mutate(request, reconcile) {
+    async mutate(request, reconcile, messages = {}) {
+      const committedMessage = messages.committed || '配置已保存'
+      const failedMessage = messages.failed || '颜色标尺配置保存失败'
       this.catalogSequence += 1
       this.loading = false
       this.saving = true
@@ -53,11 +55,11 @@ export const useGpmScaleConfigStore = defineStore('gpmScaleConfig', {
         } catch (error) {
           // 命令已在后端提交，不能因随后的目录刷新失败而误报“保存失败”。
           // 先保留局部合并后的服务器返回值，用户可继续操作或手动刷新。
-          this.error = `配置已保存，但列表刷新失败：${error?.message || '请稍后重试'}`
+          this.error = `${committedMessage}，但列表刷新失败：${error?.message || '请稍后重试'}`
         }
         return result
       } catch (error) {
-        this.error = error?.message || '颜色标尺配置保存失败'
+        this.error = error?.message || failedMessage
         throw error
       } finally {
         this.saving = false
@@ -128,6 +130,17 @@ export const useGpmScaleConfigStore = defineStore('gpmScaleConfig', {
         this.saving = false
         this.uploadingMap = ''
       }
+    },
+
+    removeMapConfiguration(mapName, expectedRevision) {
+      return this.mutate(
+        () => api.deleteGpmMapConfiguration(mapName, expectedRevision),
+        () => {
+          this.catalog.maps = (this.catalog.maps || [])
+            .filter((item) => item.map_name !== mapName)
+        },
+        { committed: '地图配置已删除', failed: '地图配置删除失败' },
+      )
     },
   },
 })

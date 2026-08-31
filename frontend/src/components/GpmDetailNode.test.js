@@ -136,4 +136,34 @@ describe('GpmDetailNode', () => {
     expect(wrapper.findAll('.page-number')).toHaveLength(5)
     expect(wrapper.find('.row-limit').exists()).toBe(false)
   })
+
+  it('将完整的 HTTP 和 HTTPS 数据渲染为安全的新窗口链接', () => {
+    const wrapper = mount(GpmDetailNode, {
+      props: {
+        expanded: true,
+        node: {
+          name: '源数据',
+          table_data: {
+            cols: [{ key: 'source', name: '源数据' }],
+            data: [
+              ['http://example.com/report.csv'],
+              ['https://example.com/task/1'],
+              ['ftp://example.com/file.csv'],
+              ['javascript:alert(1)'],
+            ],
+          },
+        },
+      },
+    })
+
+    const links = wrapper.findAll('.detail-link')
+    expect(links.map((link) => link.text())).toEqual([
+      'http://example.com/report.csv',
+      'https://example.com/task/1',
+    ])
+    expect(links.every((link) => link.attributes('target') === '_blank')).toBe(true)
+    expect(links.every((link) => link.attributes('rel') === 'noopener noreferrer')).toBe(true)
+    expect(wrapper.text()).toContain('ftp://example.com/file.csv')
+    expect(wrapper.text()).toContain('javascript:alert(1)')
+  })
 })

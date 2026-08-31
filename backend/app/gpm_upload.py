@@ -20,6 +20,7 @@ from PIL import Image, UnidentifiedImageError
 from .gpm_common import (
     IMAGE_SUFFIXES, http_error, require_identifier, require_platform, safe_segment,
 )
+from .gpm_map_config import ensure_map_definitions
 from .gpm_storage import connect_gpm_database, gpm_assets_dir
 from .gpm_retention import (
     GPM_DATA_RETENTION_DAYS,
@@ -280,6 +281,7 @@ def _insert_upload_graph(
     shading_quality: int,
     source_sha256: str,
 ) -> int:
+    ensure_map_definitions(connection, (str(item["map_name"]) for item in maps))
     cursor = connection.execute(
         """
         INSERT INTO gpm_uploads (

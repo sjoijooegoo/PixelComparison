@@ -39,6 +39,11 @@ const pointsById = computed(() => new Map(
 ))
 const hoveredPoint = computed(() => pointsById.value.get(String(hoveredPointId.value)))
 const hoveredValue = computed(() => hoveredPoint.value?.heat_map_data?.[props.metricKey])
+const hoveredValueColor = computed(() => resolvedHeatColor(
+  hoveredValue.value,
+  activeScale.value,
+  valueRange.value,
+))
 
 function samePointId(left, right) {
   return left !== null && left !== undefined
@@ -302,7 +307,7 @@ onBeforeUnmount(() => observer?.disconnect())
         </div>
         <div class="tooltip-metric">
           <span>{{ metric?.name || metricKey }}</span>
-          <strong>{{ formatValue(hoveredValue) }}</strong>
+          <strong :style="{ color: hoveredValueColor }">{{ formatValue(hoveredValue) }}</strong>
         </div>
       </div>
     </div>

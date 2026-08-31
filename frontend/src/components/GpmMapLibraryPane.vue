@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 
 const props = defineProps({ maps: { type: Array, default: () => [] } })
-const emit = defineEmits(['create', 'edit'])
+const emit = defineEmits(['create', 'edit', 'delete'])
 const search = ref('')
 const filteredMaps = computed(() => {
   const query = search.value.trim().toLocaleLowerCase()
@@ -30,7 +30,10 @@ const filteredMaps = computed(() => {
             <td><strong :title="map.map_name">{{ map.map_name }}</strong></td>
             <td><span class="status" :class="{ configured: map.image }">{{ map.image ? '已上传' : '未上传' }}</span></td>
             <td><span class="status" :class="{ configured: map.bindings?.length }">{{ map.bindings?.length ? '已配置' : '未配置' }}</span></td>
-            <td class="action-cell"><a-button size="mini" type="text" @click="emit('edit', map)">配置</a-button></td>
+            <td class="action-cell">
+              <a-button size="mini" type="text" @click="emit('edit', map)">配置</a-button>
+              <a-button size="mini" type="text" status="danger" @click="emit('delete', map)">删除</a-button>
+            </td>
           </tr>
           <tr v-if="!filteredMaps.length"><td colspan="5" class="empty-cell">暂无地图</td></tr>
         </tbody>
@@ -54,13 +57,18 @@ th { background: var(--color-fill-2); color: var(--color-text-2); font-size: 11p
 td { color: var(--color-text-2); font-size: 12px; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover td { background: color-mix(in srgb, var(--color-fill-2) 45%, transparent); }
-strong { display: block; overflow: hidden; color: var(--color-text-1); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+strong {
+  display: block; overflow: hidden; margin-bottom: -2px; padding-bottom: 2px;
+  color: var(--color-text-1); font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-weight: 500; line-height: 18px; text-overflow: ellipsis; white-space: nowrap;
+}
 .map-table th:nth-child(1), .map-table td:nth-child(1) { width: 38px; }
 .map-table th:nth-child(3), .map-table td:nth-child(3), .map-table th:nth-child(4), .map-table td:nth-child(4) { width: 62px; }
-.map-table th:last-child, .map-table td:last-child { width: 50px; }
+.map-table th:last-child, .map-table td:last-child { width: 82px; }
 .numeric-cell { color: var(--color-text-3); font-variant-numeric: tabular-nums; }
 .action-cell { white-space: nowrap; }
 .action-cell :deep(.arco-btn) { padding: 0 4px; }
+.action-cell :deep(.arco-btn + .arco-btn) { margin-left: 6px; }
 .status { color: var(--color-text-4); font-size: 11px; white-space: nowrap; }
 .status.configured { color: rgb(var(--green-6)); }
 .empty-cell { height: 160px !important; color: var(--color-text-4) !important; text-align: center !important; }

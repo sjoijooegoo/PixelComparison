@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 
 import GpmDetailPanel from '../components/GpmDetailPanel.vue'
@@ -18,7 +18,22 @@ let unregisterRefresh = null
 let applyingRoute = false
 let routeSequence = 0
 let synchronizedRoutePath = ''
+let pageActive = false
 const hoveredTrendPointKey = ref('')
+const screenshotStrip = ref(null)
+
+const isHeatmapPath = (path) => path === '/gpm-heatmap' || path.startsWith('/gpm-heatmap/')
+const ownsCurrentRoute = () => pageActive && isHeatmapPath(route.path)
+
+function deactivatePage() {
+  if (!pageActive) return
+  pageActive = false
+  routeSequence += 1
+  synchronizedRoutePath = ''
+  unregisterRefresh?.()
+  unregisterRefresh = null
+  store.dispose()
+}
 
 const routeMapName = () => {
   const value = route.params.mapName
@@ -65,6 +80,7 @@ function sameLocation(target) {
 }
 
 async function syncRoute() {
+  if (!ownsCurrentRoute()) return
   const target = normalizedLocation()
   const targetPath = router.resolve(target).fullPath
   if (sameLocation(target)) {
@@ -84,15 +100,18 @@ async function syncRoute() {
 }
 
 async function applyCurrentRoute({ preferLatest = false } = {}) {
+  if (!ownsCurrentRoute()) return
   const sequence = ++routeSequence
   try {
     const requested = routeRequest()
     if (preferLatest) requested.batchId = ''
     await store.applyRoute(requested)
-    if (sequence !== routeSequence) return
+    if (sequence !== routeSequence || !ownsCurrentRoute()) return
     await syncRoute()
   } catch (error) {
-    if (sequence === routeSequence) Message.error(error?.message || 'GPMHeatmap 页面加载失败')
+    if (sequence === routeSequence && ownsCurrentRoute()) {
+      Message.error(error?.message || 'GPMHeatmap 页面加载失败')
+    }
   }
 }
 
@@ -114,6 +133,13 @@ async function selectPoint(pointId) {
   } catch (error) {
     Message.error(error?.message || '点位数据加载失败')
   }
+}
+
+async function selectMapPoint(pointId) {
+  // 选中点位没变时 store 会复用已有详情，但地图的重复点击
+  // 仍然应当是一次显式的截图定位请求。
+  screenshotStrip.value?.revealPoint(pointId)
+  await selectPoint(pointId)
 }
 
 async function changeDays(days) {
@@ -170,6 +196,11 @@ const activeMetric = computed(() => store.frame?.heat_map?.find(
 ) || null)
 
 watch(() => route.fullPath, () => {
+  if (!ownsCurrentRoute()) {
+    routeSequence += 1
+    synchronizedRoutePath = ''
+    return
+  }
   if (route.fullPath === synchronizedRoutePath) {
     synchronizedRoutePath = ''
     return
@@ -179,12 +210,16 @@ watch(() => route.fullPath, () => {
 })
 
 onMounted(() => {
+  pageActive = true
   unregisterRefresh = registerPageRefresh(refresh)
   applyCurrentRoute({ preferLatest: true })
 })
+onBeforeRouteLeave(() => {
+  // 离开守卫早于异步目标组件解析完成，立即使当前页的请求和路由写入失效。
+  deactivatePage()
+})
 onBeforeUnmount(() => {
-  unregisterRefresh?.()
-  store.dispose()
+  deactivatePage()
 })
 </script>
 
@@ -259,13 +294,14 @@ onBeforeUnmount(() => {
         <section class="workspace-grid">
           <GpmMapCanvas :frame="store.frame" :metric-key="store.metricKey"
             :selected-point-id="store.selectedPointId"
-            @metric="store.metricKey = $event; syncRoute()" @select="selectPoint" />
+            @metric="store.metricKey = $event; syncRoute()" @select="selectMapPoint" />
           <GpmDetailPanel :point="store.pointDetail" :summary-point="store.selectedPoint"
             :metric-key="store.metricKey" :metric-name="activeMetric?.name"
             :loading="store.loading.detail" :error="store.errors.detail" />
         </section>
 
-        <GpmScreenshotStrip :points="store.frame.points" :selected-point-id="store.selectedPointId"
+        <GpmScreenshotStrip ref="screenshotStrip" :points="store.frame.points"
+          :selected-point-id="store.selectedPointId"
           @select="selectPoint" />
       </section>
 

@@ -54,6 +54,20 @@ describe('GpmScreenshotStrip', () => {
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
   })
 
+  it('外部重复点击已选点位时仍可主动重新定位', () => {
+    const wrapper = mountStrip()
+    const strip = wrapper.find('.shot-strip').element
+    const first = wrapper.findAll('.shot')[0].element
+    Object.defineProperty(strip, 'clientWidth', { configurable: true, value: 300 })
+    Object.defineProperty(first, 'offsetLeft', { configurable: true, value: 600 })
+    Object.defineProperty(first, 'offsetWidth', { configurable: true, value: 280 })
+    strip.scrollLeft = 0
+
+    wrapper.vm.revealPoint(11)
+
+    expect(strip.scrollLeft).toBe(590)
+  })
+
   it('截图条内部点击切换点位时不自动回正滚动位置', async () => {
     const wrapper = mountStrip()
     await wrapper.findAll('.shot')[1].trigger('click')

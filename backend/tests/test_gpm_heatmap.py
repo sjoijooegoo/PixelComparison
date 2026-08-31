@@ -6,8 +6,10 @@ import zipfile
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
-from app.gpm_common import safe_segment
+import pytest
 from PIL import Image
+
+from app.gpm_common import safe_segment
 
 
 SEGMENTS = [
@@ -23,7 +25,8 @@ def _captured_at(*, days_ago=0, hours_ago=0):
     """Keep retention-sensitive tests stable as wall-clock time advances."""
 
     return (
-        datetime.now(timezone.utc) - timedelta(days=days_ago, hours=hours_ago)
+        datetime(2026, 8, 29, tzinfo=timezone.utc)
+        - timedelta(days=days_ago, hours=hours_ago)
     ).isoformat(timespec="seconds")
 
 
@@ -136,6 +139,34 @@ def _create_scale_set(client, scale_id, name="村庄标尺集"):
     )
 
 
+def test_scale_set_keys_keep_their_submitted_order(client):
+    scale = _create_scale(client, name="顺序测试标尺")
+    assert scale.status_code == 201, scale.text
+    items = [
+        {"metric_key": "Scene_Tris", "scale_id": scale.json()["id"]},
+        {"metric_key": "Drawcall", "scale_id": scale.json()["id"]},
+        {"metric_key": "Scene_DC", "scale_id": scale.json()["id"]},
+    ]
+
+    created = client.post(
+        "/api/gpm-heatmaps/configuration/scale-sets",
+        json={"name": "保持添加顺序", "items": items},
+    )
+    assert created.status_code == 201, created.text
+    assert [item["metric_key"] for item in created.json()["items"]] == [
+        "Scene_Tris", "Drawcall", "Scene_DC",
+    ]
+
+    catalog = client.get("/api/gpm-heatmaps/configuration")
+    assert catalog.status_code == 200, catalog.text
+    restored = next(
+        item for item in catalog.json()["scale_sets"] if item["id"] == created.json()["id"]
+    )
+    assert [item["metric_key"] for item in restored["items"]] == [
+        "Scene_Tris", "Drawcall", "Scene_DC",
+    ]
+
+
 def test_safe_asset_segments_do_not_collapse_identifiers():
     assert safe_segment("batch", "fallback") == "batch"
     assert safe_segment(".batch", "fallback") != "batch"
@@ -145,7 +176,7 @@ def test_safe_asset_segments_do_not_collapse_identifiers():
 def test_canonical_upload_frame_detail_and_assets(client, png_bytes):
     uploaded = _upload(client, png_bytes())
     assert uploaded.status_code == 201, uploaded.text
-    saved_map = _save_map(client, image=png_bytes(size=(775, 777)))
+    saved_map = _save_map(client, image=png_bytes(size=(775, 777)), revision=1)
     assert saved_map.status_code == 200, saved_map.text
     assert saved_map.json()["id"] == 0
 
@@ -334,6 +365,121 @@ def test_delete_isolated_gpm_batch(client, png_bytes):
     deleted = client.delete("/api/gpm-heatmaps/uploads/delete-me?branch_tag=main")
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
+    assert client.get("/api/gpm-heatmaps/uploads").json()["total"] == 0
+
+
+def test_unknown_upload_registers_map_and_configuration_delete_keeps_data(client, png_bytes):
+    uploaded = _upload(
+        client,
+        png_bytes(),
+        report=_report(map_name="Forest_WP"),
+    )
+    assert uploaded.status_code == 201, uploaded.text
+
+    catalog = client.get("/api/gpm-heatmaps/configuration").json()
+    assert catalog["maps"] == [{
+        "id": 0,
+        "map_name": "Forest_WP",
+        "description": "Forest_WP",
+        "origin": [0.0, 0.0],
+        "range": [1.0, 1.0],
+        "x_reverse": False,
+        "y_reverse": True,
+        "revision": 1,
+        "image": None,
+        "bindings": [],
+        "created_at": catalog["maps"][0]["created_at"],
+        "updated_at": catalog["maps"][0]["updated_at"],
+    }]
+    filters = client.get("/api/gpm-heatmaps/catalog").json()
+    assert [(item["value"], item["has_data"]) for item in filters["maps"]] == [
+        ("Forest_WP", True),
+    ]
+
+    scale = _create_scale(client)
+    scale_set = _create_scale_set(client, scale.json()["id"])
+    configured = _save_map(
+        client,
+        map_name="Forest_WP",
+        image=png_bytes(),
+        revision=1,
+        bindings=[{
+            "platform": "Android",
+            "shading_quality": 5,
+            "scale_set_id": scale_set.json()["id"],
+        }],
+    )
+    assert configured.status_code == 200, configured.text
+    image_url = configured.json()["image"]["url"]
+    assert client.get(image_url).status_code == 200
+
+    stale = client.delete(
+        "/api/gpm-heatmaps/configuration/maps/Forest_WP?expected_revision=1"
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "GPM_MAP_REVISION_CONFLICT"
+
+    deleted = client.delete(
+        f"/api/gpm-heatmaps/configuration/maps/Forest_WP"
+        f"?expected_revision={configured.json()['revision']}"
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json() == {
+        "deleted": True,
+        "map_name": "Forest_WP",
+        "id": 0,
+        "retained_upload_data": True,
+    }
+    assert client.get("/api/gpm-heatmaps/configuration").json()["maps"] == []
+    assert client.get("/api/gpm-heatmaps/uploads").json()["total"] == 1
+    assert client.get(image_url).status_code == 404
+
+    frame = client.get(
+        "/api/gpm-heatmaps/maps/Forest_WP/frame",
+        params={"platform": "Android", "shading_quality": 5},
+    )
+    assert frame.status_code == 200, frame.text
+    assert frame.json()["map_config"] is None
+
+    repeated = client.delete(
+        "/api/gpm-heatmaps/configuration/maps/Forest_WP?expected_revision=1"
+    )
+    assert repeated.status_code == 404
+
+    rediscovered = _upload(
+        client,
+        png_bytes(),
+        batch_id="gpm-2",
+        report=_report(map_name="Forest_WP"),
+    )
+    assert rediscovered.status_code == 201, rediscovered.text
+    restored = client.get("/api/gpm-heatmaps/configuration").json()["maps"]
+    assert [(item["id"], item["map_name"], item["revision"]) for item in restored] == [
+        (0, "Forest_WP", 1),
+    ]
+    assert restored[0]["bindings"] == []
+
+
+def test_unknown_map_registration_rolls_back_when_upload_graph_fails(
+    client, png_bytes, monkeypatch,
+):
+    import app.gpm_upload as gpm_upload
+
+    insert_upload_graph = gpm_upload._insert_upload_graph
+
+    def fail_after_insert(*args, **kwargs):
+        insert_upload_graph(*args, **kwargs)
+        raise RuntimeError("force transaction rollback")
+
+    monkeypatch.setattr(gpm_upload, "_insert_upload_graph", fail_after_insert)
+    with pytest.raises(RuntimeError, match="force transaction rollback"):
+        _upload(
+            client,
+            png_bytes(),
+            report=_report(map_name="Transient_WP"),
+        )
+
+    assert client.get("/api/gpm-heatmaps/configuration").json()["maps"] == []
     assert client.get("/api/gpm-heatmaps/uploads").json()["total"] == 0
 
 

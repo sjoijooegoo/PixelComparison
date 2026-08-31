@@ -106,6 +106,22 @@ function isEmptyValue(value) {
   return value === null || value === undefined || value === ''
 }
 
+function cellValue(row, column, columnIndex) {
+  return Array.isArray(row) ? row[columnIndex] : row?.[column.key]
+}
+
+function externalLink(value) {
+  if (typeof value !== 'string') return ''
+  const candidate = value.trim()
+  if (!candidate) return ''
+  try {
+    const protocol = new URL(candidate).protocol
+    return protocol === 'http:' || protocol === 'https:' ? candidate : ''
+  } catch {
+    return ''
+  }
+}
+
 function toggleSort(columnIndex) {
   currentPage.value = 1
   if (sortColumnIndex.value === columnIndex) {
@@ -169,7 +185,12 @@ function goToPage(page) {
             <tr v-for="(row, rowIndex) in pagedRows"
               :key="`${currentPage}-${rowIndex}`">
               <td v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex">
-                {{ Array.isArray(row) ? row[columnIndex] : row?.[column.key] }}
+                <a v-if="externalLink(cellValue(row, column, columnIndex))" class="detail-link"
+                  :href="externalLink(cellValue(row, column, columnIndex))"
+                  target="_blank" rel="noopener noreferrer">
+                  {{ cellValue(row, column, columnIndex) }}
+                </a>
+                <template v-else>{{ cellValue(row, column, columnIndex) }}</template>
               </td>
             </tr>
           </tbody>
@@ -246,6 +267,11 @@ td {
   padding: 7px 9px; color: var(--color-text-2); background: var(--detail-table-cell-bg);
   font-variant-numeric: tabular-nums;
 }
+.detail-link {
+  color: rgb(var(--arcoblue-5)); text-decoration: none; overflow-wrap: anywhere;
+}
+.detail-link:hover { color: rgb(var(--arcoblue-4)); text-decoration: underline; }
+.detail-link:focus-visible { outline: 1px solid rgb(var(--arcoblue-5)); outline-offset: 2px; }
 .table-sort {
   width: 100%; min-height: 32px; padding: 7px 9px; border: 0; display: flex;
   align-items: center; justify-content: space-between; gap: 8px; color: inherit;

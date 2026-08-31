@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
 
 import { api } from '../api'
@@ -249,11 +249,29 @@ function deleteScaleSet(scaleSet) {
   })
 }
 
+function deleteMap(map) {
+  Modal.confirm({
+    title: `删除“${map.map_name}”`,
+    content: '将删除地图图片、坐标配置和标尺绑定；历史批次、点位和截图保留。以后再次上报同名地图时，会重新生成待配置项。',
+    okText: '删除',
+    cancelText: '取消',
+    onOk: async () => {
+      try {
+        await store.removeMapConfiguration(map.map_name, map.revision)
+        Message.success('地图配置已删除')
+      } catch (error) {
+        showError(error, '地图配置删除失败')
+      }
+    },
+  })
+}
+
 // 地图定义、图片、坐标预览与标尺绑定编辑器
 const mapEditorOpen = ref(false)
 const mapEditorIntent = ref('create')
 const selectedMapName = ref('')
 const mapImageInput = ref(null)
+const mapBindingList = ref(null)
 const pendingMapImage = ref(null)
 const mapPreview = ref({ source: null, points: [], point_count: 0 })
 const mapPreviewLoading = ref(false)
@@ -421,6 +439,11 @@ function addMapBinding() {
     shading_qualities: [],
     scale_set_id: null,
   })
+  nextTick(() => {
+    if (mapBindingList.value) {
+      mapBindingList.value.scrollTop = mapBindingList.value.scrollHeight
+    }
+  })
 }
 
 function removeMapBinding(index) {
@@ -513,7 +536,8 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else class="library-layout">
-        <GpmMapLibraryPane :maps="maps" @create="openMapEditor()" @edit="openMapEditor" />
+        <GpmMapLibraryPane :maps="maps" @create="openMapEditor()" @edit="openMapEditor"
+          @delete="deleteMap" />
         <GpmScaleSetLibraryPane :items="sortedScaleSets" :can-create="Boolean(metricScales.length)"
           @create="openScaleSetEditor()" @copy="openScaleSetEditor($event, 'copy')"
           @edit="openScaleSetEditor($event, 'edit')" @delete="deleteScaleSet" />
@@ -524,10 +548,10 @@ onBeforeUnmount(() => {
     </section>
 
     <a-modal :visible="scaleEditorOpen" :footer="false" :closable="!store.saving"
-      :mask-closable="false" width="840px" modal-class="gpm-editor-modal"
+      :mask-closable="!store.saving" width="840px" modal-class="gpm-editor-modal"
       @cancel="closeScaleEditor">
       <template #title>{{ scaleEditorTitle }}</template>
-      <div class="modal-editor-body">
+      <div class="modal-editor-body contained-list-editor-body">
         <label class="field-label">名称</label>
         <a-input v-model="scaleForm.name" :max-length="100" placeholder="输入标尺名称" />
 
@@ -557,10 +581,10 @@ onBeforeUnmount(() => {
     </a-modal>
 
     <a-modal :visible="scaleSetEditorOpen" :footer="false" :closable="!store.saving"
-      :mask-closable="false" width="820px" modal-class="gpm-editor-modal"
+      :mask-closable="!store.saving" width="820px" modal-class="gpm-editor-modal"
       @cancel="closeScaleSetEditor">
       <template #title>{{ scaleSetEditorTitle }}</template>
-      <div class="modal-editor-body">
+      <div class="modal-editor-body contained-list-editor-body">
         <label class="field-label">名称</label>
         <a-input v-model="scaleSetForm.name" :max-length="100" placeholder="输入标尺集名称" />
 
@@ -588,7 +612,7 @@ onBeforeUnmount(() => {
     </a-modal>
 
     <a-modal :visible="mapEditorOpen" :footer="false" :closable="!store.saving"
-      :mask-closable="false" width="1180px" modal-class="gpm-editor-modal map-config-modal"
+      :mask-closable="!store.saving" width="1180px" modal-class="gpm-editor-modal map-config-modal"
       @cancel="closeMapEditor">
       <template #title>{{ mapEditorTitle }}</template>
       <div class="modal-editor-body map-config-editor">
@@ -654,7 +678,7 @@ onBeforeUnmount(() => {
             <div v-if="mapForm.bindings.length" class="map-binding-head">
               <span>平台</span><span>画质</span><span>指标标尺集</span><span></span>
             </div>
-            <div class="map-binding-list">
+            <div v-if="mapForm.bindings.length" ref="mapBindingList" class="map-binding-list">
               <div v-for="(binding, index) in mapForm.bindings" :key="binding.key" class="map-binding-row">
                 <a-select v-model="binding.platforms" :options="platformOptions" multiple allow-search
                   size="small" placeholder="选择平台" />
@@ -665,7 +689,7 @@ onBeforeUnmount(() => {
                 <a-button size="mini" type="text" status="danger" @click="removeMapBinding(index)">删除</a-button>
               </div>
             </div>
-            <div v-if="!mapForm.bindings.length" class="map-binding-empty">
+            <div v-else class="map-binding-empty">
               暂无配置，热力图将使用动态线性着色
             </div>
           </section>
@@ -711,6 +735,12 @@ onBeforeUnmount(() => {
   align-items: center; gap: 8px;
 }
 .set-item-head { padding: 0 8px 4px; color: var(--color-text-4); font-size: 10px; }
+.contained-list-editor-body { max-height: none; overflow: hidden; }
+.contained-list-editor-body .segment-list,
+.contained-list-editor-body .set-item-list {
+  max-height: min(42vh, 420px); padding-right: 4px; overflow-x: hidden; overflow-y: auto;
+  overscroll-behavior: contain; scrollbar-gutter: stable; align-content: start;
+}
 .set-item-row { min-height: 42px; padding: 5px 7px; border: 1px solid var(--color-border-1); border-radius: 4px; background: var(--color-fill-1); }
 .set-scale-preview { width: 112px; }
 .preview-placeholder { color: var(--color-text-4); text-align: center; }
@@ -724,14 +754,24 @@ onBeforeUnmount(() => {
   align-items: center; gap: 8px;
 }
 .map-binding-head { padding: 0 8px 5px; color: var(--color-text-4); font-size: 10px; }
-.map-binding-list { display: grid; gap: 6px; }
+.map-binding-list {
+  flex: 1; min-height: 0; padding-right: 3px; display: flex; flex-direction: column; gap: 6px;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
+}
 .map-binding-row {
-  min-height: 44px; padding: 6px 7px; border: 1px solid var(--color-border-1);
+  flex: 0 0 auto; min-height: 44px; height: auto; padding: 6px 7px;
+  align-items: start; border: 1px solid var(--color-border-1);
   border-radius: 4px; background: var(--color-fill-1);
 }
+.map-binding-row :deep(.arco-select-view) { min-width: 0; }
+.map-binding-row :deep(.arco-select-view-multiple) { height: auto; min-height: 28px; }
+.map-binding-row :deep(.arco-select-view-multiple .arco-select-view-inner) {
+  display: flex; flex-wrap: wrap; align-items: center;
+}
 .map-binding-row :deep(.arco-tag) { white-space: nowrap; }
+.map-binding-row :deep(.arco-btn) { align-self: center; }
 .map-binding-empty {
-  min-height: 104px; display: flex; align-items: center; justify-content: center;
+  flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
   border: 1px dashed var(--color-border-2); border-radius: 4px;
   color: var(--color-text-4); font-size: 12px;
 }
@@ -761,12 +801,13 @@ onBeforeUnmount(() => {
   color: var(--color-text-3); font-size: 10px;
 }
 .map-config-columns {
-  min-height: 330px; display: grid; grid-template-columns: minmax(400px, .9fr) minmax(0, 1.18fr);
+  height: 330px; min-height: 0; display: grid;
+  grid-template-columns: minmax(400px, .9fr) minmax(0, 1.18fr);
   gap: 10px;
 }
-.map-preview-editor { display: flex; flex-direction: column; }
+.map-preview-editor { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .map-preview-stage {
-  flex: 1; min-height: 250px; padding: 14px; display: grid; place-items: center;
+  flex: 1; min-height: 0; padding: 14px; display: grid; place-items: center;
   overflow: hidden; background: var(--color-bg-2);
 }
 .map-coordinate-frame {
@@ -791,7 +832,9 @@ onBeforeUnmount(() => {
   justify-content: space-between; gap: 8px; border-top: 1px solid var(--color-border-1);
   color: var(--color-text-4); font-size: 9px; font-variant-numeric: tabular-nums;
 }
-.map-binding-editor { padding: 9px; overflow: auto; }
+.map-binding-editor {
+  min-height: 0; padding: 9px; display: flex; flex-direction: column; overflow: hidden;
+}
 .map-binding-editor .map-binding-toolbar { min-height: 24px; margin-bottom: 7px; }
 .map-config-modal .modal-editor-body { max-height: min(72vh, 720px); }
 </style>
