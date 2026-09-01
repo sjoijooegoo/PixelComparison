@@ -82,10 +82,7 @@ function tabTarget(tab) {
   if (context.value.isDataPage && context.value.workspace !== 'gpm' && tab.id === 'gpm') {
     const rawSceneId = route.params.sceneId
     const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
-    const flags = project.meta.scene_data_flags?.main?.[sceneId]
-    if (sceneId && flags?.has_gpm_heatmap === true) {
-      path = `${tab.path}/${encodeURIComponent(sceneId)}`
-    }
+    if (sceneId) path = `${tab.path}/${encodeURIComponent(sceneId)}`
     return { path }
   }
   const preservesScene = context.value.isDataPage

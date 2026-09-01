@@ -236,6 +236,20 @@ describe('GPMHeatmap store request ordering', () => {
     expect(store.routeState().point).toBe(1)
   })
 
+  it('其他工作区传入的场景不在热力图目录时回退到首个有数据地图', async () => {
+    apiMock.gpmHeatmapCatalog.mockResolvedValue(meta('Forest_WP'))
+    apiMock.gpmHeatmapFrame.mockResolvedValue(frame('Forest_WP', 8, 'gpm-latest'))
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 8, detail_data: [] })
+    const store = useGpmHeatmapStore()
+
+    await store.applyRoute({ mapName: 'ScreenshotOnly' })
+
+    expect(store.filters.mapName).toBe('Forest_WP')
+    expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledWith(
+      'Forest_WP', expect.any(Object), expect.any(Object),
+    )
+  })
+
   it('无显式场景路由时跳过无数据地图并选择首个有数据地图', async () => {
     const response = meta('DataMap')
     response.maps.unshift({

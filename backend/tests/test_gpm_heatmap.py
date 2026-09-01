@@ -200,16 +200,6 @@ def test_canonical_upload_frame_detail_and_assets(client, png_bytes):
     assert client.get(payload["points"][0]["image_url"]).status_code == 200
 
 
-def test_project_meta_marks_configured_gpm_maps_for_workspace_navigation(client, png_bytes):
-    uploaded = _upload(client, png_bytes(), report=_report(map_name="Forest_WP"))
-    assert uploaded.status_code == 201, uploaded.text
-
-    meta = client.get("/api/meta")
-
-    assert meta.status_code == 200, meta.text
-    assert meta.json()["scene_data_flags"]["main"]["Forest_WP"]["has_gpm_heatmap"] is True
-
-
 def test_upload_is_canonical_only(client, png_bytes):
     missing_pipeline = client.post(
         "/api/gpm-heatmaps/uploads",

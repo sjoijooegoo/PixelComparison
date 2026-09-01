@@ -176,19 +176,16 @@ def test_capability_flags_and_grid_only_include_screenshot_batches(client, png_b
     assert flags["ShotScene"] == {
         "has_screenshots": True,
         "has_map_build_data": False,
-        "has_gpm_heatmap": False,
         "screenshot_qualities": [4],
     }
     assert flags["BuildScene"] == {
         "has_screenshots": False,
         "has_map_build_data": True,
-        "has_gpm_heatmap": False,
         "screenshot_qualities": [],
     }
     assert flags["EmptyScene"] == {
         "has_screenshots": False,
         "has_map_build_data": False,
-        "has_gpm_heatmap": False,
         "screenshot_qualities": [],
     }
 

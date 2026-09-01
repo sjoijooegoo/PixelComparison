@@ -225,12 +225,6 @@ describe('TopBar contextual workspace tools', () => {
   })
 
   it('从截图或烘培数据切回热力图时只传递当前场景', async () => {
-    projectMock.meta.scene_data_flags = {
-      main: {
-        Volcano_WP: { has_gpm_heatmap: true },
-        Forest_WP: { has_gpm_heatmap: true },
-      },
-    }
     setRoute('/map-build/Volcano_WP', {
       params: { sceneId: 'Volcano_WP' },
       query: { branch_tag: 'engine-ue5', quality: '4', batch: 'capture-1' },
@@ -257,10 +251,7 @@ describe('TopBar contextual workspace tools', () => {
     screenshotWrapper.unmount()
   })
 
-  it('热力图没有同名地图时从其他工作区进入默认页', async () => {
-    projectMock.meta.scene_data_flags = {
-      main: { ScreenshotOnly: { has_gpm_heatmap: false } },
-    }
+  it('不依赖通用元数据也会把当前场景交给热力图自行解析', async () => {
     setRoute('/screenshot/ScreenshotOnly', {
       params: { sceneId: 'ScreenshotOnly' }, query: { branch_tag: 'main' },
       fullPath: '/screenshot/ScreenshotOnly?branch_tag=main',
@@ -269,7 +260,7 @@ describe('TopBar contextual workspace tools', () => {
 
     await wrapper.findAll('.tab').find((tab) => tab.text() === '热力图').trigger('click')
 
-    expect(routerMock.push).toHaveBeenCalledWith({ path: '/gpm-heatmap' })
+    expect(routerMock.push).toHaveBeenCalledWith({ path: '/gpm-heatmap/ScreenshotOnly' })
     wrapper.unmount()
   })
 
