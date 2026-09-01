@@ -107,6 +107,40 @@ describe('GpmDetailNode', () => {
     expect(sourceRows).toEqual([['ten', 10], ['two', 2], ['thirty', '30']])
   })
 
+  it('可从表头右缘拖动列宽且不会触发表格排序', async () => {
+    const wrapper = mount(GpmDetailNode, {
+      props: {
+        expanded: true,
+        node: {
+          name: '模型数据',
+          table_data: {
+            cols: [{ key: 'name', name: '名称' }, { key: 'dc', name: 'DC' }],
+            data: [['tree', 12]],
+          },
+        },
+      },
+    })
+    const headers = wrapper.findAll('th')
+    const sourceWidths = [240, 160]
+    headers.forEach((header, index) => {
+      header.element.getBoundingClientRect = () => ({ width: sourceWidths[index] })
+    })
+    const resizer = wrapper.findAll('.column-resizer')[0]
+    await resizer.trigger('mousedown', { button: 0, clientX: 240 })
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX: 280 }))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('col')[0].attributes('style')).toContain('width: 280px')
+    expect(wrapper.findAll('col')[1].attributes('style')).toContain('width: 120px')
+    expect(wrapper.get('.detail-table').attributes('style')).toContain('width: 400px')
+    expect(wrapper.findAll('.column-resizer')).toHaveLength(1)
+    expect(headers[0].attributes('aria-sort')).toBe('none')
+
+    window.dispatchEvent(new MouseEvent('mouseup'))
+    await resizer.trigger('click')
+    expect(headers[0].attributes('aria-sort')).toBe('none')
+  })
+
   it('大表格完整保留数据并使用上一页、下一页切换', async () => {
     const rows = Array.from({ length: 250 }, (_, index) => [`asset-${index}`, index])
     const wrapper = mount(GpmDetailNode, {

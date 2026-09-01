@@ -49,6 +49,10 @@ import GpmHeatmapView from './GpmHeatmapView.vue'
 
 const EmptyView = defineComponent({ template: '<div class="target-page" />' })
 const AppView = defineComponent({ template: '<router-view />' })
+const TrendStub = defineComponent({
+  emits: ['select-batch'],
+  template: '<button class="trend-stub" @click="$emit(\'select-batch\', \'batch-2\')" />',
+})
 
 async function flushRoute() {
   await Promise.resolve()
@@ -59,6 +63,9 @@ async function flushRoute() {
 describe('GpmHeatmapView route ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    storeMock.frame = null
+    storeMock.trends = null
+    storeMock.filters.batchId = 'batch-1'
     storeMock.applyRoute.mockImplementation(() => new Promise((resolve) => {
       resolveApplyRoute = resolve
     }))
@@ -117,6 +124,48 @@ describe('GpmHeatmapView route ownership', () => {
     expect(router.currentRoute.value.path).toBe('/screenshot')
     expect(wrapper.find('.target-page').exists()).toBe(true)
     expect(messageError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('点击趋势节点后切换到对应采集批次', async () => {
+    storeMock.frame = {
+      heat_map: [], points: [], trend: [{ key: 'Scene_DC', name: '场景 DC' }],
+    }
+    storeMock.trends = {
+      points: [{ batch_id: 'batch-2', captured_at: '2026-09-01T10:00:00+08:00' }],
+    }
+    storeMock.applyRoute.mockResolvedValue()
+    storeMock.changeScope.mockResolvedValue()
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/gpm-heatmap/:mapName?', component: GpmHeatmapView }],
+    })
+    await router.push('/gpm-heatmap/Forest_WP')
+    await router.isReady()
+    const wrapper = mount(AppView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          GpmDetailPanel: true,
+          GpmMapCanvas: true,
+          GpmScreenshotStrip: true,
+          GpmTrendCard: TrendStub,
+          'a-button': true,
+          'a-empty': true,
+          'a-option': true,
+          'a-radio': true,
+          'a-radio-group': true,
+          'a-select': true,
+          'a-spin': true,
+        },
+      },
+    })
+    await flushRoute()
+
+    await wrapper.get('.trend-stub').trigger('click')
+    await flushRoute()
+
+    expect(storeMock.changeScope).toHaveBeenCalledWith({ batchId: 'batch-2' })
     wrapper.unmount()
   })
 })

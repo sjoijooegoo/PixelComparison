@@ -10,12 +10,13 @@ const props = defineProps({
   storageKey: { type: String, required: true },
   hoveredPointKey: { type: String, default: '' },
 })
-const emit = defineEmits(['hover-point'])
+const emit = defineEmits(['hover-point', 'select-batch'])
 
 const DEFAULT_WIDTH = 1200
 const HEIGHT = 255
 const HORIZONTAL_GUTTER = 52
 const PLOT = { left: HORIZONTAL_GUTTER, right: HORIZONTAL_GUTTER, top: 14, bottom: 31 }
+const POINT_HIT_RADIUS = 20
 const chartCanvas = ref(null)
 const chartWidth = ref(DEFAULT_WIDTH)
 const plotWidth = computed(() => chartWidth.value - PLOT.left - PLOT.right)
@@ -125,8 +126,14 @@ function hoverPoint(point) {
   emit('hover-point', key)
 }
 
+function selectBatch(point) {
+  if (point?.batch_id === null || point?.batch_id === undefined) return
+  emit('select-batch', point.batch_id)
+}
+
 function clearLocalHover() {
   localHoveredPointKey.value = ''
+  emit('hover-point', '')
 }
 
 function xAt(index) {
@@ -149,19 +156,6 @@ function pathFor(values) {
     drawing = true
     return `${command} ${xAt(index)} ${yAt(value)}`
   }).filter(Boolean).join(' ')
-}
-
-function bandStart(index) {
-  if (props.points.length <= 1) return PLOT.left
-  return index === 0 ? PLOT.left : (xAt(index - 1) + xAt(index)) / 2
-}
-
-function bandWidth(index) {
-  if (props.points.length <= 1) return plotWidth.value
-  const end = index === props.points.length - 1
-    ? chartWidth.value - PLOT.right
-    : (xAt(index) + xAt(index + 1)) / 2
-  return end - bandStart(index)
 }
 
 function xLabelVisible(index) {
@@ -201,7 +195,12 @@ function formatAxis(value) {
 const tooltipStyle = computed(() => {
   if (hoveredIndex.value == null) return {}
   const percentage = xAt(hoveredIndex.value) / chartWidth.value * 100
-  return { left: `${Math.max(9, Math.min(91, percentage))}%` }
+  let shift = '-50%'
+  if (props.points.length > 1 && hoveredIndex.value === 0) shift = '0%'
+  else if (props.points.length > 1 && hoveredIndex.value === props.points.length - 1) {
+    shift = '-100%'
+  }
+  return { left: `${percentage}%`, '--tooltip-shift': shift }
 })
 
 function syncChartWidth(rect = chartCanvas.value?.getBoundingClientRect()) {
@@ -272,9 +271,14 @@ onBeforeUnmount(() => {
         <g v-for="(point, index) in points" :key="`axis-${point.batch_id}-${point.captured_at}`">
           <text v-if="xLabelVisible(index)" :x="xAt(index)" :y="HEIGHT - 11"
             text-anchor="middle" class="x-label">{{ shortDate(point.captured_at) }}</text>
-          <rect :x="bandStart(index)" :y="PLOT.top" :width="bandWidth(index)"
-            :height="plotHeight" fill="transparent" class="point-hit-area"
-            @mouseenter="hoverPoint(point)" />
+        </g>
+
+        <g v-for="item in chartSeries" :key="`hit-${item.key}`">
+          <circle v-for="(value, index) in item.values" v-show="value != null"
+            :key="`${item.key}-${index}`" :cx="xAt(index)" :cy="yAt(value || 0)"
+            :r="POINT_HIT_RADIUS" fill="transparent" class="point-hit-area"
+            @mouseenter="hoverPoint(points[index])" @mouseleave="clearLocalHover"
+            @click="selectBatch(points[index])" />
         </g>
       </svg>
 
@@ -355,16 +359,17 @@ svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .series-dot {
   stroke: var(--color-bg-2); stroke-width: 1.4; vector-effect: non-scaling-stroke;
 }
-.series-dot.current { stroke: rgba(255, 255, 255, .72); stroke-width: 1.2; }
+.series-dot.current { stroke: rgba(255, 255, 255, .96); stroke-width: 2; }
 .cursor-line {
   stroke: var(--color-text-3); stroke-width: 1; stroke-dasharray: 4 4;
   vector-effect: non-scaling-stroke; pointer-events: none;
 }
-.point-hit-area { cursor: crosshair; }
+.point-hit-area { cursor: pointer; pointer-events: all; }
 .chart-tooltip {
-  position: absolute; top: -22px; z-index: 3; transform: translateX(-50%); width: 200px;
+  position: absolute; top: -22px; z-index: 3;
+  transform: translateX(var(--tooltip-shift, -50%)); width: 200px;
   padding: 10px 11px; border: 1px solid var(--color-border-3); border-radius: 7px;
-  background: color-mix(in srgb, var(--color-bg-5) 68%, transparent);
+  background: color-mix(in srgb, var(--color-bg-5) 40%, transparent);
   box-shadow: 0 7px 18px rgba(0, 0, 0, .16); backdrop-filter: blur(5px);
   pointer-events: none;
 }

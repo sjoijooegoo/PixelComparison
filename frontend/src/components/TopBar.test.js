@@ -21,7 +21,11 @@ const routerMock = vi.hoisted(() => ({
     }
   }),
 }))
-const projectMock = vi.hoisted(() => ({ uploadVisible: false, loadMeta: vi.fn() }))
+const projectMock = vi.hoisted(() => ({
+  uploadVisible: false,
+  loadMeta: vi.fn(),
+  meta: { scene_data_flags: {} },
+}))
 const screenshotMock = vi.hoisted(() => ({ running: false }))
 const catalogMock = vi.hoisted(() => ({ filters: { branch_tag: 'engine-ue5' } }))
 const messageMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }))
@@ -65,6 +69,7 @@ beforeEach(() => {
     fullPath: '/map-build/Coral_WP?branch_tag=engine-ue5',
   })
   projectMock.uploadVisible = false
+  projectMock.meta = { scene_data_flags: {} }
   projectMock.loadMeta.mockResolvedValue()
   screenshotMock.running = false
 })
@@ -219,16 +224,95 @@ describe('TopBar contextual workspace tools', () => {
     wrapper.unmount()
   })
 
-  it('进入或离开热力图时不把独立场景 ID 带到其他数据域', async () => {
-    setRoute('/gpm-heatmap/GpmOnly', {
-      params: { sceneId: 'GpmOnly' }, query: { branch_tag: 'main' },
-      fullPath: '/gpm-heatmap/GpmOnly?branch_tag=main',
+  it('从截图或烘培数据切回热力图时只传递当前场景', async () => {
+    projectMock.meta.scene_data_flags = {
+      main: {
+        Volcano_WP: { has_gpm_heatmap: true },
+        Forest_WP: { has_gpm_heatmap: true },
+      },
+    }
+    setRoute('/map-build/Volcano_WP', {
+      params: { sceneId: 'Volcano_WP' },
+      query: { branch_tag: 'engine-ue5', quality: '4', batch: 'capture-1' },
+      fullPath: '/map-build/Volcano_WP?branch_tag=engine-ue5&quality=4&batch=capture-1',
+    })
+    const mapBuildWrapper = mountTopBar()
+    await mapBuildWrapper.findAll('.tab').find((tab) => tab.text() === '热力图').trigger('click')
+    expect(routerMock.push).toHaveBeenCalledWith({
+      path: '/gpm-heatmap/Volcano_WP',
+    })
+    mapBuildWrapper.unmount()
+
+    vi.clearAllMocks()
+    setRoute('/screenshot/Forest_WP', {
+      params: { sceneId: 'Forest_WP' },
+      query: { branch_tag: 'main', quality: '5', current: 'capture-2' },
+      fullPath: '/screenshot/Forest_WP?branch_tag=main&quality=5&current=capture-2',
+    })
+    const screenshotWrapper = mountTopBar()
+    await screenshotWrapper.findAll('.tab').find((tab) => tab.text() === '热力图').trigger('click')
+    expect(routerMock.push).toHaveBeenCalledWith({
+      path: '/gpm-heatmap/Forest_WP',
+    })
+    screenshotWrapper.unmount()
+  })
+
+  it('热力图没有同名地图时从其他工作区进入默认页', async () => {
+    projectMock.meta.scene_data_flags = {
+      main: { ScreenshotOnly: { has_gpm_heatmap: false } },
+    }
+    setRoute('/screenshot/ScreenshotOnly', {
+      params: { sceneId: 'ScreenshotOnly' }, query: { branch_tag: 'main' },
+      fullPath: '/screenshot/ScreenshotOnly?branch_tag=main',
     })
     const wrapper = mountTopBar()
+
+    await wrapper.findAll('.tab').find((tab) => tab.text() === '热力图').trigger('click')
+
+    expect(routerMock.push).toHaveBeenCalledWith({ path: '/gpm-heatmap' })
+    wrapper.unmount()
+  })
+
+  it('从热力图切换时只把目标工作区已有的同名场景带过去', async () => {
+    projectMock.meta.scene_data_flags = {
+      main: {
+        Forest_WP: { has_screenshots: true, has_map_build_data: true },
+      },
+    }
+    setRoute('/gpm-heatmap/Forest_WP', {
+      params: { mapName: 'Forest_WP' },
+      query: { platform: 'IOS', quality: '4', batch: 'gpm-1', point: '8' },
+      fullPath: '/gpm-heatmap/Forest_WP?platform=IOS&quality=4&batch=gpm-1&point=8',
+    })
+    const wrapper = mountTopBar()
+
     await wrapper.findAll('.tab').find((tab) => tab.text() === '截图对比').trigger('click')
     expect(routerMock.push).toHaveBeenCalledWith({
-      path: '/screenshot', query: { branch_tag: 'main' },
+      path: '/screenshot/Forest_WP',
     })
+    await wrapper.findAll('.tab').find((tab) => tab.text() === '烘培数据').trigger('click')
+    expect(routerMock.push).toHaveBeenLastCalledWith({
+      path: '/map-build/Forest_WP',
+    })
+    wrapper.unmount()
+  })
+
+  it('目标工作区没有同名场景时进入默认页', async () => {
+    projectMock.meta.scene_data_flags = {
+      main: {
+        GpmOnly: { has_screenshots: false, has_map_build_data: false },
+      },
+    }
+    setRoute('/gpm-heatmap/GpmOnly', {
+      params: { mapName: 'GpmOnly' }, query: { platform: 'Android' },
+      fullPath: '/gpm-heatmap/GpmOnly?platform=Android',
+    })
+    const wrapper = mountTopBar()
+
+    await wrapper.findAll('.tab').find((tab) => tab.text() === '截图对比').trigger('click')
+    expect(routerMock.push).toHaveBeenCalledWith({ path: '/screenshot' })
+    await wrapper.findAll('.tab').find((tab) => tab.text() === '烘培数据').trigger('click')
+    expect(routerMock.push).toHaveBeenLastCalledWith({ path: '/map-build' })
     wrapper.unmount()
   })
 })

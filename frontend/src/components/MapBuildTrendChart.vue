@@ -21,6 +21,7 @@ const WIDTH = 1200
 const HEIGHT = 380
 const HORIZONTAL_GUTTER = 52
 const PLOT = { left: HORIZONTAL_GUTTER, right: HORIZONTAL_GUTTER, top: 24, bottom: 44 }
+const POINT_HIT_RADIUS = 20
 const plotWidth = WIDTH - PLOT.left - PLOT.right
 const plotHeight = HEIGHT - PLOT.top - PLOT.bottom
 const STORAGE_KEY = 'pixelcomp.mapBuildTrend.visibleSeries.v1'
@@ -138,26 +139,11 @@ function shortDate(point) {
 function fullDate(point) {
   return point?.batch?.created_at?.replace('T', ' ') || '—'
 }
-function bandStart(index) {
-  if (props.points.length <= 1) return PLOT.left
-  return index === 0 ? PLOT.left : (xAt(index - 1) + xAt(index)) / 2
-}
-function bandWidth(index) {
-  if (props.points.length <= 1) return plotWidth
-  const end = index === props.points.length - 1
-    ? WIDTH - PLOT.right
-    : (xAt(index) + xAt(index + 1)) / 2
-  return end - bandStart(index)
-}
-
 const hoverPoint = computed(() => (
   hovered.value === null ? null : props.points[hovered.value]
 ))
 const selectedIndex = computed(() => props.points.findIndex(
   (point) => String(point?.batch?.id) === String(props.currentBatchId),
-))
-const hoverIsCurrent = computed(() => (
-  hovered.value !== null && hovered.value === selectedIndex.value
 ))
 const tooltipStyle = computed(() => {
   if (hovered.value === null) return {}
@@ -216,10 +202,15 @@ function selectPoint(point, index) {
         <g v-for="(point, index) in points" :key="point.batch.id">
           <text v-if="xLabelVisible(index)" :x="xAt(index)" :y="HEIGHT - 14"
             text-anchor="middle" class="x-label">{{ shortDate(point) }}</text>
-          <rect :x="bandStart(index)" :y="PLOT.top" :width="bandWidth(index)" :height="plotHeight"
-            class="point-hit-area" fill="transparent"
-            focusable="false" :aria-label="pointAriaLabel(point)"
-            @mouseenter="hovered = index" @click="selectPoint(point, index)" />
+        </g>
+
+        <g v-for="series in chartSeries" :key="`hit-${series.key}`">
+          <circle v-for="(value, index) in series.values" v-show="value != null"
+            :key="`hit-${series.key}-${index}`" :cx="xAt(index)" :cy="yAt(value || 0)"
+            :r="POINT_HIT_RADIUS" class="point-hit-area" fill="transparent"
+            focusable="false" :aria-label="pointAriaLabel(points[index])"
+            @mouseenter="hovered = index" @mouseleave="hovered = null"
+            @click="selectPoint(points[index], index)" />
         </g>
       </svg>
 
@@ -229,11 +220,6 @@ function selectPoint(point, index) {
             <time class="tooltip-time" :datetime="hoverPoint.batch.created_at">
               {{ fullDate(hoverPoint) }}
             </time>
-            <span v-if="hoverIsCurrent" class="tooltip-current">当前网格批次</span>
-          </div>
-          <div class="tooltip-batch-meta">
-            <span>批次 #{{ hoverPoint.batch.id }}</span>
-            <i aria-hidden="true">·</i>
             <span>{{ p4Label(hoverPoint.batch.p4_version) }}</span>
           </div>
         </div>
@@ -312,17 +298,17 @@ svg { display: block; width: 100%; height: auto; overflow: visible; }
 .x-label { font-size: 10px; }
 .series-dot { stroke: var(--color-bg-2); stroke-width: 1.5; }
 .series-dot.current-batch-dot {
-  r: 4px; stroke: rgba(255, 255, 255, .78); stroke-width: 1.1;
+  r: 4px; stroke: rgba(255, 255, 255, .96); stroke-width: 2;
   filter: drop-shadow(0 0 2px rgba(var(--arcoblue-5), .42));
 }
 .cursor-line { stroke: var(--color-text-3); stroke-width: 1; stroke-dasharray: 4 4; }
-.point-hit-area { cursor: pointer; }
+.point-hit-area { cursor: pointer; pointer-events: all; }
 .tooltip {
   position: absolute; top: 20px; z-index: 3; transform: translateX(-50%); width: 250px;
   padding: 11px 12px; border-radius: 8px; pointer-events: none;
-  background: color-mix(in srgb, var(--color-bg-5) 94%, transparent);
-  border: 1px solid var(--color-border-3); box-shadow: 0 10px 30px rgba(0, 0, 0, .28);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--color-bg-5) 40%, transparent);
+  border: 1px solid var(--color-border-3); box-shadow: 0 7px 18px rgba(0, 0, 0, .16);
+  backdrop-filter: blur(5px);
 }
 .tooltip-title { padding-bottom: 8px; margin-bottom: 7px; border-bottom: 1px solid var(--color-border-2); }
 .tooltip-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -330,16 +316,10 @@ svg { display: block; width: 100%; height: auto; overflow: visible; }
   display: block; color: rgb(var(--arcoblue-5));
   font: 600 13px/1.3 "Bahnschrift", "Segoe UI", sans-serif; letter-spacing: .01em;
 }
-.tooltip-current {
-  flex: 0 0 auto; padding: 2px 6px; border-radius: 4px;
-  background: rgba(var(--arcoblue-6), .1); color: rgb(var(--arcoblue-5));
-  font-size: 9.5px; font-weight: 600; line-height: 1.35;
+.tooltip-heading > span {
+  flex: 0 0 auto; color: var(--color-text-2);
+  font: 600 11px/1.3 "Bahnschrift", "Segoe UI", sans-serif; white-space: nowrap;
 }
-.tooltip-batch-meta {
-  margin-top: 4px; display: flex; align-items: center; gap: 6px;
-  color: var(--color-text-1); font: 600 11px/1.3 "Bahnschrift", "Segoe UI", sans-serif;
-}
-.tooltip-batch-meta i { color: var(--color-text-4); font-style: normal; font-weight: 400; }
 .tooltip-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 3px 0; color: var(--color-text-3); font-size: 11px; }
 .tooltip-row span { display: inline-flex; align-items: center; gap: 6px; }
 .tooltip-row i { width: 7px; height: 7px; border-radius: 50%; }

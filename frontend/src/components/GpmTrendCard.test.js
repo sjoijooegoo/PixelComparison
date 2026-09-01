@@ -49,7 +49,8 @@ describe('GpmTrendCard', () => {
   it('鼠标经过点位时显示日期、P4 和所有可见指标', async () => {
     const wrapper = mountCard()
 
-    await wrapper.findAll('.point-hit-area')[1].trigger('mouseenter')
+    const hitArea = wrapper.findAll('.point-hit-area')[1]
+    await hitArea.trigger('mouseenter')
 
     const tooltip = wrapper.get('.chart-tooltip')
     expect(tooltip.text()).toContain('2026-08-20 15:00')
@@ -58,6 +59,42 @@ describe('GpmTrendCard', () => {
     expect(tooltip.text()).toContain('258')
     expect(tooltip.text()).toContain('321')
     expect(wrapper.findAll('.series-dot').every((dot) => !dot.classes().includes('hovered'))).toBe(true)
+
+    await hitArea.trigger('mouseleave')
+    expect(wrapper.find('.chart-tooltip').exists()).toBe(false)
+    expect(wrapper.emitted('hover-point').at(-1)).toEqual([''])
+  })
+
+  it('只在数据点邻近区域响应悬停', () => {
+    const wrapper = mountCard()
+    const hitAreas = wrapper.findAll('circle.point-hit-area')
+
+    expect(hitAreas).toHaveLength(4)
+    expect(wrapper.find('rect.point-hit-area').exists()).toBe(false)
+    expect(hitAreas.every((area) => area.attributes('r') === '20')).toBe(true)
+  })
+
+  it('点击趋势节点时选择对应采集批次', async () => {
+    const wrapper = mountCard()
+
+    await wrapper.findAll('.point-hit-area')[1].trigger('click')
+
+    expect(wrapper.emitted('select-batch')).toEqual([['gpm-2']])
+  })
+
+  it('最左和最右节点分别用面板边缘与虚线对齐', async () => {
+    const wrapper = mountCard()
+    const hitAreas = wrapper.findAll('.point-hit-area')
+
+    await hitAreas[0].trigger('mouseenter')
+    let style = wrapper.get('.chart-tooltip').element.style
+    expect(parseFloat(style.left)).toBeCloseTo(52 / 1200 * 100)
+    expect(style.getPropertyValue('--tooltip-shift')).toBe('0%')
+
+    await hitAreas[1].trigger('mouseenter')
+    style = wrapper.get('.chart-tooltip').element.style
+    expect(parseFloat(style.left)).toBeCloseTo((1200 - 52) / 1200 * 100)
+    expect(style.getPropertyValue('--tooltip-shift')).toBe('-100%')
   })
 
   it('通过稳定批次键把悬停点同步给另一张趋势图', async () => {

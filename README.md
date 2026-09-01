@@ -223,7 +223,7 @@ backend/data/backup/YYYY-MM-DD/db/gpm_heatmap.db
 | `/screenshot/:sceneId?branch_tag=main&quality=4&date_mode=range&from=2026-08-06&to=2026-08-19` | 打开指定场景并恢复画质与日期筛选；可追加 `baseline`、`current` 恢复对比角色 |
 | `/batches/:sceneId` | 兼容旧链接，自动重定向到 `/screenshot/:sceneId` |
 | `/map-build?branch_tag=main` | 所选分支的烘培数据分块网格、选中项细则和按天历史趋势 |
-| `/gpm-heatmap/:mapName?branch_tag=main&platform=Android&quality=5` | 独立 GPMHeatmap 地图、点位详情、截图和 7/14/30 天趋势 |
+| `/gpm-heatmap/:mapName?branch_tag=main&platform=Android&quality=5&point=8` | 独立 GPMHeatmap 地图、点位详情、截图和 7/14/30 天趋势；`point` 为批次内点位序号 `index` |
 | `/settings` | 对比算法与默认筛选设置 |
 
 批次管理的分支、场景、日期和页码会同步到 URL，不按画质筛选；无参数 `/batches` 默认使用 `main`、全部场景和项目默认日期范围。截图对比按照“左旧右新”排列批次，其场景、画质和日期筛选也会同步到 URL；指定日期使用 `date_mode=days&dates=2026-08-01,2026-08-03`。选择基线和对比批次后，已有结果会直接显示热力图；没有缓存时可在当前工作区发起计算，不会跳页。旧 `/comparison` 地址不再提供历史或详情页面，会返回批次管理；对比记录及热力图仍在后端保留 14 天，重新选择同一批次对即可恢复。

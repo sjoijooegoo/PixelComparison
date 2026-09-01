@@ -33,7 +33,6 @@ def _captured_at(*, days_ago=0, hours_ago=0):
 def _report(
     *,
     map_name="Village_Dimension_Main",
-    point_key="village-1",
     platform="Android",
     quality=5,
     p4_version=2960783,
@@ -42,7 +41,6 @@ def _report(
     point = {
         "index": 1,
         "screenshot_id": "1",
-        "point_key": point_key,
         "position": [-192711, 240138, 0],
         "direction": [-0.94, 0.34],
         "heat_map_data": {"Scene_DC": value, "Scene_Tris": 344696},
@@ -202,6 +200,16 @@ def test_canonical_upload_frame_detail_and_assets(client, png_bytes):
     assert client.get(payload["points"][0]["image_url"]).status_code == 200
 
 
+def test_project_meta_marks_configured_gpm_maps_for_workspace_navigation(client, png_bytes):
+    uploaded = _upload(client, png_bytes(), report=_report(map_name="Forest_WP"))
+    assert uploaded.status_code == 201, uploaded.text
+
+    meta = client.get("/api/meta")
+
+    assert meta.status_code == 200, meta.text
+    assert meta.json()["scene_data_flags"]["main"]["Forest_WP"]["has_gpm_heatmap"] is True
+
+
 def test_upload_is_canonical_only(client, png_bytes):
     missing_pipeline = client.post(
         "/api/gpm-heatmaps/uploads",
@@ -256,6 +264,12 @@ def test_upload_is_canonical_only(client, png_bytes):
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "INVALID_GPM_REPORT"
 
+    mismatched_screenshot = _report()
+    mismatched_screenshot["data"][0]["detail"][0]["screenshot_id"] = "shot-1"
+    response = _upload(client, png_bytes(), report=mismatched_screenshot)
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "GPM_POINT_SCREENSHOT_ID_MISMATCH"
+
     for field in ("heat_map_data", "trend_data", "detail_data"):
         missing_point_payload = _report()
         missing_point_payload["data"][0]["detail"][0].pop(field)
@@ -272,6 +286,7 @@ def test_upload_is_canonical_only(client, png_bytes):
     second_map = deepcopy(mixed_scope_types["data"][0])
     second_map["map_name"] = "Forest_WP"
     second_map["shading_quality"] = "5"
+    second_map["detail"][0]["index"] = 2
     second_map["detail"][0]["screenshot_id"] = "2"
     mixed_scope_types["data"].append(second_map)
     response = _upload(

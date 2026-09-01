@@ -143,7 +143,6 @@ def _validate_report(payload: object) -> list[dict]:
         map_item["show_direction"] = bool(show_direction)
         indices: set[int] = set()
         screenshot_ids: set[str] = set()
-        point_keys: set[str] = set()
         for point in details:
             if not isinstance(point, dict):
                 raise http_error(422, "INVALID_GPM_POINT", f"{map_name} 存在无效点位")
@@ -156,6 +155,16 @@ def _validate_report(payload: object) -> list[dict]:
                 raise http_error(422, "INVALID_GPM_POINT", f"{map_name} 点位缺少必要字段")
             if isinstance(index, bool) or not isinstance(index, int) or index < 0:
                 raise http_error(422, "INVALID_GPM_POINT", f"{map_name} 点位 index 必须是非负整数")
+            if (
+                not screenshot_id.isascii()
+                or not screenshot_id.isdigit()
+                or int(screenshot_id) != index
+            ):
+                raise http_error(
+                    422,
+                    "GPM_POINT_SCREENSHOT_ID_MISMATCH",
+                    f"{map_name} 点位 {index} 的 screenshot_id 必须对应同一个点位序号",
+                )
             _require_object(point.get("heat_map_data"), f"{map_name} 点位 {index}.heat_map_data")
             _require_object(point.get("trend_data"), f"{map_name} 点位 {index}.trend_data")
             _require_list(point.get("detail_data"), f"{map_name} 点位 {index}.detail_data")
@@ -182,15 +191,6 @@ def _validate_report(payload: object) -> list[dict]:
                     for value in values[:2]
                 ):
                     raise http_error(422, code, f"{map_name} 点位 {index} {label}必须是有限数字")
-            raw_point_key = point.get("point_key")
-            if raw_point_key is not None:
-                point_key = str(raw_point_key).strip()
-                if not point_key or len(point_key) > 200:
-                    raise http_error(422, "INVALID_GPM_POINT_KEY", f"{map_name} 点位 {index} 的 point_key 无效")
-                if point_key in point_keys:
-                    raise http_error(422, "DUPLICATE_GPM_POINT_KEY", f"{map_name} point_key 重复: {point_key}")
-                point["point_key"] = point_key
-                point_keys.add(point_key)
             indices.add(index)
             screenshot_ids.add(normalized_screenshot_id)
             all_screenshot_ids.add(normalized_screenshot_id)
@@ -318,7 +318,7 @@ def _insert_upload_graph(
             original = relative_root / "originals" / f"{safe_id}{PurePosixPath(info.filename).suffix.lower()}"
             thumb = relative_root / "thumbs" / f"{safe_id}.webp"
             point_rows.append((
-                upload_map_id, int(point["index"]), screenshot_id, point.get("point_key"),
+                upload_map_id, int(point["index"]), screenshot_id,
                 float(point["position"][0]), float(point["position"][1]),
                 float(point["direction"][0]), float(point["direction"][1]),
                 json.dumps(point["heat_map_data"], ensure_ascii=False),
@@ -329,11 +329,11 @@ def _insert_upload_graph(
         connection.executemany(
             """
             INSERT INTO gpm_points (
-                upload_map_id, point_index, screenshot_id, point_key,
+                upload_map_id, point_index, screenshot_id,
                 position_x, position_y, direction_x, direction_y,
                 heat_map_data_json, trend_data_json, detail_data_json,
                 screenshot_path, thumbnail_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             point_rows,
         )

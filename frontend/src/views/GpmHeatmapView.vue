@@ -124,6 +124,11 @@ async function changeScope(change) {
   }
 }
 
+async function selectTrendBatch(batchId) {
+  if (String(batchId) === String(store.filters.batchId)) return
+  await changeScope({ batchId })
+}
+
 async function selectPoint(pointId) {
   try {
     const loading = store.selectPoint(pointId)
@@ -329,7 +334,8 @@ onBeforeUnmount(() => {
             :hovered-point-key="hoveredTrendPointKey"
             :empty-label="store.trendMode === 'average' ? '整体平均' : '单个点位'"
             :points="store.trends?.points || []"
-            @hover-point="hoveredTrendPointKey = $event" />
+            @hover-point="hoveredTrendPointKey = $event"
+            @select-batch="selectTrendBatch" />
         </div>
       </section>
     </template>

@@ -95,17 +95,19 @@ function firstDataQuality(meta, mapName, platform) {
   return firstValue(dataQualities(map, platform))
 }
 
+function pointIndexIdentity(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return null
+  const pointIndex = Number(value)
+  return Number.isInteger(pointIndex) && pointIndex >= 0 ? { pointIndex } : null
+}
+
 function pointSelectionIdentity(point) {
-  if (!point) return null
-  const pointKey = String(point.point_key || '').trim()
-  return pointKey ? { pointKey } : null
+  return pointIndexIdentity(point?.index)
 }
 
 function matchingPoint(points, identity) {
-  if (!identity?.pointKey) return null
-  return points?.find(
-    (point) => String(point.point_key || '').trim() === identity.pointKey,
-  ) || null
+  if (identity?.pointIndex == null) return null
+  return points?.find((point) => Number(point.index) === identity.pointIndex) || null
 }
 
 export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
@@ -416,12 +418,10 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       this.metricKey = requested.metric || 'Scene_DC'
       this.trendMode = requested.trendMode === 'point' ? 'point' : 'average'
       this.days = [7, 14, 30].includes(Number(requested.days)) ? Number(requested.days) : 14
-      this.selectedPointId = requested.point ? Number(requested.point) : null
-      await this.loadFrame(requested.batchId || '')
+      const requestedPoint = pointIndexIdentity(requested.point)
+      this.selectedPointId = null
+      await this.loadFrame(requested.batchId || '', null, requestedPoint)
       if (!isCurrentRoute()) return null
-      if (this.selectedPointId != null && !this.frame?.points?.some(
-        (point) => Number(point.id) === Number(this.selectedPointId),
-      )) this.selectedPointId = this.frame?.points?.[0]?.id ?? null
       await Promise.all([this.loadPoint(), this.loadTrends()])
       if (!isCurrentRoute()) return null
       this.initialized = true
@@ -436,7 +436,6 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       const selectingBatch = batchId !== undefined
       const keepsMap = mapName === undefined || mapName === this.filters.mapName
       const keepsPointScope = keepsMap
-        && (platform === undefined || platform === this.filters.platform)
       const preferredPoint = keepsPointScope ? pointSelectionIdentity(this.selectedPoint) : null
       cancelChannel(this, 'detail')
       cancelChannel(this, 'trends')
@@ -478,7 +477,7 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
         shadingQuality: this.filters.shadingQuality,
         batchId: this.filters.batchId,
         metric: this.metricKey,
-        point: this.selectedPointId,
+        point: pointSelectionIdentity(this.selectedPoint)?.pointIndex ?? null,
         trendMode: this.trendMode,
         days: this.days,
       }

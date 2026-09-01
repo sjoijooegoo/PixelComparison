@@ -52,7 +52,6 @@ def _point_dto(row, *, detail: bool = False) -> dict:
         "id": row["id"],
         "index": row["point_index"],
         "screenshot_id": row["screenshot_id"],
-        "point_key": row["point_key"],
         "position": [row["position_x"], row["position_y"]],
         "direction": [row["direction_x"], row["direction_y"]],
         "heat_map_data": json.loads(row["heat_map_data_json"]),
@@ -114,7 +113,7 @@ def get_map_frame(
                 selected = batches[0]
         point_rows = connection.execute(
             """
-            SELECT id, point_index, screenshot_id, point_key,
+            SELECT id, point_index, screenshot_id,
                    position_x, position_y, direction_x, direction_y,
                    heat_map_data_json, screenshot_path, thumbnail_path
             FROM gpm_points WHERE upload_map_id = ? ORDER BY point_index
@@ -238,7 +237,7 @@ def get_point_trends(point_id: int, days: int = Query(14)):
     try:
         current = connection.execute(
             """
-            SELECT p.point_key, p.trend_data_json, m.map_name,
+            SELECT p.point_index, p.trend_data_json, m.map_name,
                    u.branch_tag, u.platform, u.shading_quality,
                    u.captured_at, u.captured_at_epoch, u.p4_version, u.batch_id
             FROM gpm_points p JOIN gpm_upload_maps m ON m.id = p.upload_map_id
@@ -248,18 +247,6 @@ def get_point_trends(point_id: int, days: int = Query(14)):
         ).fetchone()
         if not current:
             raise http_error(404, "GPM_POINT_NOT_FOUND", "点位不存在")
-        if not current["point_key"]:
-            return {
-                "available": False,
-                "reason": None,
-                "days": days,
-                "points": [{
-                    "batch_id": current["batch_id"],
-                    "captured_at": current["captured_at"],
-                    "p4_version": current["p4_version"],
-                    "metrics": json.loads(current["trend_data_json"]),
-                }],
-            }
         latest = connection.execute(
             """
             SELECT MAX(u.captured_at_epoch) FROM gpm_upload_maps m
@@ -274,12 +261,12 @@ def get_point_trends(point_id: int, days: int = Query(14)):
             SELECT u.batch_id, u.captured_at, u.p4_version, p.trend_data_json
             FROM gpm_points p JOIN gpm_upload_maps m ON m.id = p.upload_map_id
             JOIN gpm_uploads u ON u.id = m.upload_id
-            WHERE p.point_key = ? AND m.map_name = ? AND u.branch_tag = ?
+            WHERE p.point_index = ? AND m.map_name = ? AND u.branch_tag = ?
               AND u.platform = ? AND u.shading_quality = ? AND u.captured_at_epoch >= ?
             ORDER BY u.captured_at_epoch, u.id
             """,
             (
-                current["point_key"], current["map_name"], current["branch_tag"],
+                current["point_index"], current["map_name"], current["branch_tag"],
                 current["platform"], current["shading_quality"], start_epoch,
             ),
         ).fetchall()

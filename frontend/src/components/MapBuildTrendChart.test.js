@@ -49,15 +49,13 @@ describe('MapBuildTrendChart', () => {
     ])
     expect(wrapper.findAll('.series-dot')).toHaveLength(10)
 
-    await wrapper.findAll('svg rect')[1].trigger('mouseenter')
+    await wrapper.findAll('.point-hit-area')[1].trigger('mouseenter')
     expect(wrapper.get('.tooltip-time').text()).toBe('2026-08-01 17:00')
-    expect(wrapper.findAll('.tooltip-batch-meta span').map((item) => item.text())).toEqual([
-      '批次 #803',
-      'P4 6514224',
-    ])
+    expect(wrapper.get('.tooltip-heading > span').text()).toBe('P4 6514224')
+    expect(wrapper.get('.tooltip-heading').text()).not.toContain('批次')
   })
 
-  it('点击趋势点会选择对应网格批次且透明热区不会产生矩形焦点框', async () => {
+  it('点击趋势点会选择对应网格批次且命中区不会产生焦点框', async () => {
     const points = [
       {
         batch: { id: '802', created_at: '2026-08-01T09:00', p4_version: 6514223 },
@@ -77,6 +75,9 @@ describe('MapBuildTrendChart', () => {
     expect(hitAreas[1].attributes('tabindex')).toBeUndefined()
     expect(hitAreas[1].attributes('focusable')).toBe('false')
     expect(hitAreas[1].attributes('aria-label')).toContain('P4 6514224')
+    expect(hitAreas[1].element.tagName.toLowerCase()).toBe('circle')
+    expect(hitAreas[1].attributes('r')).toBe('20')
+    expect(wrapper.find('rect.point-hit-area').exists()).toBe(false)
     expect(wrapper.find('.selected-batch-line').exists()).toBe(false)
     expect(wrapper.findAll('.current-batch-dot')).toHaveLength(5)
 
@@ -85,11 +86,14 @@ describe('MapBuildTrendChart', () => {
     await hitAreas[0].trigger('click')
     expect(wrapper.find('.tooltip').exists()).toBe(true)
     await wrapper.setProps({ currentBatchId: '802' })
-    expect(wrapper.get('.tooltip-current').text()).toBe('当前网格批次')
+    expect(wrapper.get('.tooltip-heading').text()).not.toContain('当前网格批次')
 
     expect(wrapper.emitted('selectBatch')).toEqual([
       [points[0].batch],
     ])
+
+    await hitAreas[0].trigger('mouseleave')
+    expect(wrapper.find('.tooltip').exists()).toBe(false)
   })
 
   it('旧批次缺少 P4 版本时使用统一占位符', async () => {
@@ -101,13 +105,11 @@ describe('MapBuildTrendChart', () => {
       },
     })
 
-    await wrapper.get('svg rect').trigger('mouseenter')
+    await wrapper.get('.point-hit-area').trigger('mouseenter')
 
     expect(wrapper.get('.tooltip-time').text()).toBe('2026-08-01 09:00')
-    expect(wrapper.findAll('.tooltip-batch-meta span').map((item) => item.text())).toEqual([
-      '批次 #legacy',
-      '——',
-    ])
+    expect(wrapper.get('.tooltip-heading > span').text()).toBe('——')
+    expect(wrapper.get('.tooltip-heading').text()).not.toContain('批次')
   })
 
   it('图例可以筛选曲线并同步纵轴、提示框和本地偏好', async () => {
@@ -135,7 +137,7 @@ describe('MapBuildTrendChart', () => {
     expect(stored).not.toContain('all_mips_bytes')
     expect(stored).not.toContain('cook_estimate_bytes')
 
-    await wrapper.findAll('svg rect')[1].trigger('mouseenter')
+    await wrapper.findAll('.point-hit-area')[1].trigger('mouseenter')
     expect(wrapper.findAll('.tooltip-row')).toHaveLength(3)
     expect(wrapper.get('.tooltip').text()).not.toContain('总 Mip')
     expect(wrapper.get('.tooltip').text()).not.toContain('Cook 估算')
@@ -167,7 +169,7 @@ describe('MapBuildTrendChart', () => {
     expect(JSON.parse(window.localStorage.getItem('pixelcomp.mapBuildTrend.visibleSeries.v1')))
       .toContain('precomputed_light_volume_bytes')
 
-    await wrapper.findAll('svg rect')[1].trigger('mouseenter')
+    await wrapper.findAll('.point-hit-area')[1].trigger('mouseenter')
     expect(wrapper.get('.tooltip').text()).toContain('预计算光照体积')
 
     wrapper.unmount()
@@ -216,7 +218,8 @@ describe('MapBuildTrendChart', () => {
     const wrapper = mount(MapBuildTrendChart, { props: { points } })
     const renderMilliseconds = performance.now() - started
 
-    expect(wrapper.findAll('svg rect')).toHaveLength(365)
+    expect(wrapper.findAll('rect.point-hit-area')).toHaveLength(0)
+    expect(wrapper.findAll('circle.point-hit-area')).toHaveLength(365 * 5)
     expect(wrapper.findAll('svg path')).toHaveLength(5)
     expect(wrapper.findAll('.series-dot')).toHaveLength(365 * 5)
     expect(wrapper.findAll('.x-label').length).toBeLessThanOrEqual(9)

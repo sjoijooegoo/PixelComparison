@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
 import { detailNodePath } from '../gpmHeatmap/detailPaths'
 
@@ -36,7 +36,12 @@ const savedSortColumnIndex = savedSort
 const sortColumnIndex = ref(savedSortColumnIndex >= 0 ? savedSortColumnIndex : null)
 const sortDirection = ref(savedSort?.direction === 'asc' ? 'asc' : 'desc')
 const currentPage = ref(1)
+const tableElement = ref(null)
+const columnWidths = ref([])
+const resizingColumnIndex = ref(null)
 const pageSize = 15
+const minimumColumnWidth = 88
+let resizeSession = null
 const sortedRows = computed(() => {
   if (sortColumnIndex.value === null) return rows.value
   const column = columns.value[sortColumnIndex.value]
@@ -77,10 +82,24 @@ const pagedRows = computed(() => {
 const nodeTitle = computed(() => String(props.node.name || '未命名数据'))
 const hasContent = computed(() => Boolean(children.value.length || columns.value.length))
 const effectiveExpanded = computed(() => props.expanded && hasContent.value)
+const tableStyle = computed(() => {
+  if (columnWidths.value.length !== columns.value.length) return undefined
+  const width = columnWidths.value.reduce((total, value) => total + value, 0)
+  return { width: `${width}px`, minWidth: '100%', tableLayout: 'fixed' }
+})
+
+watch(() => columns.value.map((column, index) => (
+  `${column?.key || column?.name || 'column'}:${index}`
+)).join('|'), () => {
+  finishColumnResize()
+  columnWidths.value = []
+})
 
 watch(() => sortedRows.value.length, () => {
   currentPage.value = Math.min(currentPage.value, totalPages.value)
 })
+
+onBeforeUnmount(finishColumnResize)
 
 function childPath(index) {
   return detailNodePath(props.nodePath, children.value, index)
@@ -145,6 +164,75 @@ function goToPage(page) {
   currentPage.value = Math.min(totalPages.value, Math.max(1, page))
 }
 
+function currentColumnWidths() {
+  const headers = tableElement.value?.querySelectorAll('thead th') || []
+  return Array.from(headers, (header) => Math.max(
+    minimumColumnWidth,
+    header.getBoundingClientRect().width || header.offsetWidth || minimumColumnWidth,
+  ))
+}
+
+function setResizedWidth(index, delta, sourceWidths) {
+  if (index < 0 || index >= sourceWidths.length - 1) return
+  const constrainedDelta = Math.min(
+    sourceWidths[index + 1] - minimumColumnWidth,
+    Math.max(minimumColumnWidth - sourceWidths[index], delta),
+  )
+  const nextWidths = [...sourceWidths]
+  nextWidths[index] = sourceWidths[index] + constrainedDelta
+  nextWidths[index + 1] = sourceWidths[index + 1] - constrainedDelta
+  columnWidths.value = nextWidths
+}
+
+function startColumnResize(columnIndex, event) {
+  if (event.button !== 0) return
+  const widths = currentColumnWidths()
+  if (widths.length !== columns.value.length) return
+
+  event.preventDefault()
+  resizeSession = {
+    columnIndex,
+    startX: event.clientX,
+    widths,
+  }
+  columnWidths.value = widths
+  resizingColumnIndex.value = columnIndex
+  document.body.classList.add('gpm-column-resizing')
+  window.addEventListener('mousemove', moveColumnResize)
+  window.addEventListener('mouseup', finishColumnResize)
+  window.addEventListener('blur', finishColumnResize)
+}
+
+function moveColumnResize(event) {
+  if (!resizeSession) return
+  setResizedWidth(
+    resizeSession.columnIndex,
+    event.clientX - resizeSession.startX,
+    resizeSession.widths,
+  )
+}
+
+function finishColumnResize() {
+  resizeSession = null
+  resizingColumnIndex.value = null
+  document.body.classList.remove('gpm-column-resizing')
+  window.removeEventListener('mousemove', moveColumnResize)
+  window.removeEventListener('mouseup', finishColumnResize)
+  window.removeEventListener('blur', finishColumnResize)
+}
+
+function resizeColumnByKeyboard(columnIndex, event) {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  event.preventDefault()
+  const widths = currentColumnWidths()
+  if (widths.length !== columns.value.length) return
+  setResizedWidth(
+    columnIndex,
+    event.key === 'ArrowRight' ? 12 : -12,
+    widths,
+  )
+}
+
 </script>
 
 <template>
@@ -164,10 +252,17 @@ function goToPage(page) {
           :node-path="childPath(index)"
           @toggle="toggleChild(childPath(index))" />
       </div>
-      <div v-if="columns.length" class="table-scroll">
-        <table class="detail-table">
+      <div v-if="columns.length" class="table-scroll"
+        :class="{ resizing: resizingColumnIndex !== null }">
+        <table ref="tableElement" class="detail-table" :style="tableStyle">
+          <colgroup v-if="columnWidths.length === columns.length">
+            <col v-for="(column, columnIndex) in columns"
+              :key="column.key || column.name || columnIndex"
+              :style="{ width: `${columnWidths[columnIndex]}px` }">
+          </colgroup>
           <thead><tr>
             <th v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex"
+              :class="{ 'is-resizing': resizingColumnIndex === columnIndex }"
               :aria-sort="sortColumnIndex === columnIndex
                 ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
               <button type="button" class="table-sort"
@@ -179,6 +274,11 @@ function goToPage(page) {
                   {{ sortColumnIndex === columnIndex ? (sortDirection === 'asc' ? '↑' : '↓') : '↕' }}
                 </span>
               </button>
+              <span v-if="columnIndex < columns.length - 1" class="column-resizer"
+                role="separator" tabindex="0"
+                aria-orientation="vertical" :aria-label="`调整${column.name || `第 ${columnIndex + 1} 列`}宽度`"
+                @mousedown.stop="startColumnResize(columnIndex, $event)"
+                @click.stop.prevent @keydown.stop="resizeColumnByKeyboard(columnIndex, $event)" />
             </th>
           </tr></thead>
           <tbody>
@@ -256,6 +356,7 @@ function goToPage(page) {
   overflow-x: auto; overflow-y: hidden; border: 1px solid var(--color-border-2);
   border-radius: 3px; background: var(--detail-table-cell-bg);
 }
+.table-scroll.resizing { cursor: col-resize; }
 .children-stack + .table-scroll { margin-top: 10px; }
 .detail-table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 12px; }
 th, td { text-align: left; border-right: 1px solid var(--color-border-1); border-bottom: 1px solid var(--color-border-1); }
@@ -273,11 +374,25 @@ td {
 .detail-link:hover { color: rgb(var(--arcoblue-4)); text-decoration: underline; }
 .detail-link:focus-visible { outline: 1px solid rgb(var(--arcoblue-5)); outline-offset: 2px; }
 .table-sort {
-  width: 100%; min-height: 32px; padding: 7px 9px; border: 0; display: flex;
+  width: 100%; min-height: 32px; padding: 7px 14px 7px 9px; border: 0; display: flex;
   align-items: center; justify-content: space-between; gap: 8px; color: inherit;
   background: transparent; font: inherit; font-weight: inherit; text-align: left; cursor: pointer;
 }
 .table-sort:focus-visible { outline: 1px solid rgb(var(--arcoblue-5)); outline-offset: -2px; }
+.column-resizer {
+  position: absolute; z-index: 3; top: 0; right: 0; width: 10px; height: 100%;
+  cursor: col-resize; touch-action: none;
+}
+.column-resizer::after {
+  content: ''; position: absolute; top: 4px; right: 0; bottom: 4px; width: 1px;
+  border-radius: 1px; background: rgb(var(--arcoblue-5)); opacity: 0;
+  transition: opacity .12s ease;
+}
+.column-resizer:hover::after,
+.column-resizer:focus-visible::after,
+th.is-resizing > .column-resizer::after { opacity: 1; }
+.column-resizer:focus-visible { outline: none; }
+:global(body.gpm-column-resizing) { cursor: col-resize !important; user-select: none !important; }
 .sort-mark { color: var(--color-text-4); font-size: 12px; font-weight: 400; }
 .sort-mark.active { color: rgb(var(--arcoblue-6)); }
 th:first-child, td:first-child { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

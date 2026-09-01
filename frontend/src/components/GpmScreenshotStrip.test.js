@@ -10,9 +10,9 @@ const points = [
   { id: 12, index: 2, thumbnail_url: '/thumb/2.jpg', image_url: '/image/2.jpg' },
 ]
 
-function mountStrip() {
+function mountStrip(props = {}) {
   return mount(GpmScreenshotStrip, {
-    props: { points, selectedPointId: 11 },
+    props: { points, selectedPointId: 11, ...props },
     global: {
       stubs: {
         'a-image-preview-group': {
@@ -31,12 +31,30 @@ describe('GpmScreenshotStrip', () => {
     HTMLElement.prototype.scrollTo = vi.fn()
   })
 
-  it('初始选中项不自动纠正截图条或外层页面的滚动位置', async () => {
-    const wrapper = mountStrip()
+  it('刷新恢复选中点位后将对应截图直接移入可视区域', async () => {
+    const wrapper = mountStrip({ selectedPointId: 12 })
+    const strip = wrapper.find('.shot-strip').element
+    const second = wrapper.findAll('.shot')[1].element
+    Object.defineProperty(strip, 'clientWidth', { configurable: true, value: 300 })
+    Object.defineProperty(second, 'offsetLeft', { configurable: true, value: 600 })
+    Object.defineProperty(second, 'offsetWidth', { configurable: true, value: 280 })
     await wrapper.vm.$nextTick()
 
-    expect(HTMLElement.prototype.scrollTo).not.toHaveBeenCalled()
+    expect(strip.scrollLeft).toBe(590)
     expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+  })
+
+  it('截图集合稍后到达时仍会定位已恢复的选中点位', async () => {
+    const wrapper = mountStrip({ points: [], selectedPointId: 12 })
+    await wrapper.setProps({ points })
+    const strip = wrapper.find('.shot-strip').element
+    const second = wrapper.findAll('.shot')[1].element
+    Object.defineProperty(strip, 'clientWidth', { configurable: true, value: 300 })
+    Object.defineProperty(second, 'offsetLeft', { configurable: true, value: 600 })
+    Object.defineProperty(second, 'offsetWidth', { configurable: true, value: 280 })
+    await wrapper.vm.$nextTick()
+
+    expect(strip.scrollLeft).toBe(590)
   })
 
   it('地图等外部来源切换点位时将对应截图直接移入可视区域', async () => {
@@ -111,6 +129,7 @@ describe('GpmScreenshotStrip', () => {
 
   it('纵向移动不劫持页面滚动', async () => {
     const wrapper = mountStrip()
+    await wrapper.vm.$nextTick()
     const strip = wrapper.find('.shot-strip')
     strip.element.scrollLeft = 100
 

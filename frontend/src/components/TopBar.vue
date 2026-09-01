@@ -69,6 +69,25 @@ function tabTarget(tab) {
     return safeReturnTo(route.query.return_to, tab.path)
   }
   let path = tab.path
+  if (context.value.isDataPage && context.value.workspace === 'gpm' && tab.id !== 'gpm') {
+    const rawMapName = route.params.mapName
+    const mapName = Array.isArray(rawMapName) ? rawMapName[0] : rawMapName
+    const flags = project.meta.scene_data_flags?.main?.[mapName]
+    const hasTargetScene = tab.id === 'screenshot'
+      ? flags?.has_screenshots === true
+      : flags?.has_map_build_data === true
+    if (mapName && hasTargetScene) path = `${tab.path}/${encodeURIComponent(mapName)}`
+    return { path }
+  }
+  if (context.value.isDataPage && context.value.workspace !== 'gpm' && tab.id === 'gpm') {
+    const rawSceneId = route.params.sceneId
+    const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId
+    const flags = project.meta.scene_data_flags?.main?.[sceneId]
+    if (sceneId && flags?.has_gpm_heatmap === true) {
+      path = `${tab.path}/${encodeURIComponent(sceneId)}`
+    }
+    return { path }
+  }
   const preservesScene = context.value.isDataPage
     && context.value.workspace !== 'gpm'
     && tab.id !== 'gpm'

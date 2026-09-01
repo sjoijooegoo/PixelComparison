@@ -35,7 +35,7 @@ from .db import IMAGES_DIR, THUMB_DIR, SessionLocal, get_db, initialize_database
 from .logging_setup import client_log, log, setup_logging
 from .gpm_heatmap import router as gpm_heatmap_router
 from .gpm_retention import gpm_retention_scheduler
-from .gpm_storage import initialize_gpm_database
+from .gpm_storage import connect_gpm_database, initialize_gpm_database
 from .map_build import (
     FORMAT_VERSION as MAP_BUILD_FORMAT_VERSION,
     MapBuildDataIn,
@@ -2151,17 +2151,21 @@ def get_meta(db: Session = Depends(get_db)):
     # 下拉菜单需要区分“目录中存在”与“当前分支确实有对应数据”。这里按
     # 分支 + 场景一次聚合，避免前端为每个场景分别请求；目录中但未入库的
     # 场景不会出现在映射中，前端按 false 处理。
-    scene_data_flags: dict[str, dict[str, dict[str, bool]]] = {
+    def empty_scene_flags() -> dict[str, object]:
+        return {
+            "has_screenshots": False,
+            "has_map_build_data": False,
+            "has_gpm_heatmap": False,
+            "screenshot_qualities": [],
+        }
+
+    scene_data_flags: dict[str, dict[str, dict[str, object]]] = {
         branch_tag: {} for branch_tag in branch_tags
     }
     for branch_tag, scene_id in db.execute(
         select(Batch.branch_tag, Batch.scene_id).distinct()
     ):
-        scene_data_flags[branch_tag][scene_id] = {
-            "has_screenshots": False,
-            "has_map_build_data": False,
-            "screenshot_qualities": [],
-        }
+        scene_data_flags[branch_tag][scene_id] = empty_scene_flags()
     all_runs = db.scalars(select(QualityRun)).all()
     # 这里需要所有运行的计数；直接聚合，不能把所有 ID 展开为 SQLite IN 参数。
     all_counts = ready_counts(db)
@@ -2188,6 +2192,24 @@ def get_meta(db: Session = Depends(get_db)):
         .distinct()
     ):
         scene_data_flags[branch_tag][scene_id]["has_map_build_data"] = True
+    # 热力图地图目录属于独立 SQLite，且配置跨分支共享。顶部工作区切换只需知道
+    # 默认 main 作用域是否存在同名地图；读取失败不能阻断截图/烘培元数据。
+    gpm_connection = None
+    try:
+        gpm_connection = connect_gpm_database()
+        configured_gpm_maps = {
+            row[0]
+            for row in gpm_connection.execute("SELECT map_name FROM gpm_map_definitions")
+        }
+    except Exception:
+        configured_gpm_maps = set()
+        log.exception("读取 GPMHeatmap 地图目录失败，主业务元数据继续返回")
+    finally:
+        if gpm_connection is not None:
+            gpm_connection.close()
+    for map_name in configured_gpm_maps:
+        flags = scene_data_flags["main"].setdefault(map_name, empty_scene_flags())
+        flags["has_gpm_heatmap"] = True
     return {
         "branch_tags": branch_tags,
         "scene_ids": scene_ids,

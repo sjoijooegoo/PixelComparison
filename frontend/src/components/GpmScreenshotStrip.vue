@@ -52,10 +52,11 @@ function revealPoint(pointId) {
 defineExpose({ revealPoint })
 
 watch(
-  () => props.selectedPointId,
-  async (pointId) => {
+  [() => props.selectedPointId, () => props.points],
+  async ([pointId], previousValues) => {
     const key = pointKey(pointId)
-    if (key && key === localSelectionKey) {
+    const previousKey = pointKey(previousValues?.[0])
+    if (key !== previousKey && key && key === localSelectionKey) {
       localSelectionKey = null
       return
     }
@@ -64,7 +65,7 @@ watch(
     await nextTick()
     revealPoint(pointId)
   },
-  { flush: 'post' },
+  { flush: 'post', immediate: true },
 )
 
 function onMouseDown(event) {
