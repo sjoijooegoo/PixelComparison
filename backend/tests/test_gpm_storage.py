@@ -3,18 +3,12 @@
 import importlib
 import sqlite3
 
+import pytest
 
-def test_final_schema_replaces_old_demo_database(tmp_path, monkeypatch):
+
+def test_final_schema_is_created_without_legacy_point_identity(tmp_path, monkeypatch):
     database = tmp_path / "gpm.db"
     assets = tmp_path / "assets"
-    assets.mkdir()
-    (assets / "old.png").write_bytes(b"old")
-    connection = sqlite3.connect(database)
-    connection.execute("CREATE TABLE old_gpm_demo (id INTEGER PRIMARY KEY)")
-    # 同一版本号但结构不匹配也必须整体重建，不能进入半兼容状态。
-    connection.execute("PRAGMA user_version=1")
-    connection.commit()
-    connection.close()
 
     monkeypatch.setenv("PIXELCOMP_GPM_DB_PATH", str(database))
     monkeypatch.setenv("PIXELCOMP_GPM_ASSETS_DIR", str(assets))
@@ -58,14 +52,48 @@ def test_final_schema_replaces_old_demo_database(tmp_path, monkeypatch):
         }
     finally:
         connection.close()
-    assert not (assets / "old.png").exists()
+    assert assets.is_dir()
+
+
+def test_schema_mismatch_refuses_startup_and_preserves_database_and_assets(tmp_path, monkeypatch):
+    database = tmp_path / "gpm.db"
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    marker = assets / "old.png"
+    marker.write_bytes(b"old")
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE old_gpm_demo (id INTEGER PRIMARY KEY)")
+    connection.execute("INSERT INTO old_gpm_demo (id) VALUES (7)")
+    connection.execute("PRAGMA user_version=1")
+    connection.commit()
+    connection.close()
+
+    monkeypatch.setenv("PIXELCOMP_GPM_DB_PATH", str(database))
+    monkeypatch.setenv("PIXELCOMP_GPM_ASSETS_DIR", str(assets))
+    import app.gpm_storage as storage
+    importlib.reload(storage)
+
+    with pytest.raises(storage.GpmSchemaMismatchError, match="拒绝启动且未修改") as error:
+        storage.initialize_gpm_database()
+
+    assert str(database.resolve()) in str(error.value)
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute("SELECT id FROM old_gpm_demo").fetchall() == [(7,)]
+        assert connection.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'gpm_uploads'"
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+    assert marker.read_bytes() == b"old"
 
 
 def test_final_schema_fingerprint_rejects_partial_same_version_database(tmp_path, monkeypatch):
     database = tmp_path / "partial.db"
+    assets = tmp_path / "assets"
     connection = sqlite3.connect(database)
-    # 表名和版本都伪装成最终状态，但列不完整。这种数据库必须整体重建，
-    # 否则会在首个用户请求时才报 no such column。
+    # 表名和版本都伪装成最终状态，但列不完整。这种数据库必须拒绝启动，
+    # 不能修改原库，也不能等到首个用户请求时才报 no such column。
     for table_name in (
         "gpm_uploads", "gpm_upload_maps", "gpm_points", "gpm_map_definitions",
         "gpm_metric_scales", "gpm_metric_scale_sets",
@@ -77,15 +105,18 @@ def test_final_schema_fingerprint_rejects_partial_same_version_database(tmp_path
     connection.close()
 
     monkeypatch.setenv("PIXELCOMP_GPM_DB_PATH", str(database))
-    monkeypatch.setenv("PIXELCOMP_GPM_ASSETS_DIR", str(tmp_path / "assets"))
+    monkeypatch.setenv("PIXELCOMP_GPM_ASSETS_DIR", str(assets))
     import app.gpm_storage as storage
     importlib.reload(storage)
 
-    storage.initialize_gpm_database()
-    connection = storage.connect_gpm_database()
+    with pytest.raises(storage.GpmSchemaMismatchError, match="schema 不兼容"):
+        storage.initialize_gpm_database()
+
+    connection = sqlite3.connect(database)
     try:
         assert {
             row[1] for row in connection.execute("PRAGMA table_info(gpm_uploads)")
-        } == storage._FINAL_COLUMNS["gpm_uploads"]
+        } == {"id"}
     finally:
         connection.close()
+    assert not assets.exists()

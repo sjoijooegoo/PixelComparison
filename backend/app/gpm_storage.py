@@ -1,14 +1,13 @@
 """GPMHeatmap 最终 SQLite schema 与资源目录。
 
-GPMHeatmap 仍处于 Demo 阶段，schema 不提供历史迁移。检测到旧 Demo 数据库时会
-一次性清空独立的 GPM 数据和资源，再创建当前唯一 schema；主业务数据库不受影响。
+GPMHeatmap 不提供运行时历史迁移。已有数据库与当前 schema 不匹配时拒绝启动，
+数据库和资源目录均保持原样，必须先备份并通过受控的离线流程处理。
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import shutil
 import sqlite3
 import threading
 from pathlib import Path
@@ -63,6 +62,10 @@ _FINAL_COLUMNS = {
 }
 
 
+class GpmSchemaMismatchError(RuntimeError):
+    """已有 GPM 数据库不符合当前唯一 schema。"""
+
+
 def data_dir() -> Path:
     return Path(
         os.environ.get("PIXELCOMP_DATA_DIR")
@@ -102,21 +105,6 @@ def _is_final_schema(connection: sqlite3.Connection) -> bool:
         == expected_columns
         for table_name, expected_columns in _FINAL_COLUMNS.items()
     )
-
-
-def _reset_demo_storage(database: Path) -> None:
-    """删除旧 GPM Demo 数据；这是唯一的版本切换策略，不保留迁移分支。"""
-
-    for candidate in (database, Path(f"{database}-wal"), Path(f"{database}-shm")):
-        try:
-            candidate.unlink(missing_ok=True)
-        except OSError:
-            _LOG.exception("无法删除旧 GPMHeatmap Demo 数据库文件: %s", candidate)
-            raise
-    assets = gpm_assets_dir().resolve()
-    if assets.exists():
-        shutil.rmtree(assets)
-    _LOG.info("已清空旧 GPMHeatmap Demo 数据并切换到最终 schema v%d", GPM_SCHEMA_VERSION)
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:
@@ -236,25 +224,31 @@ def _create_schema(connection: sqlite3.Connection) -> None:
 
 
 def initialize_gpm_database() -> None:
-    """初始化唯一最终 schema；旧 Demo schema 会被整体重建。"""
+    """初始化全新数据库；已有不兼容数据库会原样保留并拒绝启动。"""
 
     database = gpm_db_path().resolve()
     with _INITIALIZE_LOCK:
         if database in _INITIALIZED_DATABASES and database.is_file():
             return
         database.parent.mkdir(parents=True, exist_ok=True)
-        reset_required = False
         if database.exists():
-            probe = sqlite3.connect(database, timeout=30)
+            probe = sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True, timeout=30)
             try:
                 version = int(probe.execute("PRAGMA user_version").fetchone()[0])
-                reset_required = _has_user_tables(probe) and (
+                mismatch = _has_user_tables(probe) and (
                     version != GPM_SCHEMA_VERSION or not _is_final_schema(probe)
                 )
             finally:
                 probe.close()
-        if reset_required:
-            _reset_demo_storage(database)
+            if mismatch:
+                message = (
+                    "GPMHeatmap 数据库 schema 不兼容，已拒绝启动且未修改数据库或资源目录。"
+                    f"数据库: {database}；实际 user_version: {version}；"
+                    f"期望 user_version: {GPM_SCHEMA_VERSION}。"
+                    "请先备份数据库与 assets，再执行受控的离线转换或改用空数据目录。"
+                )
+                _LOG.critical(message)
+                raise GpmSchemaMismatchError(message)
 
         gpm_assets_dir().mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(database, timeout=30)
