@@ -27,7 +27,12 @@ const frame = {
     },
   }],
   points: [
-    { id: 1, position: [20, 20], heat_map_data: { Scene_DC: 320 } },
+    {
+      id: 1,
+      position: [20, 20],
+      heat_map_data: { Scene_DC: 320 },
+      metric_change_percent: { Scene_DC: 28 },
+    },
     { id: 2, position: [40, 40], heat_map_data: { Scene_DC: 380 } },
   ],
 }
@@ -60,5 +65,22 @@ describe('GpmMapCanvas legend interactions', () => {
     await bands[1].trigger('click')
     expect(bands[1].classes()).not.toContain('is-hidden')
     expect(bands[1].attributes('aria-pressed')).toBe('true')
+  })
+
+  it('点位面板在指标值后显示相对上一批次的升降百分比', async () => {
+    const wrapper = mount(GpmMapCanvas, {
+      props: {
+        frame: { ...frame, previous_batch: { batch_id: 'previous' } },
+        metricKey: 'Scene_DC',
+      },
+    })
+
+    wrapper.vm.hoveredPointId = 1
+    wrapper.vm.tooltipAnchor = { x: 20, y: 20, side: 'right' }
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('.tooltip-metric strong').text()).toBe('320')
+    expect(wrapper.get('.metric-change').text()).toBe('↑ 28%')
+    expect(wrapper.get('.metric-change').classes()).toContain('is-up')
   })
 })

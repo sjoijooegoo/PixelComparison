@@ -39,6 +39,9 @@ const pointsById = computed(() => new Map(
 ))
 const hoveredPoint = computed(() => pointsById.value.get(String(hoveredPointId.value)))
 const hoveredValue = computed(() => hoveredPoint.value?.heat_map_data?.[props.metricKey])
+const hoveredChangePercent = computed(() => (
+  hoveredPoint.value?.metric_change_percent?.[props.metricKey]
+))
 const hoveredValueColor = computed(() => resolvedHeatColor(
   hoveredValue.value,
   activeScale.value,
@@ -56,6 +59,24 @@ function formatValue(value) {
   if (!Number.isFinite(number)) return value ?? '--'
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(number)
 }
+
+function changeIndicator(value) {
+  if (value === null || value === undefined || String(value).trim() === '') {
+    return { label: '—', direction: 'unavailable' }
+  }
+  const number = Number(value)
+  if (!Number.isFinite(number)) {
+    return { label: '—', direction: 'unavailable' }
+  }
+  const percentage = new Intl.NumberFormat('zh-CN', {
+    maximumFractionDigits: 1,
+  }).format(Math.abs(number))
+  if (number > 0) return { label: `↑ ${percentage}%`, direction: 'up' }
+  if (number < 0) return { label: `↓ ${percentage}%`, direction: 'down' }
+  return { label: '0%', direction: 'flat' }
+}
+
+const hoveredChange = computed(() => changeIndicator(hoveredChangePercent.value))
 
 function setHoveredBand(index) {
   hoveredBandIndex.value = index
@@ -307,7 +328,13 @@ onBeforeUnmount(() => observer?.disconnect())
         </div>
         <div class="tooltip-metric">
           <span>{{ metric?.name || metricKey }}</span>
-          <strong :style="{ color: hoveredValueColor }">{{ formatValue(hoveredValue) }}</strong>
+          <div class="metric-reading">
+            <strong :style="{ color: hoveredValueColor }">{{ formatValue(hoveredValue) }}</strong>
+            <small class="metric-change" :class="`is-${hoveredChange.direction}`"
+              :title="frame?.previous_batch ? '较上一次批次' : '没有可对比的上一批次'">
+              {{ hoveredChange.label }}
+            </small>
+          </div>
         </div>
       </div>
     </div>
@@ -393,6 +420,15 @@ onBeforeUnmount(() => observer?.disconnect())
 .tooltip-id strong { color: rgb(var(--arcoblue-5)); }
 .tooltip-position strong { display: inline-flex; gap: 5px; }
 .tooltip-position b { color: rgba(255, 255, 255, .5); font: inherit; font-weight: 500; }
+.metric-reading { display: inline-flex; align-items: baseline; justify-content: flex-end; }
+.metric-change {
+  margin-left: 7px; padding-left: 7px; border-left: 1px solid rgba(255, 255, 255, .18);
+  font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.metric-change.is-up { color: rgb(var(--red-6)); }
+.metric-change.is-down { color: rgb(var(--green-6)); }
+.metric-change.is-flat { color: rgba(255, 255, 255, .72); }
+.metric-change.is-unavailable { color: rgba(255, 255, 255, .42); }
 .map-empty { flex: 1; min-height: 390px; display: grid; place-items: center; color: var(--color-text-3); }
 .map-legend {
   min-height: 42px; padding: 8px 14px; display: flex; align-items: center; flex-wrap: wrap;

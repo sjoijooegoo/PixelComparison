@@ -172,7 +172,7 @@ def list_uploads(
             LEFT JOIN gpm_points p ON p.upload_map_id = m.id
             LEFT JOIN gpm_map_definitions d ON d.map_name = m.map_name
             WHERE {where}
-            GROUP BY u.id ORDER BY u.captured_at_epoch DESC, u.id DESC
+            GROUP BY u.id ORDER BY u.id DESC
             LIMIT ? OFFSET ?
             """,
             (*params, page_size, (page - 1) * page_size),

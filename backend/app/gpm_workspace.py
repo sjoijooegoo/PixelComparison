@@ -64,6 +64,34 @@ def _point_dto(row, *, detail: bool = False) -> dict:
     return item
 
 
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _metric_change_percentages(
+    current_metrics: dict,
+    previous_metrics: dict | None,
+) -> dict[str, float]:
+    if not previous_metrics:
+        return {}
+    changes: dict[str, float] = {}
+    for key, current_value in current_metrics.items():
+        current_number = _finite_number(current_value)
+        previous_number = _finite_number(previous_metrics.get(key))
+        if current_number is None or previous_number is None or previous_number == 0:
+            continue
+        change = (current_number - previous_number) / abs(previous_number) * 100
+        if math.isfinite(change):
+            changes[key] = change
+    return changes
+
+
 @router.get("/api/gpm-heatmaps/maps/{map_name}/frame")
 def get_map_frame(
     map_name: str,
@@ -111,6 +139,33 @@ def get_map_frame(
                 )
             else:
                 selected = batches[0]
+        comparison_batches = [
+            row for row in batches
+            if row["platform"] == selected["platform"]
+            and row["shading_quality"] == selected["shading_quality"]
+        ]
+        selected_index = next(
+            index for index, row in enumerate(comparison_batches)
+            if row["id"] == selected["id"]
+        )
+        previous = (
+            comparison_batches[selected_index + 1]
+            if selected_index + 1 < len(comparison_batches)
+            else None
+        )
+        previous_metrics_by_index: dict[int, dict] = {}
+        if previous:
+            previous_point_rows = connection.execute(
+                """
+                SELECT point_index, heat_map_data_json
+                FROM gpm_points WHERE upload_map_id = ?
+                """,
+                (previous["upload_map_id"],),
+            ).fetchall()
+            previous_metrics_by_index = {
+                row["point_index"]: json.loads(row["heat_map_data_json"])
+                for row in previous_point_rows
+            }
         point_rows = connection.execute(
             """
             SELECT id, point_index, screenshot_id,
@@ -120,7 +175,14 @@ def get_map_frame(
             """,
             (selected["upload_map_id"],),
         ).fetchall()
-        points = [_point_dto(row) for row in point_rows]
+        points = []
+        for row in point_rows:
+            point = _point_dto(row)
+            point["metric_change_percent"] = _metric_change_percentages(
+                point["heat_map_data"],
+                previous_metrics_by_index.get(point["index"]),
+            )
+            points.append(point)
         map_payload = connection.execute(
             "SELECT heat_map_json, trend_json FROM gpm_upload_maps WHERE id = ?",
             (selected["upload_map_id"],),
@@ -138,6 +200,7 @@ def get_map_frame(
             metric["scale"] = scales.get(metric.get("key"))
         return {
             "batch": batch_dto(selected),
+            "previous_batch": batch_dto(previous) if previous else None,
             "available_batches": [batch_dto(row) for row in batches],
             "map": {
                 "map_name": map_name,

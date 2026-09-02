@@ -141,6 +141,28 @@ describe('GpmDetailNode', () => {
     expect(headers[0].attributes('aria-sort')).toBe('none')
   })
 
+  it('长文本始终限制在所属单元格并保留完整悬停内容', () => {
+    const longText = 'VeryLongAssetNameWithoutAnyNaturalBreakPoint_1234567890'
+    const longLink = 'https://example.com/a/very/long/path/without/a/short/display/name'
+    const wrapper = mount(GpmDetailNode, {
+      props: {
+        expanded: true,
+        node: {
+          name: '长文本数据',
+          table_data: {
+            cols: [{ key: 'asset', name: '资产' }, { key: 'source', name: '源数据' }],
+            data: [[longText, longLink]],
+          },
+        },
+      },
+    })
+
+    const cells = wrapper.findAll('tbody td')
+    expect(cells[0].get('.cell-content').text()).toBe(longText)
+    expect(cells[1].get('.cell-content').text()).toBe(longLink)
+    expect(cells.map((cell) => cell.attributes('title'))).toEqual([longText, longLink])
+  })
+
   it('大表格完整保留数据并使用上一页、下一页切换', async () => {
     const rows = Array.from({ length: 250 }, (_, index) => [`asset-${index}`, index])
     const wrapper = mount(GpmDetailNode, {

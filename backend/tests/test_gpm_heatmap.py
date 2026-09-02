@@ -345,6 +345,26 @@ def test_catalog_uses_configured_map_order_and_batch_filters(client, png_bytes):
     assert client.get("/api/gpm-heatmaps/uploads", params={"map_name": "Forest_WP"}).json()["total"] == 0
 
 
+def test_upload_list_uses_database_id_desc_instead_of_capture_time(client, png_bytes):
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="reported-first",
+        captured_at=_captured_at(hours_ago=1),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="reported-second",
+        captured_at=_captured_at(days_ago=1),
+    ).status_code == 201
+
+    items = client.get("/api/gpm-heatmaps/uploads").json()["items"]
+
+    assert [item["batch_id"] for item in items] == ["reported-second", "reported-first"]
+    assert items[0]["id"] > items[1]["id"]
+
+
 def test_removed_gpm_compatibility_endpoints_are_not_routable(client):
     for path in (
         "/api/gpm-heatmaps/meta",
@@ -611,6 +631,18 @@ def test_map_and_point_trends_use_map_name(client, png_bytes):
         "/api/gpm-heatmaps/maps/Village_Dimension_Main/frame",
         params={"platform": "Android", "shading_quality": 5},
     ).json()
+    assert frame["previous_batch"]["batch_id"] == "older"
+    assert frame["points"][0]["metric_change_percent"]["Scene_DC"] == 50
+    assert frame["points"][0]["metric_change_percent"]["Scene_Tris"] == 0
+
+    oldest_frame = client.get(
+        "/api/gpm-heatmaps/maps/Village_Dimension_Main/frame",
+        params={
+            "platform": "Android", "shading_quality": 5, "batch_id": "older",
+        },
+    ).json()
+    assert oldest_frame["previous_batch"] is None
+    assert oldest_frame["points"][0]["metric_change_percent"] == {}
     scene_trend = client.get(
         "/api/gpm-heatmaps/maps/Village_Dimension_Main/trends",
         params={"platform": "Android", "shading_quality": 5, "days": 14},

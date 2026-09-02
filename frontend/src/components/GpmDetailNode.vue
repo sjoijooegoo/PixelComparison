@@ -129,6 +129,11 @@ function cellValue(row, column, columnIndex) {
   return Array.isArray(row) ? row[columnIndex] : row?.[column.key]
 }
 
+function cellTitle(row, column, columnIndex) {
+  const value = cellValue(row, column, columnIndex)
+  return value === null || value === undefined ? '' : String(value)
+}
+
 function externalLink(value) {
   if (typeof value !== 'string') return ''
   const candidate = value.trim()
@@ -284,13 +289,15 @@ function resizeColumnByKeyboard(columnIndex, event) {
           <tbody>
             <tr v-for="(row, rowIndex) in pagedRows"
               :key="`${currentPage}-${rowIndex}`">
-              <td v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex">
-                <a v-if="externalLink(cellValue(row, column, columnIndex))" class="detail-link"
+              <td v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex"
+                :title="cellTitle(row, column, columnIndex)">
+                <a v-if="externalLink(cellValue(row, column, columnIndex))"
+                  class="cell-content detail-link"
                   :href="externalLink(cellValue(row, column, columnIndex))"
                   target="_blank" rel="noopener noreferrer">
                   {{ cellValue(row, column, columnIndex) }}
                 </a>
-                <template v-else>{{ cellValue(row, column, columnIndex) }}</template>
+                <span v-else class="cell-content">{{ cellValue(row, column, columnIndex) }}</span>
               </td>
             </tr>
           </tbody>
@@ -359,17 +366,25 @@ function resizeColumnByKeyboard(columnIndex, event) {
 .table-scroll.resizing { cursor: col-resize; }
 .children-stack + .table-scroll { margin-top: 10px; }
 .detail-table { border-collapse: collapse; width: 100%; min-width: 420px; font-size: 12px; }
-th, td { text-align: left; border-right: 1px solid var(--color-border-1); border-bottom: 1px solid var(--color-border-1); }
+th, td {
+  overflow: hidden; text-align: left;
+  border-right: 1px solid var(--color-border-1); border-bottom: 1px solid var(--color-border-1);
+}
 th {
   position: sticky; top: 0; z-index: 1; color: var(--color-text-2); font-weight: 600;
   background: var(--detail-table-head-bg);
 }
 td {
-  padding: 7px 9px; color: var(--color-text-2); background: var(--detail-table-cell-bg);
+  min-width: 0; padding: 7px 9px; color: var(--color-text-2); background: var(--detail-table-cell-bg);
   font-variant-numeric: tabular-nums;
 }
+.cell-content {
+  display: block; min-width: 0; width: 100%; overflow: hidden;
+  margin-bottom: -2px; padding-bottom: 2px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
 .detail-link {
-  color: rgb(var(--arcoblue-5)); text-decoration: none; overflow-wrap: anywhere;
+  color: rgb(var(--arcoblue-5)); text-decoration: none;
 }
 .detail-link:hover { color: rgb(var(--arcoblue-4)); text-decoration: underline; }
 .detail-link:focus-visible { outline: 1px solid rgb(var(--arcoblue-5)); outline-offset: 2px; }
@@ -377,6 +392,10 @@ td {
   width: 100%; min-height: 32px; padding: 7px 14px 7px 9px; border: 0; display: flex;
   align-items: center; justify-content: space-between; gap: 8px; color: inherit;
   background: transparent; font: inherit; font-weight: inherit; text-align: left; cursor: pointer;
+}
+.table-sort > span:first-child {
+  min-width: 0; overflow: hidden; margin-bottom: -2px; padding-bottom: 2px;
+  text-overflow: ellipsis; white-space: nowrap;
 }
 .table-sort:focus-visible { outline: 1px solid rgb(var(--arcoblue-5)); outline-offset: -2px; }
 .column-resizer {
@@ -395,7 +414,7 @@ th.is-resizing > .column-resizer::after { opacity: 1; }
 :global(body.gpm-column-resizing) { cursor: col-resize !important; user-select: none !important; }
 .sort-mark { color: var(--color-text-4); font-size: 12px; font-weight: 400; }
 .sort-mark.active { color: rgb(var(--arcoblue-6)); }
-th:first-child, td:first-child { max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+th:first-child, td:first-child { max-width: 360px; }
 tr:last-child td { border-bottom: 0; }
 th:last-child, td:last-child { border-right: 0; }
 .table-pagination {
