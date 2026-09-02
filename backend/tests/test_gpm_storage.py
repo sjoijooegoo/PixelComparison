@@ -1,7 +1,11 @@
 """GPMHeatmap 最终 schema，不测试任何历史迁移。"""
 
 import importlib
+import os
 import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -86,6 +90,58 @@ def test_schema_mismatch_refuses_startup_and_preserves_database_and_assets(tmp_p
     finally:
         connection.close()
     assert marker.read_bytes() == b"old"
+
+
+def test_application_startup_fails_on_gpm_schema_mismatch_without_modifying_data(tmp_path):
+    database = tmp_path / "gpm.db"
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    marker = assets / "point.png"
+    marker.write_bytes(b"point-data")
+    connection = sqlite3.connect(database)
+    connection.execute("CREATE TABLE old_gpm_demo (id INTEGER PRIMARY KEY)")
+    connection.execute("INSERT INTO old_gpm_demo (id) VALUES (9)")
+    connection.execute("PRAGMA user_version=1")
+    connection.commit()
+    connection.close()
+
+    environment = os.environ.copy()
+    for name in (
+        "PIXELCOMP_DB_PATH",
+        "PIXELCOMP_IMAGES_DIR",
+        "PIXELCOMP_THUMB_DIR",
+        "PIXELCOMP_GPM_DIR",
+        "PIXELCOMP_GPM_DB_PATH",
+        "PIXELCOMP_GPM_ASSETS_DIR",
+    ):
+        environment.pop(name, None)
+    environment.update({
+        "PIXELCOMP_DATA_DIR": str(tmp_path / "application-data"),
+        "PIXELCOMP_GPM_DB_PATH": str(database),
+        "PIXELCOMP_GPM_ASSETS_DIR": str(assets),
+        "PIXELCOMP_BACKUP_ENABLED": "0",
+    })
+    completed = subprocess.run(
+        [sys.executable, "-c", "import app.main"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    output = completed.stdout + completed.stderr
+    assert "GpmSchemaMismatchError" in output
+    connection = sqlite3.connect(database)
+    try:
+        assert connection.execute("SELECT id FROM old_gpm_demo").fetchall() == [(9,)]
+    finally:
+        connection.close()
+    assert marker.read_bytes() == b"point-data"
 
 
 def test_final_schema_fingerprint_rejects_partial_same_version_database(tmp_path, monkeypatch):

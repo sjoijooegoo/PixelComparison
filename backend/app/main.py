@@ -35,7 +35,7 @@ from .db import IMAGES_DIR, THUMB_DIR, SessionLocal, get_db, initialize_database
 from .logging_setup import client_log, log, setup_logging
 from .gpm_heatmap import router as gpm_heatmap_router
 from .gpm_retention import gpm_retention_scheduler
-from .gpm_storage import initialize_gpm_database
+from .gpm_storage import GpmSchemaMismatchError, initialize_gpm_database
 from .map_build import (
     FORMAT_VERSION as MAP_BUILD_FORMAT_VERSION,
     MapBuildDataIn,
@@ -72,6 +72,9 @@ setup_logging()
 initialize_database()
 try:
     initialize_gpm_database()
+except GpmSchemaMismatchError:
+    # 结构不匹配必须阻止进程启动，避免服务以半可用状态运行并掩盖部署错误。
+    raise
 except Exception:
     # GPMHeatmap 是独立数据域；其单独磁盘或配置异常不能阻断截图对比和烘培数据。
     # GPM API 首次访问时会再次尝试初始化，并返回该模块自己的错误。

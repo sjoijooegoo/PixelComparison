@@ -9,6 +9,15 @@ import pytest
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     """A TestClient backed by an isolated temp data dir + fresh SQLite db."""
+    for name in (
+        "PIXELCOMP_DB_PATH",
+        "PIXELCOMP_IMAGES_DIR",
+        "PIXELCOMP_THUMB_DIR",
+        "PIXELCOMP_GPM_DIR",
+        "PIXELCOMP_GPM_DB_PATH",
+        "PIXELCOMP_GPM_ASSETS_DIR",
+    ):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("PIXELCOMP_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PIXELCOMP_BACKUP_ENABLED", "0")
 
