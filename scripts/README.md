@@ -133,7 +133,19 @@ node scripts/ui-load-smoke.mjs http://localhost:5173 Lv_Starfall 6
 
 该脚本本身只浏览页面，但同样依赖固定 Playwright 路径和已有业务数据。自动刷新等页面行为仍会产生 API 读取流量。
 
-## 7. 后续工程化建议
+## 7. 热力图主界面并发压测
+
+脚本：`scripts/gpm-heatmap-load.mjs`
+
+```powershell
+node scripts/gpm-heatmap-load.mjs --base http://127.0.0.1:5173 --users 10 --rounds 25
+```
+
+脚本只模拟热力图主界面的读取行为，不进入设置页，也不会上传、删除或修改配置。每个虚拟用户会持续切换已有的平台、地图和画质，读取最新地图帧、点位详情、整体/单点趋势、缩略图和地图图片；同时检查批次范围、点位序号与截图 ID、详情归属、趋势时间顺序以及最新批次是否倒退。
+
+结果会按接口输出请求数、失败数、p50/p95/p99、最大耗时和平均响应体积；任意 HTTP、JSON、图片或数据一致性错误都会令进程以非零状态退出。可选参数包括 `--branch`、`--days`、`--timeout` 和 `--think`。
+
+## 8. 后续工程化建议
 
 - 把 Playwright 放入项目 devDependencies，移除绝对路径。
 - 为浏览器测试启动临时数据目录和独立后端，运行后销毁。

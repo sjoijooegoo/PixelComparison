@@ -18,6 +18,7 @@ let unregisterRefresh = null
 let applyingRoute = false
 let routeSequence = 0
 let synchronizedRoutePath = ''
+let routeSyncPromise = null
 let pageActive = false
 const hoveredTrendPointKey = ref('')
 const screenshotStrip = ref(null)
@@ -79,24 +80,36 @@ function sameLocation(target) {
   return route.fullPath === router.resolve(target).fullPath
 }
 
-async function syncRoute() {
-  if (!ownsCurrentRoute()) return
-  const target = normalizedLocation()
-  const targetPath = router.resolve(target).fullPath
-  if (sameLocation(target)) {
-    synchronizedRoutePath = ''
-    return
+async function drainRouteSynchronization() {
+  while (ownsCurrentRoute()) {
+    const target = normalizedLocation()
+    const targetPath = router.resolve(target).fullPath
+    if (sameLocation(target)) {
+      synchronizedRoutePath = ''
+      return
+    }
+    synchronizedRoutePath = targetPath
+    applyingRoute = true
+    try {
+      await router.replace(target)
+    } catch (error) {
+      if (synchronizedRoutePath === targetPath) synchronizedRoutePath = ''
+      throw error
+    } finally {
+      applyingRoute = false
+    }
   }
-  synchronizedRoutePath = targetPath
-  applyingRoute = true
-  try {
-    await router.replace(target)
-  } catch (error) {
-    if (synchronizedRoutePath === targetPath) synchronizedRoutePath = ''
-    throw error
-  } finally {
-    applyingRoute = false
-  }
+}
+
+function syncRoute() {
+  if (!ownsCurrentRoute()) return Promise.resolve()
+  if (routeSyncPromise) return routeSyncPromise
+  const pending = drainRouteSynchronization()
+  const wrapped = pending.finally(() => {
+    if (routeSyncPromise === wrapped) routeSyncPromise = null
+  })
+  routeSyncPromise = wrapped
+  return wrapped
 }
 
 async function applyCurrentRoute({ preferLatest = false } = {}) {

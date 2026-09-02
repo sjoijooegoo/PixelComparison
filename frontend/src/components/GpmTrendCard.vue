@@ -19,8 +19,10 @@ const PLOT = { left: HORIZONTAL_GUTTER, right: HORIZONTAL_GUTTER, top: 14, botto
 const POINT_HIT_RADIUS = 20
 const chartCanvas = ref(null)
 const chartWidth = ref(DEFAULT_WIDTH)
+const chartRenderedHeight = ref(HEIGHT)
 const plotWidth = computed(() => chartWidth.value - PLOT.left - PLOT.right)
 const plotHeight = HEIGHT - PLOT.top - PLOT.bottom
+const pointHitRadius = computed(() => POINT_HIT_RADIUS * HEIGHT / chartRenderedHeight.value)
 const localHoveredPointKey = ref('')
 const blockedKey = ref('')
 let blockedTimer = null
@@ -205,6 +207,7 @@ const tooltipStyle = computed(() => {
 
 function syncChartWidth(rect = chartCanvas.value?.getBoundingClientRect()) {
   if (!rect || rect.width <= 0 || rect.height <= 0) return
+  chartRenderedHeight.value = rect.height
   chartWidth.value = Math.max(640, Math.round(HEIGHT * rect.width / rect.height))
 }
 
@@ -276,7 +279,7 @@ onBeforeUnmount(() => {
         <g v-for="item in chartSeries" :key="`hit-${item.key}`">
           <circle v-for="(value, index) in item.values" v-show="value != null"
             :key="`${item.key}-${index}`" :cx="xAt(index)" :cy="yAt(value || 0)"
-            :r="POINT_HIT_RADIUS" fill="transparent" class="point-hit-area"
+            :r="pointHitRadius" fill="transparent" class="point-hit-area"
             @mouseenter="hoverPoint(points[index])" @mouseleave="clearLocalHover"
             @click="selectBatch(points[index])" />
         </g>

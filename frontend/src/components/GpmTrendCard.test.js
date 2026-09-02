@@ -65,13 +65,32 @@ describe('GpmTrendCard', () => {
     expect(wrapper.emitted('hover-point').at(-1)).toEqual([''])
   })
 
-  it('只在数据点邻近区域响应悬停', () => {
-    const wrapper = mountCard()
-    const hitAreas = wrapper.findAll('circle.point-hit-area')
+  it('只在数据点周围 20px 内响应悬停且不受图表缩放影响', async () => {
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    HTMLElement.prototype.getBoundingClientRect = () => ({
+      width: 1200,
+      height: 420,
+      top: 0,
+      right: 1200,
+      bottom: 420,
+      left: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
 
-    expect(hitAreas).toHaveLength(4)
-    expect(wrapper.find('rect.point-hit-area').exists()).toBe(false)
-    expect(hitAreas.every((area) => area.attributes('r') === '20')).toBe(true)
+    try {
+      const wrapper = mountCard()
+      await wrapper.vm.$nextTick()
+      const hitAreas = wrapper.findAll('circle.point-hit-area')
+      const renderedRadius = Number(hitAreas[0].attributes('r')) * 420 / 255
+
+      expect(hitAreas).toHaveLength(4)
+      expect(wrapper.find('rect.point-hit-area').exists()).toBe(false)
+      expect(renderedRadius).toBeCloseTo(20)
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+    }
   })
 
   it('点击趋势节点时选择对应采集批次', async () => {

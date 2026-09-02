@@ -53,6 +53,17 @@ const TrendStub = defineComponent({
   emits: ['select-batch'],
   template: '<button class="trend-stub" @click="$emit(\'select-batch\', \'batch-2\')" />',
 })
+const RapidPointStub = defineComponent({
+  emits: ['select'],
+  setup(_, { emit }) {
+    return {
+      selectRapidly() {
+        for (const pointId of [3, 5, 11, 13]) emit('select', pointId)
+      },
+    }
+  },
+  template: '<button class="rapid-point-stub" @click="selectRapidly" />',
+})
 
 async function flushRoute() {
   await Promise.resolve()
@@ -166,6 +177,68 @@ describe('GpmHeatmapView route ownership', () => {
     await flushRoute()
 
     expect(storeMock.changeScope).toHaveBeenCalledWith({ batchId: 'batch-2' })
+    wrapper.unmount()
+  })
+
+  it('连续选择点位且最后回到原点位时保留最后一次选择', async () => {
+    storeMock.frame = { heat_map: [], points: [], trend: [] }
+    storeMock.selectedPointId = 13
+    storeMock.applyRoute.mockResolvedValue()
+    storeMock.selectPoint.mockImplementation((pointId) => {
+      storeMock.selectedPointId = pointId
+      return Promise.resolve()
+    })
+    storeMock.routeState.mockImplementation(() => ({
+      mapName: 'Forest_WP', platform: 'IOS', shadingQuality: 1, batchId: 'batch-1',
+      metric: 'Scene_DC', point: storeMock.selectedPointId,
+      trendMode: 'average', days: 14,
+    }))
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/gpm-heatmap/:mapName?', component: GpmHeatmapView }],
+    })
+    await router.push('/gpm-heatmap/Forest_WP?platform=IOS&quality=1&batch=batch-1&point=13')
+    await router.isReady()
+    const replace = router.replace.bind(router)
+    const pendingReplacements = []
+    let delayReplacements = true
+    vi.spyOn(router, 'replace').mockImplementation((target) => {
+      if (!delayReplacements) return replace(target)
+      return new Promise((resolve, reject) => {
+        pendingReplacements.push(() => replace(target).then(
+          (value) => { resolve(value); return value },
+          (error) => { reject(error); throw error },
+        ))
+      })
+    })
+    const wrapper = mount(AppView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          GpmDetailPanel: true,
+          GpmMapCanvas: true,
+          GpmScreenshotStrip: RapidPointStub,
+          GpmTrendCard: true,
+          'a-button': true,
+          'a-empty': true,
+          'a-option': true,
+          'a-radio': true,
+          'a-radio-group': true,
+          'a-select': true,
+          'a-spin': true,
+        },
+      },
+    })
+    await flushRoute()
+
+    await wrapper.get('.rapid-point-stub').trigger('click')
+    await flushRoute()
+    delayReplacements = false
+    await Promise.all(pendingReplacements.map((release) => release()))
+    await vi.waitFor(() => {
+      expect(router.currentRoute.value.query.point).toBe('13')
+    })
+    expect(storeMock.selectedPointId).toBe(13)
     wrapper.unmount()
   })
 })
