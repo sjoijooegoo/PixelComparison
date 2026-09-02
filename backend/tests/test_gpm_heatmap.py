@@ -655,6 +655,42 @@ def test_map_and_point_trends_use_map_name(client, png_bytes):
     assert [item["metrics"]["Scene_DC"] for item in point_trend["points"]] == [200, 300]
 
 
+def test_frame_compares_with_previous_upload_id_in_the_same_scope(client, png_bytes):
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="reported-first",
+        captured_at=_captured_at(hours_ago=1),
+        report=_report(value=200),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="other-platform",
+        captured_at=_captured_at(hours_ago=2),
+        report=_report(platform="IOS", value=900),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="reported-second-backfill",
+        captured_at=_captured_at(days_ago=1),
+        report=_report(value=300),
+    ).status_code == 201
+
+    frame = client.get(
+        "/api/gpm-heatmaps/maps/Village_Dimension_Main/frame",
+        params={
+            "platform": "Android",
+            "shading_quality": 5,
+            "batch_id": "reported-second-backfill",
+        },
+    ).json()
+
+    assert frame["previous_batch"]["batch_id"] == "reported-first"
+    assert frame["points"][0]["metric_change_percent"]["Scene_DC"] == 50
+
+
 def test_map_preview_uses_latest_batch(client, png_bytes):
     assert _save_map(client).status_code == 200
     assert _upload(client, png_bytes()).status_code == 201

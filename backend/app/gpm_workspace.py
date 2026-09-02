@@ -139,11 +139,15 @@ def get_map_frame(
                 )
             else:
                 selected = batches[0]
-        comparison_batches = [
-            row for row in batches
-            if row["platform"] == selected["platform"]
-            and row["shading_quality"] == selected["shading_quality"]
-        ]
+        comparison_batches = sorted(
+            (
+                row for row in batches
+                if row["platform"] == selected["platform"]
+                and row["shading_quality"] == selected["shading_quality"]
+            ),
+            key=lambda row: int(row["id"]),
+            reverse=True,
+        )
         selected_index = next(
             index for index, row in enumerate(comparison_batches)
             if row["id"] == selected["id"]

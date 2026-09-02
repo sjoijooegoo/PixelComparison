@@ -43,9 +43,16 @@ def test_final_schema_replaces_old_demo_database(tmp_path, monkeypatch):
         assert "scene_id" not in {
             row[1] for row in connection.execute("PRAGMA table_info(gpm_upload_maps)")
         }
-        assert "scene_row_id" not in {
+        point_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(gpm_points)")
         }
+        assert "scene_row_id" not in point_columns
+        assert "point_key" not in point_columns
+        point_indexes = {
+            row[1] for row in connection.execute("PRAGMA index_list(gpm_points)")
+        }
+        assert "uq_gpm_points_stable_key" not in point_indexes
+        assert "ix_gpm_point_key" not in point_indexes
         assert "thresholds_json" not in {
             row[1] for row in connection.execute("PRAGMA table_info(gpm_metric_scales)")
         }

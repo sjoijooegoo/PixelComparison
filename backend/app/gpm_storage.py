@@ -40,7 +40,7 @@ _FINAL_COLUMNS = {
         "trend_json",
     },
     "gpm_points": {
-        "id", "upload_map_id", "point_index", "screenshot_id", "point_key",
+        "id", "upload_map_id", "point_index", "screenshot_id",
         "position_x", "position_y", "direction_x", "direction_y",
         "heat_map_data_json", "trend_data_json", "detail_data_json",
         "screenshot_path", "thumbnail_path",
@@ -156,7 +156,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             upload_map_id INTEGER NOT NULL REFERENCES gpm_upload_maps(id) ON DELETE CASCADE,
             point_index INTEGER NOT NULL,
             screenshot_id TEXT NOT NULL,
-            point_key TEXT,
             position_x REAL NOT NULL,
             position_y REAL NOT NULL,
             direction_x REAL NOT NULL,
@@ -169,9 +168,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             UNIQUE(upload_map_id, point_index),
             UNIQUE(upload_map_id, screenshot_id)
         );
-
-        CREATE UNIQUE INDEX IF NOT EXISTS uq_gpm_points_stable_key
-            ON gpm_points(upload_map_id, point_key) WHERE point_key IS NOT NULL;
 
         CREATE TABLE IF NOT EXISTS gpm_map_definitions (
             map_name TEXT PRIMARY KEY,
@@ -231,7 +227,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             ON gpm_uploads(branch_tag, platform, shading_quality, captured_at_epoch DESC);
         CREATE INDEX IF NOT EXISTS ix_gpm_upload_map_name ON gpm_upload_maps(map_name, upload_id);
         CREATE INDEX IF NOT EXISTS ix_gpm_point_upload_map ON gpm_points(upload_map_id, point_index);
-        CREATE INDEX IF NOT EXISTS ix_gpm_point_key ON gpm_points(point_key);
         CREATE INDEX IF NOT EXISTS ix_gpm_scale_item_scale ON gpm_metric_scale_set_items(scale_id);
         CREATE INDEX IF NOT EXISTS ix_gpm_binding_set ON gpm_map_scale_set_bindings(scale_set_id, map_name);
 
