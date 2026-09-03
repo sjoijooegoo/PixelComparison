@@ -83,6 +83,10 @@ describe('BatchTable 数据能力操作', () => {
     expect(button(emptyRow, '查看烘培数据').element.disabled).toBe(true)
     expect(button(mapRow, '查看烘培数据').element.disabled).toBe(false)
     expect(button(shotsRow, '查看烘培数据').element.disabled).toBe(true)
+    expect(button(emptyRow, '预览').attributes('title')).toBe('该批次没有截图数据')
+    expect(button(shotsRow, '预览').attributes('title')).toBeUndefined()
+    expect(button(emptyRow, '查看烘培数据').attributes('title')).toBe('该批次没有烘培数据')
+    expect(button(mapRow, '查看烘培数据').attributes('title')).toBeUndefined()
 
     expect(wrapper.text()).not.toContain('设为基线')
     expect(wrapper.text()).not.toContain('设为对比')

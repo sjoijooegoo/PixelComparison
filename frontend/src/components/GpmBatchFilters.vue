@@ -5,6 +5,7 @@ import {
   defaultGpmCapturedRange,
   gpmBatchLocation,
 } from '../gpmBatchRoute'
+import { vNoNativeTitle } from '../directives/noNativeTitle'
 import { useGpmBatchStore } from '../stores/gpmBatchStore'
 
 const store = useGpmBatchStore()
@@ -46,7 +47,7 @@ function reset() {
 </script>
 
 <template>
-  <section class="gpm-batch-filters card">
+  <section v-no-native-title class="gpm-batch-filters card">
     <label class="filter-field">
       <span>分支</span>
       <a-select class="select-branch" :model-value="store.filters.branchTag" size="small"

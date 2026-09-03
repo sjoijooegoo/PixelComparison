@@ -5,6 +5,7 @@ import { api, isRequestCancelled } from '../api'
 import { p4Label } from '../store'
 import { batchPreviewImage } from './batchPreviewImages'
 import { completeQualityRuns, preferredPreviewQuality, qualityLabel } from '../qualityRuns'
+import { vOverflowTitle } from '../directives/overflowTitle'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -166,7 +167,7 @@ function retryThumbnailNow(shot) {
               @error="retryThumbnail(s)" @click="openOriginal(index)">
             <button v-if="thumbnailFailed.has(s.scene_name)" class="thumb-retry"
               @click.stop="retryThumbnailNow(s)">缩略图生成较慢，重试</button>
-            <div class="name" :title="s.scene_name">{{ s.scene_name }}</div>
+            <div v-overflow-title="s.scene_name" class="name">{{ s.scene_name }}</div>
           </div>
         </div>
       </a-image-preview-group>

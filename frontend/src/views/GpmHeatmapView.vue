@@ -7,6 +7,7 @@ import GpmDetailPanel from '../components/GpmDetailPanel.vue'
 import GpmMapCanvas from '../components/GpmMapCanvas.vue'
 import GpmScreenshotStrip from '../components/GpmScreenshotStrip.vue'
 import GpmTrendCard from '../components/GpmTrendCard.vue'
+import { vNoNativeTitle } from '../directives/noNativeTitle'
 import { registerPageRefresh } from '../pageActions'
 import { useGpmHeatmapStore } from '../stores/gpmHeatmapStore'
 
@@ -243,7 +244,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="gpm-page">
-    <section class="gpm-filters workspace-filter-card card">
+    <section v-no-native-title class="gpm-filters workspace-filter-card card">
       <div class="filter-field compact"><span>平台</span>
         <a-select class="filter-select platform-select" size="small"
           popup-container=".gpm-page"
@@ -326,7 +327,7 @@ onBeforeUnmount(() => {
       <section class="trend-section card">
         <header class="trend-section-header">
           <strong>数据趋势</strong>
-          <div class="trend-card-controls">
+          <div v-no-native-title class="trend-card-controls">
             <a-radio-group :model-value="store.trendMode" type="button" size="small"
               @change="changeTrendMode">
               <a-radio value="average">整体平均</a-radio>

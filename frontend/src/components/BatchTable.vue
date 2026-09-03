@@ -161,10 +161,10 @@ async function onDelete(record) {
         </template>
         <template #ops="{ record }">
           <a-button size="mini" type="text" :disabled="!record.has_screenshots"
-            :title="record.has_screenshots ? '预览截图' : '该批次没有截图数据'"
+            :title="record.has_screenshots ? undefined : '该批次没有截图数据'"
             @click="openPreview(record)">预览</a-button>
           <a-button size="mini" type="text" :disabled="!record.has_map_build_data"
-            :title="record.has_map_build_data ? '查看烘培数据' : '该批次没有烘培数据'"
+            :title="record.has_map_build_data ? undefined : '该批次没有烘培数据'"
             @click="openMapBuild(record)">查看烘培数据</a-button>
           <a-popconfirm position="br" type="warning" ok-text="删除" cancel-text="取消"
             :content="`删除批次 #${record.id}?将连带删除它参与的对比、对比项、由其晋升的基线,以及图片/热力图/缩略图,不可恢复。`"

@@ -2,7 +2,6 @@
 import { computed } from 'vue'
 import {
   compareMetricValues,
-  formatExactBytes,
   formatMetricDelta,
   formatMiB,
   mapBuildDeltaColor,
@@ -39,10 +38,10 @@ function formatValue(value) {
       :style="{ color: displayColor }">{{ displayValue }}</span>
     <template #content>
       <div class="delta-tooltip">
-        <div><span>当前</span><b :title="valueKind === 'bytes' ? formatExactBytes(comparison.current) : undefined">{{ formatValue(comparison.current) }}</b></div>
+        <div><span>当前</span><b>{{ formatValue(comparison.current) }}</b></div>
         <div v-if="comparison.kind !== 'unavailable'">
           <span>{{ comparisonLabel }}</span>
-          <b v-if="comparison.previous !== null" :title="valueKind === 'bytes' ? formatExactBytes(comparison.previous) : undefined">
+          <b v-if="comparison.previous !== null">
             {{ formatValue(comparison.previous) }}
           </b>
           <b v-else>无对应数据</b>

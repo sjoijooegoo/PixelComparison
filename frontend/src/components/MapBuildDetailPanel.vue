@@ -1,10 +1,10 @@
 <script setup>
 import { computed } from 'vue'
 import {
-  formatExactBytes,
   formatMiB,
   rankMetricDetails,
 } from '../mapBuildPresentation'
+import { vOverflowTitle } from '../directives/overflowTitle'
 import MapBuildMetricDelta from './MapBuildMetricDelta.vue'
 
 const props = defineProps({
@@ -33,16 +33,14 @@ function formatCount(value) {
     <header class="detail-head">
       <div class="detail-title">
         <h3>{{ detail.label }}<small v-if="detail.effectiveScope === 'subtree'">（含子级汇总）</small></h3>
-        <p :title="detail.context">{{ detail.context }}</p>
+        <p v-overflow-title="detail.context">{{ detail.context }}</p>
       </div>
     </header>
     <div class="detail-summary">
       <div>
         <span>总 Mip</span>
         <span class="summary-value-line">
-          <b :title="formatExactBytes(detail.metrics.all_mips_bytes)">
-            {{ formatMiB(detail.metrics.all_mips_bytes) }}
-          </b>
+          <b>{{ formatMiB(detail.metrics.all_mips_bytes) }}</b>
           <MapBuildMetricDelta v-bind="comparisonProps"
             :current-value="detail.metrics.all_mips_bytes"
             :previous-value="detail.comparisonMetrics?.all_mips_bytes" />
@@ -51,9 +49,7 @@ function formatCount(value) {
       <div>
         <span>Cook 估算</span>
         <span class="summary-value-line">
-          <b :title="formatExactBytes(detail.metrics.cook_estimate_bytes)">
-            {{ formatMiB(detail.metrics.cook_estimate_bytes) }}
-          </b>
+          <b>{{ formatMiB(detail.metrics.cook_estimate_bytes) }}</b>
           <MapBuildMetricDelta v-bind="comparisonProps"
             :current-value="detail.metrics.cook_estimate_bytes"
             :previous-value="detail.comparisonMetrics?.cook_estimate_bytes" />
@@ -78,7 +74,7 @@ function formatCount(value) {
         <div class="detail-row-head">
           <span><i>{{ String(index + 1).padStart(2, '0') }}</i>{{ row.label }}</span>
           <span class="detail-row-value">
-            <b :title="formatExactBytes(row.value)">{{ formatMiB(row.value) }}</b>
+            <b>{{ formatMiB(row.value) }}</b>
             <MapBuildMetricDelta v-bind="comparisonProps"
               :current-value="row.value" :previous-value="row.previousValue" />
           </span>

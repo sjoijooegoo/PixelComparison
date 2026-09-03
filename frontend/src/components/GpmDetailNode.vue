@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 
+import { vOverflowTitle } from '../directives/overflowTitle'
 import { detailNodePath } from '../gpmHeatmap/detailPaths'
 
 defineOptions({ name: 'GpmDetailNode' })
@@ -271,7 +272,7 @@ function resizeColumnByKeyboard(columnIndex, event) {
               :aria-sort="sortColumnIndex === columnIndex
                 ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'">
               <button type="button" class="table-sort"
-                :title="`按${column.name}${sortColumnIndex === columnIndex
+                :aria-label="`按${column.name}${sortColumnIndex === columnIndex
                   ? (sortDirection === 'desc' ? '升序' : '降序') : '降序'}排列`"
                 @click="toggleSort(columnIndex)">
                 <span>{{ column.name }}</span>
@@ -289,15 +290,16 @@ function resizeColumnByKeyboard(columnIndex, event) {
           <tbody>
             <tr v-for="(row, rowIndex) in pagedRows"
               :key="`${currentPage}-${rowIndex}`">
-              <td v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex"
-                :title="cellTitle(row, column, columnIndex)">
+              <td v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex">
                 <a v-if="externalLink(cellValue(row, column, columnIndex))"
-                  class="cell-content detail-link"
+                  v-overflow-title="cellTitle(row, column, columnIndex)" class="cell-content detail-link"
                   :href="externalLink(cellValue(row, column, columnIndex))"
                   target="_blank" rel="noopener noreferrer">
                   {{ cellValue(row, column, columnIndex) }}
                 </a>
-                <span v-else class="cell-content">{{ cellValue(row, column, columnIndex) }}</span>
+                <span v-else v-overflow-title="cellTitle(row, column, columnIndex)" class="cell-content">
+                  {{ cellValue(row, column, columnIndex) }}
+                </span>
               </td>
             </tr>
           </tbody>

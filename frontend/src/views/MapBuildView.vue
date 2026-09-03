@@ -10,6 +10,7 @@ import {
 import MapBuildDetailPanel from '../components/MapBuildDetailPanel.vue'
 import MapBuildAtlas from '../components/MapBuildAtlas.vue'
 import MapBuildTrendChart from '../components/MapBuildTrendChart.vue'
+import { vNoNativeTitle } from '../directives/noNativeTitle'
 import { registerPageRefresh } from '../pageActions'
 import { createLatestRequestChannels } from '../latestRequestChannels'
 import { mapBuildBatchWindow, mapBuildComparison, mapBuildRoute } from '../mapBuildRoute'
@@ -555,13 +556,10 @@ const defaultComparisonBatch = computed(() => (
   || (overview.value?.comparison?.selection === 'previous' ? comparisonBatch.value : null)
 ))
 const comparisonAvailable = computed(() => Boolean(comparisonBatch.value))
-const comparisonBatchLabel = computed(() => (
-  comparisonBatch.value ? batchLabel(comparisonBatch.value) : ''
-))
 const comparisonSelectTitle = computed(() => {
-  if (!filters.comparisonSelection) return '未选择对比批次'
-  if (comparisonBatch.value) return `基准批次：${comparisonBatchLabel.value}`
-  return '没有可用的对比批次'
+  if (!selectedSceneHasData.value) return '当前场景没有烘培数据'
+  if (!selectableComparisonCandidates.value.length) return '没有可用的对比批次'
+  return undefined
 })
 const comparisonPercentRange = computed(() => {
   if (!comparisonAvailable.value || !overview.value) return [0, 0]
@@ -718,7 +716,7 @@ onUnmounted(() => {
 <template>
   <div class="map-build-page">
     <div class="map-build-shell">
-      <section class="toolbar card" aria-label="烘培数据筛选">
+      <section v-no-native-title class="toolbar card" aria-label="烘培数据筛选">
         <div class="filter-field branch-field">
           <span class="label">分支</span>
           <a-select v-model="filters.branchTag" size="small" style="width: 160px"

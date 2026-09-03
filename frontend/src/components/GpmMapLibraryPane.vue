@@ -1,6 +1,8 @@
 <script setup>
 import { computed, ref } from 'vue'
 
+import { vOverflowTitle } from '../directives/overflowTitle'
+
 const props = defineProps({ maps: { type: Array, default: () => [] } })
 const emit = defineEmits(['create', 'edit', 'delete'])
 const search = ref('')
@@ -27,7 +29,7 @@ const filteredMaps = computed(() => {
         <tbody>
           <tr v-for="map in filteredMaps" :key="map.map_name">
             <td class="numeric-cell">{{ map.id }}</td>
-            <td><strong :title="map.map_name">{{ map.map_name }}</strong></td>
+            <td><strong v-overflow-title="map.map_name">{{ map.map_name }}</strong></td>
             <td><span class="status" :class="{ configured: map.image }">{{ map.image ? '已上传' : '未上传' }}</span></td>
             <td><span class="status" :class="{ configured: map.bindings?.length }">{{ map.bindings?.length ? '已配置' : '未配置' }}</span></td>
             <td class="action-cell">

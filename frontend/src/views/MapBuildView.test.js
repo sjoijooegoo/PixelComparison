@@ -443,7 +443,7 @@ describe('MapBuildView', () => {
     const currentBaselineOption = wrapper.findAll('.compare-select > div')
       .find((node) => node.text().includes('当前基线'))
     expect(currentBaselineOption?.attributes('disabled')).toBeDefined()
-    expect(wrapper.get('.compare-field').attributes('title')).toContain('P4 1 · 2026-07-29 09:30')
+    expect(wrapper.get('.compare-field').attributes('title')).toBeUndefined()
     expect(wrapper.get('.world-total .metric-delta').text()).toBe('↑100.0%')
     expect(wrapper.findAll('.block-values .metric-delta')).toHaveLength(1)
     expect(wrapper.findAll('.sub-cell .metric-delta').map((node) => node.text())).toEqual([

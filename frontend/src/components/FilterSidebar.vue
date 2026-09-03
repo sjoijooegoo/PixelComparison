@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { batchLocation, batchStateFromFilters } from '../batchRoute'
+import { vNoNativeTitle } from '../directives/noNativeTitle'
 import {
   DATE_RANGE_MODE_FIXED,
   DATE_RANGE_MODE_ROLLING,
@@ -122,7 +123,7 @@ function reset() {
 </script>
 
 <template>
-  <div class="filter-bar card">
+  <div v-no-native-title class="filter-bar card">
     <div class="field">
       <span class="label">分支</span>
       <a-select :model-value="store.filters.branch_tag" size="small" style="width: 150px"

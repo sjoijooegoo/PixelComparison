@@ -1,5 +1,7 @@
 <script setup>
 import GpmScaleBand from './GpmScaleBand.vue'
+import { vOverflowTitle } from '../directives/overflowTitle'
+
 defineProps({ items: { type: Array, default: () => [] } })
 const emit = defineEmits(['create', 'copy', 'edit', 'delete'])
 </script>
@@ -8,7 +10,7 @@ const emit = defineEmits(['create', 'copy', 'edit', 'delete'])
   <section class="library-pane">
     <header><div><h3>指标标尺库</h3><span>{{ items.length }} 个</span></div><a-button type="primary" size="small" @click="emit('create')">新建标尺</a-button></header>
     <div class="table-shell"><table><thead><tr><th>ID</th><th>名称</th><th>颜色段</th><th>操作</th></tr></thead><tbody>
-      <tr v-for="item in items" :key="item.id"><td class="numeric">{{ item.id }}</td><td><strong :title="item.name">{{ item.name }}</strong></td><td><GpmScaleBand class="preview" :segments="item.segments" compact /></td><td class="actions"><a-button size="mini" type="text" @click="emit('copy', item)">复制</a-button><a-button size="mini" type="text" @click="emit('edit', item)">编辑</a-button><a-button size="mini" type="text" status="danger" @click="emit('delete', item)">删除</a-button></td></tr>
+      <tr v-for="item in items" :key="item.id"><td class="numeric">{{ item.id }}</td><td><strong v-overflow-title="item.name">{{ item.name }}</strong></td><td><GpmScaleBand class="preview" :segments="item.segments" compact /></td><td class="actions"><a-button size="mini" type="text" @click="emit('copy', item)">复制</a-button><a-button size="mini" type="text" @click="emit('edit', item)">编辑</a-button><a-button size="mini" type="text" status="danger" @click="emit('delete', item)">删除</a-button></td></tr>
       <tr v-if="!items.length"><td colspan="4" class="empty">暂无指标标尺</td></tr>
     </tbody></table></div>
   </section>

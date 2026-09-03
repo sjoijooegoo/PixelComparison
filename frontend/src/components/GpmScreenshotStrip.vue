@@ -132,7 +132,7 @@ function setPreviewVisible(visible) {
       <button v-for="point in points" :key="point.id"
         :ref="(element) => setShotElement(point.id, element)" type="button" class="shot"
         :class="{ active: Number(point.id) === Number(selectedPointId) }"
-        title="单击选择，双击查看大图" @click="selectPoint(point)"
+        :aria-label="`点位 ${point.index}，单击选择，双击查看大图`" @click="selectPoint(point)"
         @dblclick.prevent="openPreview(point)">
         <img :src="point.thumbnail_url" :alt="`点位 ${point.index}`" loading="lazy"
           draggable="false" />

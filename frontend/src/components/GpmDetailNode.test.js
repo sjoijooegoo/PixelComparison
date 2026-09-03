@@ -96,7 +96,8 @@ describe('GpmDetailNode', () => {
     const dcValues = () => wrapper.findAll('tbody tr')
       .map((row) => row.findAll('td')[1].text())
 
-    expect(wrapper.findAll('.table-sort')[1].attributes('title')).toBe('按DC降序排列')
+    expect(wrapper.findAll('.table-sort')[1].attributes('aria-label')).toBe('按DC降序排列')
+    expect(wrapper.findAll('.table-sort')[1].attributes('title')).toBeUndefined()
     await wrapper.findAll('.table-sort')[1].trigger('click')
     expect(dcValues()).toEqual(['30', '10', '2'])
     expect(wrapper.findAll('th')[1].attributes('aria-sort')).toBe('descending')
@@ -141,7 +142,7 @@ describe('GpmDetailNode', () => {
     expect(headers[0].attributes('aria-sort')).toBe('none')
   })
 
-  it('长文本始终限制在所属单元格并保留完整悬停内容', () => {
+  it('长文本始终限制在所属单元格并仅在溢出时保留完整悬停内容', async () => {
     const longText = 'VeryLongAssetNameWithoutAnyNaturalBreakPoint_1234567890'
     const longLink = 'https://example.com/a/very/long/path/without/a/short/display/name'
     const wrapper = mount(GpmDetailNode, {
@@ -158,9 +159,17 @@ describe('GpmDetailNode', () => {
     })
 
     const cells = wrapper.findAll('tbody td')
+    const contents = cells.map((cell) => cell.get('.cell-content'))
     expect(cells[0].get('.cell-content').text()).toBe(longText)
     expect(cells[1].get('.cell-content').text()).toBe(longLink)
-    expect(cells.map((cell) => cell.attributes('title'))).toEqual([longText, longLink])
+    expect(cells.every((cell) => cell.attributes('title') === undefined)).toBe(true)
+
+    for (const content of contents) {
+      Object.defineProperty(content.element, 'clientWidth', { configurable: true, value: 100 })
+      Object.defineProperty(content.element, 'scrollWidth', { configurable: true, value: 240 })
+      await content.trigger('mouseenter')
+    }
+    expect(contents.map((content) => content.attributes('title'))).toEqual([longText, longLink])
   })
 
   it('大表格完整保留数据并使用上一页、下一页切换', async () => {

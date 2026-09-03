@@ -11,6 +11,7 @@ import {
   isDateRangeAllowed,
   visibleQualityOptions,
 } from '../store'
+import { vNoNativeTitle } from '../directives/noNativeTitle'
 import { screenshotLocation, screenshotStateFromFilters } from '../screenshotRoute'
 import { useProjectStore } from '../stores/projectStore'
 import { useScreenshotComparisonStore } from '../stores/screenshotComparisonStore'
@@ -115,7 +116,7 @@ function reset() {
 </script>
 
 <template>
-  <div class="filter-bar workspace-filter-card card">
+  <div v-no-native-title class="filter-bar workspace-filter-card card">
     <div class="field">
       <span class="label">分支</span>
       <a-select :model-value="store.filters.branch_tag" size="small" style="width: 150px"

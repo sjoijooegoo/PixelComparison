@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 
 import { api } from '../api'
+import { vOverflowTitle } from '../directives/overflowTitle'
 import { useGpmScaleConfigStore } from '../stores/gpmScaleConfigStore'
 
 const configStore = useGpmScaleConfigStore()
@@ -165,7 +166,7 @@ async function applyImport() {
       <template #title>检查配置包</template>
       <div class="import-workspace">
         <div class="package-line">
-          <div><span>配置包</span><strong :title="selectedName">{{ selectedName }}</strong></div>
+          <div><span>配置包</span><strong v-overflow-title="selectedName">{{ selectedName }}</strong></div>
           <a-button size="mini" type="text" :disabled="checking || applying" @click="triggerImport">
             重新选择
           </a-button>

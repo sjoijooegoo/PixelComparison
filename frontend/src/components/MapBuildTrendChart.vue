@@ -171,7 +171,8 @@ function selectPoint(point, index) {
       <button v-for="series in group.series" :key="series.key" type="button" class="legend-item"
         :class="{ active: isSeriesVisible(series.key), blocked: blockedSeriesKey === series.key }"
         :aria-pressed="isSeriesVisible(series.key)" :style="{ '--series-color': series.color }"
-        :title="seriesToggleTitle(series)"
+        :aria-label="seriesToggleTitle(series)"
+        :title="isLastVisibleSeries(series.key) ? '至少保留一项趋势指标' : undefined"
         @click="toggleSeries(series.key)">
         <i aria-hidden="true"></i>{{ series.label }}
         <span v-if="blockedSeriesKey === series.key" class="legend-limit" role="status">至少保留一项</span>

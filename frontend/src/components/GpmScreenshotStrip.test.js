@@ -98,6 +98,9 @@ describe('GpmScreenshotStrip', () => {
     const wrapper = mountStrip()
     const second = wrapper.findAll('.shot')[1]
 
+    expect(second.attributes('title')).toBeUndefined()
+    expect(second.attributes('aria-label')).toBe('点位 2，单击选择，双击查看大图')
+
     await second.trigger('click')
     await second.trigger('click')
     expect(wrapper.emitted('select')).toEqual([[12]])
