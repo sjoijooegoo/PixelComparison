@@ -145,16 +145,19 @@ function robustPercentEndpoint(values) {
 }
 
 /**
- * 根据当前页面全部可比较指标计算动态变化率范围，并以 0 作为语义中点。
+ * 根据指定指标计算动态变化率范围，并以 0 作为语义中点。
  * 样本充足时分别取正负 P90，避免单个极端指标压缩其余颜色差异。
  */
-export function metricComparisonPercentRange(metricPairs) {
+export function metricComparisonPercentRange(
+  metricPairs,
+  metricKeys = MAP_BUILD_COMPARISON_METRIC_KEYS,
+) {
   const decreases = []
   const increases = []
   for (const pair of metricPairs || []) {
     const currentMetrics = pair?.current
     if (!currentMetrics) continue
-    for (const key of MAP_BUILD_COMPARISON_METRIC_KEYS) {
+    for (const key of metricKeys) {
       if (!(key in currentMetrics)) continue
       const comparison = compareMetricValues(currentMetrics[key], pair.previous?.[key])
       if (!Number.isFinite(comparison.percent)) continue

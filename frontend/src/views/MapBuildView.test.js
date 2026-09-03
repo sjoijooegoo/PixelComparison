@@ -47,6 +47,8 @@ vi.mock('../components/MapBuildTrendChart.vue', () => ({
 }))
 
 import MapBuildView from './MapBuildView.vue'
+import MapBuildAtlas from '../components/MapBuildAtlas.vue'
+import MapBuildDetailPanel from '../components/MapBuildDetailPanel.vue'
 import mapBuildViewSource from './MapBuildView.vue?raw'
 import mapBuildAtlasSource from '../components/MapBuildAtlas.vue?raw'
 import { runPageRefresh } from '../pageActions'
@@ -451,6 +453,40 @@ describe('MapBuildView', () => {
     ])
     expect(wrapper.findAll('.detail-summary .metric-delta')).toHaveLength(3)
     expect(wrapper.findAll('.detail-row .metric-delta')).toHaveLength(12)
+  })
+
+  it('分块总 Mip 与当前选中分块指标分别计算动态色阶', async () => {
+    const comparisonOverview = overviewWithComparison()
+    const currentMetrics = {
+      ...metrics(100),
+      all_mips_bytes: 110,
+      cook_estimate_bytes: 400,
+      texture_count: 4,
+    }
+    const previousMetrics = {
+      ...metrics(100),
+      all_mips_bytes: 100,
+      cook_estimate_bytes: 100,
+      texture_count: 1,
+    }
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overviewWithoutBlocks,
+      available_batches: comparisonOverview.available_batches,
+      comparison: comparisonOverview.comparison,
+      world: {
+        ...overviewWithoutBlocks.world,
+        metrics: currentMetrics,
+        self_metrics: currentMetrics,
+        subtree_metrics: currentMetrics,
+        comparison_metrics: { self: previousMetrics, subtree: previousMetrics },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.getComponent(MapBuildAtlas).props('comparisonProps').percentRange).toEqual([0, 10])
+    expect(wrapper.getComponent(MapBuildDetailPanel).props('comparisonProps').percentRange).toEqual([0, 300])
   })
 
   it('可以选择一个明确的历史批次作为对比基准', async () => {

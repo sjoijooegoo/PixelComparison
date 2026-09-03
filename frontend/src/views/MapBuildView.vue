@@ -561,7 +561,7 @@ const comparisonSelectTitle = computed(() => {
   if (!selectableComparisonCandidates.value.length) return '没有可用的对比批次'
   return undefined
 })
-const comparisonPercentRange = computed(() => {
+const atlasComparisonPercentRange = computed(() => {
   if (!comparisonAvailable.value || !overview.value) return [0, 0]
   const pairs = []
   const addNode = (node, scope = gridHeaderScope(node)) => {
@@ -577,13 +577,13 @@ const comparisonPercentRange = computed(() => {
     for (const cell of block.sub_blocks || []) addNode(cell, 'self')
   }
   for (const block of overview.value.auxiliary_blocks || []) addNode(block)
-  return metricComparisonPercentRange(pairs)
+  return metricComparisonPercentRange(pairs, ['all_mips_bytes'])
 })
-const comparisonDisplayProps = computed(() => ({
+const atlasComparisonDisplayProps = computed(() => ({
   enabled: comparisonAvailable.value,
   baselineAvailable: comparisonAvailable.value,
   comparisonLabel: '对比批次',
-  percentRange: comparisonPercentRange.value,
+  percentRange: atlasComparisonPercentRange.value,
 }))
 const selectedDetail = computed(() => {
   if (!overview.value) return null
@@ -633,6 +633,19 @@ const selectedDetail = computed(() => {
     effectiveScope,
   }
 })
+const detailComparisonPercentRange = computed(() => {
+  if (!comparisonAvailable.value || !selectedDetail.value) return [0, 0]
+  return metricComparisonPercentRange([{
+    current: selectedDetail.value.metrics,
+    previous: selectedDetail.value.comparisonMetrics,
+  }])
+})
+const detailComparisonDisplayProps = computed(() => ({
+  enabled: comparisonAvailable.value,
+  baselineAvailable: comparisonAvailable.value,
+  comparisonLabel: '对比批次',
+  percentRange: detailComparisonPercentRange.value,
+}))
 function isSelected(blockIndex = null, subBlockIndex = null) {
   const key = blockIndex === null ? 'world' : `${blockIndex}:${subBlockIndex ?? 'block'}`
   return selectionKey.value === key
@@ -815,12 +828,12 @@ onUnmounted(() => {
           </div>
           <MapBuildAtlas :overview="overview" :loading="overviewLoading"
             :selection-key="selectionKey" :metric-scope="metricScope"
-            :comparison-props="comparisonDisplayProps"
+            :comparison-props="atlasComparisonDisplayProps"
             @select="choose" @select-auxiliary="chooseAuxiliary"
             @change-metric-scope="changeMetricScope" />
 
           <MapBuildDetailPanel v-if="selectedDetail" :detail="selectedDetail"
-            :comparison-props="comparisonDisplayProps" />
+            :comparison-props="detailComparisonDisplayProps" />
         </div>
 
         <section class="trend-card card">

@@ -148,6 +148,16 @@ describe('map build presentation helpers', () => {
     expect(metricComparisonPercentRange([])).toEqual([0, 0])
   })
 
+  it('允许不同展示区域只用自己的指标计算动态范围', () => {
+    const pairs = [{
+      current: { all_mips_bytes: 110, cook_estimate_bytes: 400 },
+      previous: { all_mips_bytes: 100, cook_estimate_bytes: 100 },
+    }]
+
+    expect(metricComparisonPercentRange(pairs, ['all_mips_bytes'])).toEqual([0, 10])
+    expect(metricComparisonPercentRange(pairs, ['cook_estimate_bytes'])).toEqual([0, 300])
+  })
+
   it('样本充足时用正负 P90 隔离极端变化率', () => {
     const regularPairs = Array.from({ length: 10 }, (_, index) => {
       const percent = index + 1
