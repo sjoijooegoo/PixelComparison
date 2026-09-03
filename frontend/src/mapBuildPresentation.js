@@ -1,5 +1,12 @@
 const MIB = 1024 * 1024
 
+export const MAP_BUILD_DELTA_COLORS = Object.freeze({
+  strongDecrease: '#52e817',
+  neutral: '#b6abb2',
+  mediumIncrease: '#f0789a',
+  strongIncrease: '#ff1111',
+})
+
 export const MAP_BUILD_DETAIL_METRICS = [
   { key: 'lightmap_all_mips_bytes', label: '光照贴图纹理', color: '#4b91f1' },
   { key: 'shadowmap_all_mips_bytes', label: '阴影贴图纹理', color: '#62aaa6' },
@@ -77,10 +84,73 @@ export function compareMetricValues(currentValue, previousValue, baselineAvailab
   }
 }
 
-/** 根据当前页面全部可比较指标计算动态变化率范围，并以 0 作为语义中点。 */
+function interpolateHexColor(start, end, ratio) {
+  const progress = Math.min(1, Math.max(0, Number(ratio) || 0))
+  const startValue = Number.parseInt(start.slice(1), 16)
+  const endValue = Number.parseInt(end.slice(1), 16)
+  const channel = (shift) => Math.round(
+    ((startValue >> shift) & 0xff) * (1 - progress)
+      + ((endValue >> shift) & 0xff) * progress,
+  )
+  return `#${[16, 8, 0]
+    .map((shift) => channel(shift).toString(16).padStart(2, '0'))
+    .join('')}`
+}
+
+/**
+ * 以 0 为中性色分别归一化上升和下降区间，得到连续的语义色阶。
+ * 上升侧增加粉色控制点，避免灰色直接过渡到红色时显得浑浊。
+ */
+export function mapBuildDeltaColor(comparison, percentRange = [0, 0]) {
+  const { kind, percent } = comparison || {}
+  if (kind === 'added') return MAP_BUILD_DELTA_COLORS.strongIncrease
+
+  const [minimum = 0, maximum = 0] = percentRange.map(Number)
+  if (kind === 'decrease') {
+    const range = Math.abs(Math.min(0, minimum))
+    const ratio = range > 0 ? Math.abs(percent) / range : 1
+    return interpolateHexColor(
+      MAP_BUILD_DELTA_COLORS.neutral,
+      MAP_BUILD_DELTA_COLORS.strongDecrease,
+      ratio,
+    )
+  }
+
+  if (kind === 'increase') {
+    const range = Math.max(0, maximum)
+    const ratio = Math.min(1, Math.max(0, range > 0 ? percent / range : 1))
+    const pinkPosition = 0.55
+    if (ratio <= pinkPosition) {
+      return interpolateHexColor(
+        MAP_BUILD_DELTA_COLORS.neutral,
+        MAP_BUILD_DELTA_COLORS.mediumIncrease,
+        ratio / pinkPosition,
+      )
+    }
+    return interpolateHexColor(
+      MAP_BUILD_DELTA_COLORS.mediumIncrease,
+      MAP_BUILD_DELTA_COLORS.strongIncrease,
+      (ratio - pinkPosition) / (1 - pinkPosition),
+    )
+  }
+
+  return undefined
+}
+
+function robustPercentEndpoint(values) {
+  if (!values.length) return 0
+  const sorted = [...values].sort((left, right) => left - right)
+  if (sorted.length < 10) return sorted.at(-1)
+  return sorted[Math.floor((sorted.length - 1) * 0.9)]
+}
+
+/**
+ * 根据当前页面全部可比较指标计算动态变化率范围，并以 0 作为语义中点。
+ * 样本充足时分别取正负 P90，避免单个极端指标压缩其余颜色差异。
+ */
 export function metricComparisonPercentRange(metricPairs) {
-  let minimum = 0
-  let maximum = 0
+  const decreases = []
+  const increases = []
   for (const pair of metricPairs || []) {
     const currentMetrics = pair?.current
     if (!currentMetrics) continue
@@ -88,11 +158,15 @@ export function metricComparisonPercentRange(metricPairs) {
       if (!(key in currentMetrics)) continue
       const comparison = compareMetricValues(currentMetrics[key], pair.previous?.[key])
       if (!Number.isFinite(comparison.percent)) continue
-      minimum = Math.min(minimum, comparison.percent)
-      maximum = Math.max(maximum, comparison.percent)
+      if (comparison.percent < 0) decreases.push(Math.abs(comparison.percent))
+      if (comparison.percent > 0) increases.push(comparison.percent)
     }
   }
-  return [minimum, maximum]
+  const decreaseEndpoint = robustPercentEndpoint(decreases)
+  return [
+    decreaseEndpoint ? -decreaseEndpoint : 0,
+    robustPercentEndpoint(increases),
+  ]
 }
 
 export function formatMetricDelta(comparison) {

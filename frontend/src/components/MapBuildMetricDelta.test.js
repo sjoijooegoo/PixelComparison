@@ -4,7 +4,6 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import MapBuildMetricDelta from './MapBuildMetricDelta.vue'
-import { HEAT_COLORS } from '../gpmHeatmap/colors'
 
 const TooltipStub = defineComponent({
   template: '<div><slot/><div class="tooltip-content"><slot name="content"/></div></div>',
@@ -29,7 +28,7 @@ describe('MapBuildMetricDelta', () => {
     expect(tooltip.text()).not.toContain('变化')
   })
 
-  it('按变化比例复用热力图的五段色阶', async () => {
+  it('按变化比例连续过渡烘焙数据色阶', async () => {
     const wrapper = mount(MapBuildMetricDelta, {
       props: {
         currentValue: 90,
@@ -41,19 +40,19 @@ describe('MapBuildMetricDelta', () => {
       global: { stubs: { 'a-tooltip': TooltipStub } },
     })
 
-    expect(wrapper.get('.metric-delta').element.style.color).toBe(HEAT_COLORS[0])
+    expect(wrapper.get('.metric-delta').element.style.color).toBe('#84ca65')
 
     await wrapper.setProps({ currentValue: 97 })
-    expect(wrapper.get('.metric-delta').element.style.color).toBe(HEAT_COLORS[1])
+    expect(wrapper.get('.metric-delta').element.style.color).toBe('#a7b49b')
 
     await wrapper.setProps({ currentValue: 103 })
-    expect(wrapper.get('.metric-delta').element.style.color).toBe(HEAT_COLORS[2])
+    expect(wrapper.get('.metric-delta').element.style.color).toBe('#c1a2ae')
 
     await wrapper.setProps({ currentValue: 115 })
-    expect(wrapper.get('.metric-delta').element.style.color).toBe(HEAT_COLORS[3])
+    expect(wrapper.get('.metric-delta').element.style.color).toBe('#eb7d9c')
 
     await wrapper.setProps({ currentValue: 130 })
-    expect(wrapper.get('.metric-delta').element.style.color).toBe(HEAT_COLORS[4])
+    expect(wrapper.get('.metric-delta').element.style.color).toBe('#ff1111')
 
     await wrapper.setProps({ currentValue: 100 })
     expect(wrapper.get('.metric-delta').element.style.color).toBe('')

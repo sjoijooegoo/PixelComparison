@@ -9,6 +9,7 @@ import {
   formatMetricDelta,
   formatMiB,
   linePath,
+  mapBuildDeltaColor,
   metricComparisonPercentRange,
   niceChartMaximum,
   rankMetricDetails,
@@ -145,6 +146,38 @@ describe('map build presentation helpers', () => {
       },
     ])).toEqual([-20, 30])
     expect(metricComparisonPercentRange([])).toEqual([0, 0])
+  })
+
+  it('样本充足时用正负 P90 隔离极端变化率', () => {
+    const regularPairs = Array.from({ length: 10 }, (_, index) => {
+      const percent = index + 1
+      return {
+        current: {
+          all_mips_bytes: 100 + percent,
+          cook_estimate_bytes: 100 - percent,
+        },
+        previous: {
+          all_mips_bytes: 100,
+          cook_estimate_bytes: 100,
+        },
+      }
+    })
+    const outlier = {
+      current: { all_mips_bytes: 1100, cook_estimate_bytes: 1 },
+      previous: { all_mips_bytes: 100, cook_estimate_bytes: 100 },
+    }
+
+    expect(metricComparisonPercentRange([...regularPairs, outlier])).toEqual([-10, 10])
+  })
+
+  it('变化率按下降绿、中性灰紫、上升粉红连续插值', () => {
+    const range = [-20, 30]
+    expect(mapBuildDeltaColor({ kind: 'decrease', percent: -20 }, range)).toBe('#52e817')
+    expect(mapBuildDeltaColor({ kind: 'decrease', percent: -10 }, range)).toBe('#84ca65')
+    expect(mapBuildDeltaColor({ kind: 'increase', percent: 3 }, range)).toBe('#c1a2ae')
+    expect(mapBuildDeltaColor({ kind: 'increase', percent: 15 }, range)).toBe('#eb7d9c')
+    expect(mapBuildDeltaColor({ kind: 'increase', percent: 30 }, range)).toBe('#ff1111')
+    expect(mapBuildDeltaColor({ kind: 'steady', percent: 0 }, range)).toBeUndefined()
   })
 
   it('同一天多个批次在横轴补充时刻以便区分', () => {

@@ -5,8 +5,8 @@ import {
   formatExactBytes,
   formatMetricDelta,
   formatMiB,
+  mapBuildDeltaColor,
 } from '../mapBuildPresentation'
-import { HEAT_COLORS } from '../gpmHeatmap/colors'
 
 const props = defineProps({
   currentValue: { type: [Number, String], default: null },
@@ -24,24 +24,7 @@ const comparison = computed(() => compareMetricValues(
   props.baselineAvailable,
 ))
 const displayValue = computed(() => formatMetricDelta(comparison.value))
-const displayColor = computed(() => {
-  const { kind, percent } = comparison.value
-  if (kind === 'added') return HEAT_COLORS[4]
-  const [minimum = 0, maximum = 0] = props.percentRange.map(Number)
-  if (kind === 'decrease') {
-    const improvementRange = Math.abs(Math.min(0, minimum))
-    const ratio = improvementRange > 0 ? Math.abs(percent) / improvementRange : 1
-    return ratio >= 0.5 ? HEAT_COLORS[0] : HEAT_COLORS[1]
-  }
-  if (kind === 'increase') {
-    const regressionRange = Math.max(0, maximum)
-    const ratio = regressionRange > 0 ? percent / regressionRange : 1
-    if (ratio <= 1 / 3) return HEAT_COLORS[2]
-    if (ratio <= 2 / 3) return HEAT_COLORS[3]
-    return HEAT_COLORS[4]
-  }
-  return undefined
-})
+const displayColor = computed(() => mapBuildDeltaColor(comparison.value, props.percentRange))
 
 function formatValue(value) {
   if (props.valueKind === 'count') return Number(value || 0).toLocaleString('zh-CN')
