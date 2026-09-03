@@ -446,13 +446,19 @@ describe('MapBuildView', () => {
       .find((node) => node.text().includes('当前基线'))
     expect(currentBaselineOption?.attributes('disabled')).toBeDefined()
     expect(wrapper.get('.compare-field').attributes('title')).toBeUndefined()
-    expect(wrapper.get('.world-total .metric-delta').text()).toBe('↑100.0%')
+    expect(wrapper.get('.world-total .metric-delta').attributes('aria-label')).toBe('100.0% ↑')
+    expect(wrapper.get('.world-total .metric-value-line').element.firstElementChild
+      ?.querySelector('.metric-delta')).not.toBeNull()
     expect(wrapper.findAll('.block-values .metric-delta')).toHaveLength(1)
-    expect(wrapper.findAll('.sub-cell .metric-delta').map((node) => node.text())).toEqual([
-      '↑100.0%', '↑100.0%',
+    expect(wrapper.get('.block-values .metric-value-line').element.firstElementChild
+      ?.querySelector('.metric-delta')).not.toBeNull()
+    expect(wrapper.findAll('.sub-cell .metric-delta').map((node) => node.attributes('aria-label'))).toEqual([
+      '100.0% ↑', '100.0% ↑',
     ])
     expect(wrapper.findAll('.detail-summary .metric-delta')).toHaveLength(3)
     expect(wrapper.findAll('.detail-row .metric-delta')).toHaveLength(12)
+    expect(wrapper.get('.detail-row-value').element.firstElementChild
+      ?.querySelector('.metric-delta')).not.toBeNull()
   })
 
   it('分块总 Mip 与当前选中分块指标分别计算动态色阶', async () => {

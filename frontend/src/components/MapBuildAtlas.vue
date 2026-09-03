@@ -73,10 +73,10 @@ function scopeLabel(scope) {
         <span>
           <small>{{ scopeLabel(nodeScope(overview.world)) }}</small>
           <span class="metric-value-line">
-            <b>{{ formatMiB(nodeMetrics(overview.world)?.all_mips_bytes) }}</b>
             <MapBuildMetricDelta v-bind="comparisonProps"
               :current-value="nodeMetrics(overview.world)?.all_mips_bytes"
               :previous-value="comparisonMetrics(overview.world)?.all_mips_bytes" />
+            <b>{{ formatMiB(nodeMetrics(overview.world)?.all_mips_bytes) }}</b>
           </span>
         </span>
       </span>
@@ -99,10 +99,10 @@ function scopeLabel(scope) {
           <span class="block-values">
             <small>{{ scopeLabel(nodeScope(block)) }}</small>
             <span class="metric-value-line">
-              <b>{{ formatMiB(nodeMetrics(block)?.all_mips_bytes) }}</b>
               <MapBuildMetricDelta v-bind="comparisonProps"
                 :current-value="nodeMetrics(block)?.all_mips_bytes"
                 :previous-value="comparisonMetrics(block)?.all_mips_bytes" />
+              <b>{{ formatMiB(nodeMetrics(block)?.all_mips_bytes) }}</b>
             </span>
           </span>
         </button>
@@ -172,7 +172,7 @@ function scopeLabel(scope) {
 .world-total > span { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .world-total small { color: var(--color-text-4); font: 9px/1.2 "Segoe UI", sans-serif; }
 .world-total b { color: var(--color-text-1); font-size: 13px; }
-.metric-value-line { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 8px; }
+.metric-value-line { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 6px; }
 .atlas-loading { min-height: 360px; display: grid; place-items: center; }
 .no-block-tree { flex: 1 1 auto; min-height: 260px; display: grid; place-items: center; color: var(--color-text-3); font-size: 13px; text-align: center; }
 .block-layout { min-width: 0; padding: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

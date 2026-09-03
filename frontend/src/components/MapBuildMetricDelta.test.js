@@ -28,6 +28,31 @@ describe('MapBuildMetricDelta', () => {
     expect(tooltip.text()).not.toContain('变化')
   })
 
+  it('将升降箭头放在百分比数字右侧', async () => {
+    const wrapper = mount(MapBuildMetricDelta, {
+      props: {
+        currentValue: 120,
+        previousValue: 100,
+        enabled: true,
+        baselineAvailable: true,
+      },
+      global: { stubs: { 'a-tooltip': TooltipStub } },
+    })
+
+    expect(wrapper.get('.delta-value').text()).toBe('20.0%')
+    expect(wrapper.get('.delta-arrow').text()).toBe('↑')
+    expect(wrapper.get('.metric-delta').attributes('aria-label')).toBe('20.0% ↑')
+
+    await wrapper.setProps({ currentValue: 80 })
+    expect(wrapper.get('.delta-value').text()).toBe('20.0%')
+    expect(wrapper.get('.delta-arrow').text()).toBe('↓')
+    expect(wrapper.get('.metric-delta').attributes('aria-label')).toBe('20.0% ↓')
+
+    await wrapper.setProps({ currentValue: 100 })
+    expect(wrapper.find('.delta-arrow').exists()).toBe(false)
+    expect(wrapper.get('.metric-delta').attributes('aria-label')).toBe('0.0%')
+  })
+
   it('按变化比例连续过渡烘焙数据色阶', async () => {
     const wrapper = mount(MapBuildMetricDelta, {
       props: {

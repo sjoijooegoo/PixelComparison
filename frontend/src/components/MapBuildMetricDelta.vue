@@ -22,7 +22,18 @@ const comparison = computed(() => compareMetricValues(
   props.previousValue,
   props.baselineAvailable,
 ))
-const displayValue = computed(() => formatMetricDelta(comparison.value))
+const directionArrow = computed(() => {
+  if (comparison.value.kind === 'increase') return '↑'
+  if (comparison.value.kind === 'decrease') return '↓'
+  return ''
+})
+const displayValue = computed(() => {
+  const formattedValue = formatMetricDelta(comparison.value)
+  return directionArrow.value ? formattedValue.slice(1) : formattedValue
+})
+const displayLabel = computed(() => (
+  directionArrow.value ? `${displayValue.value} ${directionArrow.value}` : displayValue.value
+))
 const displayColor = computed(() => mapBuildDeltaColor(comparison.value, props.percentRange))
 
 function formatValue(value) {
@@ -35,7 +46,10 @@ function formatValue(value) {
 <template>
   <a-tooltip v-if="enabled" position="top">
     <span class="metric-delta" :class="`is-${comparison.kind}`"
-      :style="{ color: displayColor }">{{ displayValue }}</span>
+      :style="{ color: displayColor }" :aria-label="displayLabel">
+      <span class="delta-value">{{ displayValue }}</span>
+      <span v-if="directionArrow" class="delta-arrow" aria-hidden="true">{{ directionArrow }}</span>
+    </span>
     <template #content>
       <div class="delta-tooltip">
         <div><span>当前</span><b>{{ formatValue(comparison.current) }}</b></div>
@@ -53,10 +67,11 @@ function formatValue(value) {
 
 <style scoped>
 .metric-delta {
-  min-width: 47px; display: inline-flex; align-items: center; justify-content: flex-end;
+  min-width: 47px; display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 2px;
   color: rgba(255, 255, 255, .68); font: 600 11px/1.15 "Bahnschrift", "Segoe UI", sans-serif;
   white-space: nowrap;
 }
+.delta-arrow { font: 800 12px/1 "Segoe UI Symbol", "Segoe UI", sans-serif; }
 .metric-delta.is-steady, .metric-delta.is-unavailable { color: var(--color-text-4); }
 .delta-tooltip { min-width: 154px; display: grid; gap: 4px; font-size: 11px; line-height: 1.35; }
 .delta-tooltip > div { display: flex; align-items: center; justify-content: space-between; gap: 14px; }

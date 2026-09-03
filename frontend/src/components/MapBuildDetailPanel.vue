@@ -74,9 +74,9 @@ function formatCount(value) {
         <div class="detail-row-head">
           <span><i>{{ String(index + 1).padStart(2, '0') }}</i>{{ row.label }}</span>
           <span class="detail-row-value">
-            <b>{{ formatMiB(row.value) }}</b>
             <MapBuildMetricDelta v-bind="comparisonProps"
               :current-value="row.value" :previous-value="row.previousValue" />
+            <b>{{ formatMiB(row.value) }}</b>
           </span>
         </div>
         <div class="detail-track" aria-hidden="true">
@@ -111,7 +111,7 @@ function formatCount(value) {
 .detail-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .detail-row-head > span:first-child { min-width: 0; overflow: hidden; color: var(--color-text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .detail-row-head > span:first-child i { width: 25px; display: inline-block; color: var(--color-text-4); font: normal 10px "Bahnschrift", sans-serif; }
-.detail-row-value { min-width: 126px; flex: 0 0 auto; display: grid; grid-template-columns: minmax(68px, 1fr) 48px; align-items: baseline; gap: 8px; }
+.detail-row-value { min-width: 118px; flex: 0 0 auto; display: grid; grid-template-columns: 48px minmax(68px, 1fr); align-items: baseline; gap: 0; }
 .detail-row-value > b { color: var(--color-text-2); font: 600 12px "Bahnschrift", "Segoe UI", sans-serif; text-align: right; }
 .detail-track { height: 3px; margin: 6px 0 0 25px; overflow: hidden; border-radius: 2px; background: var(--color-fill-3); }
 .detail-track i { height: 100%; display: block; border-radius: inherit; opacity: .9; transition: width .18s ease; }
