@@ -716,6 +716,12 @@ def _comparable(kind: str, item: dict) -> dict:
     }
 
 
+def _same_configuration(kind: str, current: dict | None, desired: dict) -> bool:
+    """Ignore revision metadata when the imported configuration is already current."""
+
+    return current is not None and _comparable(kind, current) == _comparable(kind, desired)
+
+
 def _change_details(kind: str, current: dict | None, desired: dict) -> list[str]:
     if current is None:
         return ["新增"]
@@ -742,7 +748,11 @@ def _analyze(connection: sqlite3.Connection, package: dict) -> dict:
     if package["includes_scales"]:
         for item in package["metric_scales"]:
             existing = current["metric_scales"].get(item["id"])
-            if existing and item["revision"] != existing["revision"]:
+            if (
+                existing
+                and item["revision"] != existing["revision"]
+                and not _same_configuration("metric_scales", existing, item)
+            ):
                 issues.append(_issue("STALE_METRIC_SCALE", f"metric_scales/{item['id']}", f"指标标尺 {item['id']} 已被更新"))
             final_scales[item["id"]] = item
         scale_names: dict[str, int] = {}
@@ -756,7 +766,11 @@ def _analyze(connection: sqlite3.Connection, package: dict) -> dict:
     if package["includes_scales"]:
         for item in package["scale_sets"]:
             existing = current["scale_sets"].get(item["id"])
-            if existing and item["revision"] != existing["revision"]:
+            if (
+                existing
+                and item["revision"] != existing["revision"]
+                and not _same_configuration("scale_sets", existing, item)
+            ):
                 issues.append(_issue("STALE_SCALE_SET", f"scale_sets/{item['id']}", f"指标标尺集 {item['id']} 已被更新"))
             final_sets[item["id"]] = item
         set_names: dict[str, int] = {}
@@ -773,7 +787,11 @@ def _analyze(connection: sqlite3.Connection, package: dict) -> dict:
     if package["includes_maps"]:
         for item in package["maps"]:
             existing = current["maps"].get(item["map_name"])
-            if existing and item["revision"] != existing["revision"]:
+            if (
+                existing
+                and item["revision"] != existing["revision"]
+                and not _same_configuration("maps", existing, item)
+            ):
                 issues.append(_issue("STALE_MAP", f"maps/{item['map_name']}", f"地图 {item['map_name']} 已被更新"))
             final_maps[item["map_name"]] = item
     map_ids: dict[int, str] = {}
@@ -793,7 +811,11 @@ def _analyze(connection: sqlite3.Connection, package: dict) -> dict:
                 issues.append(_issue("MISSING_MAP_REFERENCE", f"map_bindings/{map_name}", f"标尺关联引用了不存在的地图 {map_name}"))
                 continue
             expected_revision = existing_map["revision"] if existing_map else packaged_map["revision"]
-            if item["map_revision"] != expected_revision:
+            existing_bindings = current["map_bindings"].get(map_name)
+            if (
+                item["map_revision"] != expected_revision
+                and not _same_configuration("map_bindings", existing_bindings, item)
+            ):
                 issues.append(_issue("STALE_MAP_BINDINGS", f"map_bindings/{map_name}", f"地图 {map_name} 的标尺关联已被更新"))
             for binding in item["bindings"]:
                 if binding["scale_set_id"] not in final_sets:

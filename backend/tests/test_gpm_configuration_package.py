@@ -123,6 +123,89 @@ def test_export_is_readable_and_round_trips_without_changes(client, png_bytes):
     assert catalog["maps"][0]["revision"] == 1
 
 
+def test_import_accepts_stale_revisions_when_content_is_unchanged(client, png_bytes):
+    _seed_configuration(client, png_bytes(size=(80, 60)))
+    exported = client.get("/api/gpm-heatmaps/configuration/export").content
+    current = client.get("/api/gpm-heatmaps/configuration").json()
+    scale = current["metric_scales"][0]
+    scale_set = current["scale_sets"][0]
+    configured_map = current["maps"][0]
+
+    updated_scale = client.put(
+        f"/api/gpm-heatmaps/configuration/scales/{scale['id']}",
+        json={
+            "name": scale["name"],
+            "segments": scale["segments"],
+            "expected_revision": scale["revision"],
+        },
+    )
+    assert updated_scale.status_code == 200, updated_scale.text
+    updated_set = client.put(
+        f"/api/gpm-heatmaps/configuration/scale-sets/{scale_set['id']}",
+        json={
+            "name": scale_set["name"],
+            "items": [
+                {"metric_key": item["metric_key"], "scale_id": item["scale_id"]}
+                for item in scale_set["items"]
+            ],
+            "expected_revision": scale_set["revision"],
+        },
+    )
+    assert updated_set.status_code == 200, updated_set.text
+    updated_map = client.put(
+        f"/api/gpm-heatmaps/configuration/maps/{configured_map['map_name']}",
+        data={
+            "configuration": json.dumps({
+                "description": configured_map["description"],
+                "origin": configured_map["origin"],
+                "range": configured_map["range"],
+                "x_reverse": configured_map["x_reverse"],
+                "y_reverse": configured_map["y_reverse"],
+                "bindings": configured_map["bindings"],
+                "expected_revision": configured_map["revision"],
+            }),
+        },
+    )
+    assert updated_map.status_code == 200, updated_map.text
+
+    inspected = _inspect(client, exported).json()
+    assert inspected["valid"] is True
+    assert inspected["issues"] == []
+    assert inspected["summary"]["metric_scales"]["unchanged"] == 1
+    assert inspected["summary"]["scale_sets"]["unchanged"] == 1
+    assert inspected["summary"]["maps"]["unchanged"] == 1
+    assert inspected["summary"]["map_bindings"]["unchanged"] == 1
+
+    applied = client.post(
+        f"/api/gpm-heatmaps/configuration/imports/{inspected['import_id']}/apply"
+    )
+    assert applied.status_code == 200, applied.text
+    after = client.get("/api/gpm-heatmaps/configuration").json()
+    assert after["metric_scales"][0]["revision"] == 2
+    assert after["scale_sets"][0]["revision"] == 2
+    assert after["maps"][0]["revision"] == 2
+
+
+def test_import_rejects_stale_revision_when_content_has_changed(client, png_bytes):
+    _seed_configuration(client, png_bytes(size=(80, 60)))
+    exported = client.get("/api/gpm-heatmaps/configuration/export").content
+
+    changed = client.put(
+        "/api/gpm-heatmaps/configuration/scales/0",
+        json={
+            "name": "服务器上的新名称",
+            "segments": SEGMENTS,
+            "expected_revision": 1,
+        },
+    )
+    assert changed.status_code == 200, changed.text
+
+    inspected = _inspect(client, exported).json()
+    assert inspected["valid"] is False
+    assert inspected["import_id"] is None
+    assert inspected["issues"][0]["code"] == "STALE_METRIC_SCALE"
+
+
 def test_map_only_import_updates_resource_without_touching_scale_bindings(client, png_bytes):
     _seed_configuration(client, png_bytes(size=(80, 60)))
     before = client.get("/api/gpm-heatmaps/configuration").json()
