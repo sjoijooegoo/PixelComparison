@@ -1,36 +1,16 @@
+import { calendarDate, inclusiveDateRangeDays } from './dateRange'
+
+export { inclusiveDateRangeDays } from './dateRange'
+
 export const PAGE_SIZE = 10
 export const MAX_DATE_RANGE_DAYS = 14
 export const DATE_RANGE_MODE_ROLLING = 'rolling'
 export const DATE_RANGE_MODE_FIXED = 'fixed'
 
-function ymd(date) {
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
-}
-
 export function normalizeDateRangeDays(days = 7) {
   const value = Number(days)
   if (!Number.isFinite(value)) return 7
   return Math.max(1, Math.min(MAX_DATE_RANGE_DAYS, Math.trunc(value)))
-}
-
-export function inclusiveDateRangeDays(from, to) {
-  const parse = (value) => {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '')
-    if (!match) return null
-    const [, year, month, day] = match.map(Number)
-    const time = Date.UTC(year, month - 1, day)
-    const date = new Date(time)
-    if (date.getUTCFullYear() !== year
-        || date.getUTCMonth() !== month - 1
-        || date.getUTCDate() !== day) return null
-    return time
-  }
-  const start = parse(from)
-  const end = parse(to)
-  if (start === null || end === null || end < start) return null
-  return Math.floor((end - start) / 86_400_000) + 1
 }
 
 export function isDateRangeAllowed(from, to) {
@@ -43,7 +23,7 @@ export function defaultDateRange(days = 7) {
   const today = new Date()
   const from = new Date(today)
   from.setDate(today.getDate() - (count - 1))
-  return { created_from: ymd(from), created_to: ymd(today) }
+  return { created_from: calendarDate(from), created_to: calendarDate(today) }
 }
 
 export function normalizeDateRangeMode(value, from, to, defaultDays = 7) {

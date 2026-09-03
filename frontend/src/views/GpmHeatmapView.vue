@@ -243,7 +243,7 @@ onBeforeUnmount(() => {
 
 <template>
   <main class="gpm-page">
-    <section class="gpm-filters card">
+    <section class="gpm-filters workspace-filter-card card">
       <div class="filter-field compact"><span>平台</span>
         <a-select class="filter-select platform-select" size="small"
           popup-container=".gpm-page"
@@ -362,8 +362,7 @@ onBeforeUnmount(() => {
   display: flex; flex-direction: column; gap: 10px;
 }
 .gpm-filters {
-  flex: 0 0 auto; min-height: 48px; padding: 10px 14px; display: flex;
-  flex-wrap: wrap; gap: 10px 16px; align-items: center; overflow: visible;
+  overflow: visible;
 }
 .filter-field { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .filter-field > span { color: var(--color-text-3); font-size: 12px; white-space: nowrap; }
@@ -374,7 +373,8 @@ onBeforeUnmount(() => {
 .filter-field :deep(.arco-select-view) { background: var(--color-fill-2); border-color: transparent; }
 .filter-option-name.is-data-empty { color: var(--color-text-4); }
 .overview-section {
-  flex: 0 0 auto; min-width: 0; height: max(838px, calc(100dvh - 144px)); display: grid;
+  /* 缩略图放大后补足 12px 总高度，保持地图与详情区域原尺寸。 */
+  flex: 0 0 auto; min-width: 0; height: max(850px, calc(100dvh - 132px)); display: grid;
   grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(620px, 1fr) auto; gap: 10px;
 }
 .workspace-grid {

@@ -1,7 +1,7 @@
 import importlib
 import io
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -49,6 +49,8 @@ def client(tmp_path, monkeypatch):
         "_utc_now",
         lambda: datetime(2026, 8, 29, tzinfo=timezone.utc),
     )
+    # 烘培默认批次窗口以当天为锚点；固定测试时钟，避免样本随运行日过期。
+    monkeypatch.setattr(app.map_build, "_today", lambda: date(2026, 8, 30))
 
     from fastapi.testclient import TestClient
     with TestClient(app.main.app) as c:

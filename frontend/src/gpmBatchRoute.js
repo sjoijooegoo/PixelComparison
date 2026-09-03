@@ -1,29 +1,18 @@
+import { calendarDate, inclusiveDateRangeDays } from './dateRange'
+
 function firstValue(value) {
   return Array.isArray(value) ? value[0] : value
-}
-
-function ymd(date) {
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${date.getFullYear()}-${month}-${day}`
 }
 
 export function defaultGpmCapturedRange(days = 30, now = new Date()) {
   const from = new Date(now)
   from.setDate(from.getDate() - Math.max(1, days) + 1)
-  return { capturedFrom: ymd(from), capturedTo: ymd(now) }
+  return { capturedFrom: calendarDate(from), capturedTo: calendarDate(now) }
 }
 
 function validDate(value) {
   const normalized = String(value || '')
-  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : ''
-}
-
-function inclusiveDays(from, to) {
-  const start = Date.parse(`${validDate(from)}T00:00:00Z`)
-  const end = Date.parse(`${validDate(to)}T00:00:00Z`)
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null
-  return Math.floor((end - start) / 86_400_000) + 1
+  return inclusiveDateRangeDays(normalized, normalized) === 1 ? normalized : ''
 }
 
 export function parseGpmBatchRoute(route) {
@@ -35,7 +24,7 @@ export function parseGpmBatchRoute(route) {
     ? requestedRangeMode
     : !requestedFrom && !requestedTo
       ? 'rolling'
-      : inclusiveDays(requestedFrom, requestedTo) === 30 ? 'rolling' : 'fixed'
+      : inclusiveDateRangeDays(requestedFrom, requestedTo) === 30 ? 'rolling' : 'fixed'
   const quality = Number(firstValue(route.query.quality))
   const page = Number(firstValue(route.query.page))
   return {

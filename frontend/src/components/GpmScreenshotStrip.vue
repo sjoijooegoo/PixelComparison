@@ -155,9 +155,9 @@ function setPreviewVisible(visible) {
 .shot-strip.dragging { cursor: grabbing; }
 .shot-strip.dragging * { cursor: grabbing !important; }
 .shot {
-  flex: 0 0 280px; padding: 0; overflow: hidden; border: 1px solid var(--color-border-1);
+  flex: 0 0 300px; padding: 0; overflow: hidden; border: 1px solid var(--color-border-1);
   border-radius: 5px; background: var(--color-fill-1); color: var(--color-text-2); cursor: pointer;
-  content-visibility: auto; contain-intrinsic-size: 280px 182px;
+  content-visibility: auto; contain-intrinsic-size: 300px 194px;
 }
 .shot:hover { border-color: var(--color-border-3); }
 .shot.active { border-color: rgb(var(--arcoblue-6)); box-shadow: 0 0 0 1px rgb(var(--arcoblue-6)); }

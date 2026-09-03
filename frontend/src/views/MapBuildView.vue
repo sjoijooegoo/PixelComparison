@@ -5,15 +5,14 @@ import { api, isRequestCancelled } from '../api'
 import { p4Label } from '../store'
 import { useProjectStore } from '../stores/projectStore'
 import {
-  atlasColor,
-  formatExactBytes,
-  formatMiB,
   metricComparisonPercentRange,
-  rankMetricDetails,
 } from '../mapBuildPresentation'
-import MapBuildMetricDelta from '../components/MapBuildMetricDelta.vue'
+import MapBuildDetailPanel from '../components/MapBuildDetailPanel.vue'
+import MapBuildAtlas from '../components/MapBuildAtlas.vue'
 import MapBuildTrendChart from '../components/MapBuildTrendChart.vue'
 import { registerPageRefresh } from '../pageActions'
+import { createLatestRequestChannels } from '../latestRequestChannels'
+import { mapBuildBatchWindow, mapBuildComparison, mapBuildRoute } from '../mapBuildRoute'
 
 const store = useProjectStore()
 const route = useRoute()
@@ -26,38 +25,22 @@ const filters = reactive({
   sceneId: '',
   batchId: '',
   comparisonSelection: 'previous',
-  days: 30,
+  batchDateRange: [],
 })
 const selection = reactive({ blockIndex: null, subBlockIndex: null, registryPath: null })
 const metricScope = ref('self')
-const trendRangeMode = ref('recent')
-const customDateRange = ref([])
 const metaLoading = ref(false)
 const overviewLoading = ref(false)
 const trendLoading = ref(false)
+const batchWindowEmpty = ref(false)
 const error = ref('')
 const routeReady = ref(false)
-const requests = {
-  meta: { sequence: 0, controller: null },
-  overview: { sequence: 0, controller: null },
-  trend: { sequence: 0, controller: null },
-}
+const batchDateRangeMode = ref(mapBuildBatchWindow.rollingMode)
+const loadedBatchDateRange = ref([])
+const loadedBatchDateRangeMode = ref(mapBuildBatchWindow.rollingMode)
+const requestChannels = createLatestRequestChannels(['meta', 'overview', 'trend'])
 let unregisterPageRefresh = null
 let routeApplySequence = 0
-const DEFAULT_TREND_DAYS = 30
-const VALID_TREND_DAYS = new Set([7, 14, 30, 60, 90])
-const COMPARISON_BATCH_PREFIX = 'batch:'
-
-function beginRequest(channel) {
-  const runtime = requests[channel]
-  runtime.controller?.abort()
-  runtime.controller = new AbortController()
-  const sequence = ++runtime.sequence
-  return {
-    signal: runtime.controller.signal,
-    isLatest: () => runtime.sequence === sequence,
-  }
-}
 
 function keepOrDefault(current, options, preferred = null) {
   const values = options.map((option) => option?.value ?? option)
@@ -66,39 +49,24 @@ function keepOrDefault(current, options, preferred = null) {
   return values[0] ?? ''
 }
 
-function metricScopeLabel(scope) {
-  return scope === 'self' ? '仅自身' : '含子级汇总'
-}
-
 function trendSelectionLabel(label) {
   return (label || '主分块 · 仅自身').replace('自身数据', '仅自身')
 }
 
-function invalidateRequest(channel) {
-  const runtime = requests[channel]
-  runtime.controller?.abort()
-  runtime.controller = null
-  runtime.sequence += 1
-}
-
-function clearSceneData() {
-  invalidateRequest('overview')
-  invalidateRequest('trend')
-  overview.value = null
+function clearTrendData() {
+  requestChannels.invalidate('trend')
   trend.value = { selection: { label: '主分块 · 仅自身' }, points: [] }
-  filters.batchId = ''
-  overviewLoading.value = false
   trendLoading.value = false
 }
 
-function routeSceneId() {
-  const rawSceneId = route.params.sceneId
-  return (Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId) || ''
-}
-
-function routeQueryValue(name) {
-  const value = route.query?.[name]
-  return Array.isArray(value) ? value[0] : value
+function clearSceneData() {
+  requestChannels.invalidate('overview')
+  clearTrendData()
+  overview.value = null
+  filters.batchId = ''
+  filters.comparisonSelection = 'previous'
+  batchWindowEmpty.value = false
+  overviewLoading.value = false
 }
 
 function availableBranchTag(value) {
@@ -106,133 +74,36 @@ function availableBranchTag(value) {
   return store.meta.branch_tags?.includes(normalized) ? normalized : 'main'
 }
 
-function dateStamp(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return null
-  const stamp = Date.parse(`${value}T00:00:00Z`)
-  if (Number.isNaN(stamp) || new Date(stamp).toISOString().slice(0, 10) !== value) return null
-  return stamp
-}
-
-function customRangeDays(range) {
-  if (!Array.isArray(range) || range.length !== 2) return 0
-  const start = dateStamp(range[0])
-  const end = dateStamp(range[1])
-  if (start === null || end === null) return 0
-  return Math.floor((end - start) / 86_400_000) + 1
-}
-
-function parseNonNegativeInteger(value) {
-  if (value === undefined || value === null || value === '') return null
-  const parsed = Number(value)
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null
-}
-
-function comparisonBatchValue(batchOrId) {
-  const id = typeof batchOrId === 'object' ? batchOrId?.id : batchOrId
-  return `${COMPARISON_BATCH_PREFIX}${id}`
-}
-
-function explicitComparisonBatchId(selection) {
-  const value = String(selection || '')
-  if (!value.startsWith(COMPARISON_BATCH_PREFIX)) return ''
-  return value.slice(COMPARISON_BATCH_PREFIX.length).trim()
-}
-
-function responseComparisonSelection(comparison) {
-  if (comparison?.selection === 'off') return ''
-  if (comparison?.selection && comparison.selection !== 'previous') {
-    return comparisonBatchValue(comparison.selection)
-  }
-  return 'previous'
-}
-
-function routeAnalysisState() {
-  const requestedDays = Number(routeQueryValue('days'))
-  const comparisonMode = String(routeQueryValue('compare') || 'previous').trim()
-  const comparisonBatchId = String(routeQueryValue('compare_batch') || '').trim()
-  const requestedComparison = comparisonMode === 'off'
-    ? ''
-    : comparisonMode === 'batch' && comparisonBatchId
-      ? comparisonBatchValue(comparisonBatchId)
-      : 'previous'
-  const blockIndex = parseNonNegativeInteger(routeQueryValue('block'))
-  const requestedRange = [routeQueryValue('start'), routeQueryValue('end')]
-  const requestedRangeDays = customRangeDays(requestedRange)
-  const hasValidCustomRange = requestedRangeDays >= 1 && requestedRangeDays <= 90
-  return {
-    batchId: routeQueryValue('batch') || '',
-    comparisonSelection: requestedComparison,
-    days: VALID_TREND_DAYS.has(requestedDays) ? requestedDays : DEFAULT_TREND_DAYS,
-    trendRangeMode: hasValidCustomRange ? 'custom' : 'recent',
-    customDateRange: hasValidCustomRange ? requestedRange : [],
-    metricScope: routeQueryValue('scope') === 'subtree' ? 'subtree' : 'self',
-    blockIndex,
-    subBlockIndex: blockIndex === null
-      ? null
-      : parseNonNegativeInteger(routeQueryValue('sub')),
-    registryPath: routeQueryValue('registry') || null,
-  }
-}
-
 function applyAnalysisState(state) {
   filters.batchId = state.batchId
   filters.comparisonSelection = state.comparisonSelection
-  filters.days = state.days
-  trendRangeMode.value = state.trendRangeMode
-  customDateRange.value = state.customDateRange
+  filters.batchDateRange = state.batchDateRange
+  batchDateRangeMode.value = state.batchDateRangeMode
   metricScope.value = state.metricScope
   selection.registryPath = state.registryPath
   selection.blockIndex = state.registryPath === null ? state.blockIndex : null
   selection.subBlockIndex = state.registryPath === null ? state.subBlockIndex : null
 }
 
-function analysisQuery() {
-  if (!overview.value) return { branch_tag: filters.branchTag }
-  const comparisonBatchId = explicitComparisonBatchId(filters.comparisonSelection)
-  const comparisonMode = !filters.comparisonSelection
-    ? 'off'
-    : comparisonBatchId ? 'batch' : 'previous'
-  const query = {
-    branch_tag: filters.branchTag,
-    batch: String(filters.batchId),
-    compare: comparisonMode,
-    scope: metricScope.value,
-  }
-  if (comparisonBatchId) query.compare_batch = comparisonBatchId
-  if (trendRangeMode.value === 'custom' && customRangeDays(customDateRange.value) > 0) {
-    query.start = customDateRange.value[0]
-    query.end = customDateRange.value[1]
-  } else query.days = String(filters.days)
-  if (selection.registryPath !== null) query.registry = selection.registryPath
-  else if (selection.blockIndex !== null) {
-    query.block = String(selection.blockIndex)
-    if (selection.subBlockIndex !== null) query.sub = String(selection.subBlockIndex)
-  }
-  return query
-}
-
-function sameRouteQuery(left, right) {
-  const normalize = (query) => Object.fromEntries(
-    Object.entries(query || {})
-      .filter(([, value]) => value !== undefined && value !== null && value !== '')
-      .map(([key, value]) => [key, String(Array.isArray(value) ? value[0] : value)])
-      .sort(([a], [b]) => a.localeCompare(b)),
-  )
-  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
-}
-
 async function syncAnalysisRoute() {
   if (!route.path.startsWith('/map-build')) return
-  const path = filters.sceneId
-    ? `/map-build/${encodeURIComponent(filters.sceneId)}`
-    : '/map-build'
-  const query = analysisQuery()
-  if (route.path === path && sameRouteQuery(route.query, query)) return
-  await router.replace(Object.keys(query).length ? { path, query } : path)
+  const location = mapBuildRoute.location({
+    sceneId: filters.sceneId,
+    branchTag: filters.branchTag,
+    rangeMode: batchDateRangeMode.value,
+    batchDateRange: filters.batchDateRange,
+    hasOverview: Boolean(overview.value),
+    batchId: filters.batchId,
+    comparisonSelection: filters.comparisonSelection,
+    metricScope: metricScope.value,
+    selection,
+  })
+  if (mapBuildRoute.matches(route, location)) return
+  await router.replace(location)
 }
 
 async function loadMeta(requestedSceneId) {
-  const request = beginRequest('meta')
+  const request = requestChannels.begin('meta')
   metaLoading.value = true
   try {
     const data = await api.mapBuildMeta(
@@ -278,13 +149,6 @@ function normalizeMetricScope(data) {
   else if (metricScope.value === 'subtree' && !world?.subtree_metrics) metricScope.value = 'self'
 }
 
-function comparisonRequestParams(selection = filters.comparisonSelection) {
-  const batchId = explicitComparisonBatchId(selection)
-  if (batchId) return { comparison_mode: 'batch', comparison_batch_id: batchId }
-  if (!selection) return { comparison_mode: 'off' }
-  return { comparison_mode: 'previous' }
-}
-
 async function loadOverview(
   requestedBatchId = filters.batchId,
   { preserveOnError = false, onFailure = null } = {},
@@ -293,18 +157,40 @@ async function loadOverview(
     overview.value = null
     return null
   }
-  const request = beginRequest('overview')
+  const request = requestChannels.begin('overview')
   overviewLoading.value = true
   try {
-    const data = await api.mapBuildOverview(filters.sceneId, {
+    const params = {
       branch_tag: filters.branchTag,
       batch_id: requestedBatchId,
-      ...comparisonRequestParams(),
-    }, { signal: request.signal })
+      ...mapBuildComparison.requestParams(filters.comparisonSelection),
+    }
+    if (
+      batchDateRangeMode.value === mapBuildBatchWindow.fixedMode
+      && mapBuildBatchWindow.days(filters.batchDateRange) >= 1
+    ) {
+      params.batch_start = filters.batchDateRange[0]
+      params.batch_end = filters.batchDateRange[1]
+    }
+    const data = await api.mapBuildOverview(
+      filters.sceneId,
+      params,
+      { signal: request.signal },
+    )
     if (!request.isLatest()) return null
     overview.value = data
+    batchWindowEmpty.value = false
+    const resolvedBatchDateRange = [
+      data.batch_window?.start_date,
+      data.batch_window?.end_date,
+    ]
+    if (mapBuildBatchWindow.days(resolvedBatchDateRange) >= 1) {
+      filters.batchDateRange = resolvedBatchDateRange
+    }
+    loadedBatchDateRange.value = [...filters.batchDateRange]
+    loadedBatchDateRangeMode.value = batchDateRangeMode.value
     filters.batchId = data.batch.id
-    filters.comparisonSelection = responseComparisonSelection(data.comparison)
+    filters.comparisonSelection = mapBuildComparison.fromResponse(data.comparison)
     if (!selectionExists(data)) {
       selection.blockIndex = null
       selection.subBlockIndex = null
@@ -314,6 +200,22 @@ async function loadOverview(
     return data
   } catch (cause) {
     if (isRequestCancelled(cause) || !request.isLatest()) return null
+    if (cause?.status === 404) {
+      requestChannels.invalidate('trend')
+      overview.value = null
+      trend.value = { selection: { label: '主分块 · 仅自身' }, points: [] }
+      filters.batchId = ''
+      filters.comparisonSelection = ''
+      selection.blockIndex = null
+      selection.subBlockIndex = null
+      selection.registryPath = null
+      loadedBatchDateRange.value = [...filters.batchDateRange]
+      loadedBatchDateRangeMode.value = batchDateRangeMode.value
+      batchWindowEmpty.value = true
+      trendLoading.value = false
+      error.value = ''
+      return null
+    }
     if (!preserveOnError) overview.value = null
     error.value = cause?.message || '烘培分块数据加载失败'
     onFailure?.(cause)
@@ -328,7 +230,8 @@ async function loadTrend({ preserveOnError = false } = {}) {
     trend.value = { selection: { label: '主分块 · 仅自身' }, points: [] }
     return null
   }
-  const request = beginRequest('trend')
+  if (mapBuildBatchWindow.days(filters.batchDateRange) < 1) return null
+  const request = requestChannels.begin('trend')
   trendLoading.value = true
   try {
     const auxiliary = selection.registryPath === null
@@ -339,14 +242,9 @@ async function loadTrend({ preserveOnError = false } = {}) {
       : metricScope.value
     const params = {
       branch_tag: filters.branchTag,
-      days: filters.days,
+      start_date: filters.batchDateRange[0],
+      end_date: filters.batchDateRange[1],
       metric_scope: effectiveMetricScope,
-    }
-    if (trendRangeMode.value === 'custom') {
-      if (customRangeDays(customDateRange.value) < 1) return null
-      delete params.days
-      params.start_date = customDateRange.value[0]
-      params.end_date = customDateRange.value[1]
     }
     if (selection.registryPath !== null) params.registry_path = selection.registryPath
     else if (selection.blockIndex !== null) params.block_index = selection.blockIndex
@@ -369,9 +267,11 @@ async function loadTrend({ preserveOnError = false } = {}) {
 
 async function loadSelectedScene() {
   const requestedSceneId = filters.sceneId
-  const requestedMetricScope = metricScope.value
   error.value = ''
+  clearTrendData()
   filters.batchId = ''
+  // “关闭对比”只属于原场景的当前分析状态；进入新场景时重新采用默认上一批次。
+  filters.comparisonSelection = 'previous'
   selection.blockIndex = null
   selection.subBlockIndex = null
   selection.registryPath = null
@@ -379,12 +279,13 @@ async function loadSelectedScene() {
     clearSceneData()
     return
   }
-  const [loadedOverview] = await Promise.all([loadOverview(''), loadTrend()])
+  const loadedOverview = await loadOverview('')
   if (
     loadedOverview
     && filters.sceneId === requestedSceneId
-    && metricScope.value !== requestedMetricScope
-  ) await loadTrend()
+  ) {
+    await loadTrend()
+  }
 }
 
 async function changeScene() {
@@ -410,12 +311,12 @@ async function changeBranch() {
 async function applyRouteState() {
   if (!routeReady.value) return
   const sequence = ++routeApplySequence
-  const nextBranchTag = availableBranchTag(routeQueryValue('branch_tag'))
+  const nextBranchTag = availableBranchTag(mapBuildRoute.queryValue(route, 'branch_tag'))
   if (filters.branchTag !== nextBranchTag) {
     filters.branchTag = nextBranchTag
     clearSceneData()
-    applyAnalysisState(routeAnalysisState())
-    const loadedMeta = await loadMeta(routeSceneId())
+    applyAnalysisState(mapBuildRoute.parse(route, { routeReady: routeReady.value }))
+    const loadedMeta = await loadMeta(mapBuildRoute.sceneId(route))
     if (sequence !== routeApplySequence) return
     if (loadedMeta && filters.sceneId && selectedSceneHasData.value) {
       const loadedOverview = await loadOverview(filters.batchId)
@@ -425,26 +326,36 @@ async function applyRouteState() {
     return
   }
   const preferredSceneId = meta.value.scene_ids[0]?.value || ''
-  const nextSceneId = keepOrDefault(routeSceneId(), sceneOptions.value, preferredSceneId)
-  const nextState = routeAnalysisState()
+  const nextSceneId = keepOrDefault(mapBuildRoute.sceneId(route), sceneOptions.value, preferredSceneId)
+  const nextState = mapBuildRoute.parse(route, { routeReady: routeReady.value })
   const sceneChanged = filters.sceneId !== nextSceneId
   const batchChanged = String(filters.batchId) !== String(nextState.batchId)
   const comparisonChanged = filters.comparisonSelection !== nextState.comparisonSelection
-  const trendAnalysisChanged = filters.days !== nextState.days
-    || trendRangeMode.value !== nextState.trendRangeMode
-    || customDateRange.value.join('|') !== nextState.customDateRange.join('|')
-    || metricScope.value !== nextState.metricScope
+  const batchDateRangeChanged = batchDateRangeMode.value !== nextState.batchDateRangeMode
+    || (
+      nextState.batchDateRangeMode === mapBuildBatchWindow.fixedMode
+      && filters.batchDateRange.join('|') !== nextState.batchDateRange.join('|')
+    )
+  const trendAnalysisChanged = metricScope.value !== nextState.metricScope
     || selection.blockIndex !== nextState.blockIndex
     || selection.subBlockIndex !== nextState.subBlockIndex
     || selection.registryPath !== nextState.registryPath
-  if (!sceneChanged && !batchChanged && !comparisonChanged && !trendAnalysisChanged) return
+  if (
+    !sceneChanged
+    && !batchChanged
+    && !comparisonChanged
+    && !batchDateRangeChanged
+    && !trendAnalysisChanged
+  ) return
 
   const previousBatchId = overview.value?.batch?.id ?? ''
   const previousComparisonSelection = filters.comparisonSelection
+  const previousBatchDateRange = [...loadedBatchDateRange.value]
+  const previousBatchDateRangeMode = loadedBatchDateRangeMode.value
   if (sceneChanged) {
     filters.sceneId = nextSceneId
     overview.value = null
-    trend.value = { selection: { label: '主分块 · 仅自身' }, points: [] }
+    clearTrendData()
   }
   applyAnalysisState(nextState)
   if (!filters.sceneId || !selectedSceneHasData.value) {
@@ -454,7 +365,7 @@ async function applyRouteState() {
   }
 
   let failed = false
-  if (sceneChanged || batchChanged || comparisonChanged) {
+  if (sceneChanged || batchChanged || comparisonChanged || batchDateRangeChanged) {
     const loaded = await loadOverview(nextState.batchId, {
       preserveOnError: !sceneChanged,
       onFailure: () => { failed = true },
@@ -463,6 +374,8 @@ async function applyRouteState() {
     if (failed && !sceneChanged) {
       filters.batchId = previousBatchId
       filters.comparisonSelection = previousComparisonSelection
+      filters.batchDateRange = previousBatchDateRange
+      batchDateRangeMode.value = previousBatchDateRangeMode
     }
     if (!loaded) {
       await syncAnalysisRoute()
@@ -475,7 +388,7 @@ async function applyRouteState() {
     selection.registryPath = null
   }
   normalizeMetricScope(overview.value)
-  if (sceneChanged || batchChanged || trendAnalysisChanged) {
+  if (sceneChanged || batchChanged || batchDateRangeChanged || trendAnalysisChanged) {
     await loadTrend({ preserveOnError: !sceneChanged })
     if (sequence !== routeApplySequence) return
   }
@@ -511,7 +424,7 @@ async function changeBatch() {
 async function changeComparisonBatch() {
   error.value = ''
   const requestedSelection = filters.comparisonSelection
-  const previousSelection = responseComparisonSelection(overview.value?.comparison)
+  const previousSelection = mapBuildComparison.fromResponse(overview.value?.comparison)
   let failed = false
   const loaded = await loadOverview(filters.batchId, {
     preserveOnError: true,
@@ -519,6 +432,37 @@ async function changeComparisonBatch() {
   })
   if (failed && filters.comparisonSelection === requestedSelection) {
     filters.comparisonSelection = previousSelection
+  }
+  await syncAnalysisRoute()
+}
+
+async function changeBatchDateRange(range) {
+  error.value = ''
+  const nextWindow = mapBuildBatchWindow.fromPicker(range)
+  if (!nextWindow.valid) {
+    error.value = nextWindow.message
+    filters.batchDateRange = [...loadedBatchDateRange.value]
+    return
+  }
+  const requestedBatchDateRange = nextWindow.range
+  const requestedRangeMode = nextWindow.mode
+  const previousBatchDateRange = [...loadedBatchDateRange.value]
+  const previousBatchDateRangeMode = loadedBatchDateRangeMode.value
+  const previousComparisonSelection = filters.comparisonSelection
+  filters.batchDateRange = requestedBatchDateRange
+  batchDateRangeMode.value = requestedRangeMode
+  filters.comparisonSelection = 'previous'
+  const loaded = await loadOverview('', { preserveOnError: true })
+  if (loaded) await loadTrend({ preserveOnError: true })
+  if (
+    !loaded
+    && !batchWindowEmpty.value
+    && batchDateRangeMode.value === requestedRangeMode
+    && filters.batchDateRange.join('|') === requestedBatchDateRange.join('|')
+  ) {
+    filters.batchDateRange = previousBatchDateRange
+    batchDateRangeMode.value = previousBatchDateRangeMode
+    filters.comparisonSelection = previousComparisonSelection
   }
   await syncAnalysisRoute()
 }
@@ -558,41 +502,11 @@ async function changeMetricScope(scope) {
   await syncAnalysisRoute()
 }
 
-async function changeTrendRangeMode(value) {
-  if (value === 'custom') {
-    trendRangeMode.value = 'custom'
-    error.value = ''
-    if (customRangeDays(customDateRange.value) >= 1) {
-      await loadTrend()
-      await syncAnalysisRoute()
-    }
-    return
-  }
-  trendRangeMode.value = 'recent'
-  filters.days = Number(value)
-  error.value = ''
-  await loadTrend()
-  await syncAnalysisRoute()
-}
-
-async function changeCustomDateRange(range) {
-  const days = customRangeDays(range)
-  if (days < 1) {
-    error.value = '结束日期不能早于开始日期'
-    return
-  }
-  if (days > 90) {
-    error.value = '自定义日期范围最多 90 天'
-    return
-  }
-  customDateRange.value = [...range]
-  error.value = ''
-  await loadTrend()
-  await syncAnalysisRoute()
-}
-
 async function refresh() {
   error.value = ''
+  if (batchDateRangeMode.value === mapBuildBatchWindow.rollingMode) {
+    filters.batchDateRange = mapBuildBatchWindow.rollingRange()
+  }
   const loaded = await loadMeta()
   if (!loaded) return
   if (!filters.sceneId || !selectedSceneHasData.value) {
@@ -600,23 +514,14 @@ async function refresh() {
     await syncAnalysisRoute()
     return
   }
-  const [loadedOverview] = await Promise.all([
-    // 刷新代表获取当前筛选下的最新烘培批次；空 batch_id 由后端选择最新项。
-    loadOverview('', { preserveOnError: true }),
-    loadTrend({ preserveOnError: true }),
-  ])
-  if (loadedOverview) await syncAnalysisRoute()
+  // 刷新代表获取当前筛选下的最新烘培批次；空 batch_id 由后端选择最新项。
+  const loadedOverview = await loadOverview('', { preserveOnError: true })
+  if (loadedOverview) {
+    await loadTrend({ preserveOnError: true })
+    await syncAnalysisRoute()
+  }
 }
 
-const allCells = computed(() => overview.value?.blocks?.flatMap((block) => block.sub_blocks) || [])
-const maximumCellMipBytes = computed(() => Math.max(
-  0,
-  ...allCells.value
-    .map((cell) => Number(
-      cell.self_metrics?.all_mips_bytes ?? cell.metrics?.all_mips_bytes ?? 0,
-    ))
-    .filter(Number.isFinite),
-))
 const selectionKey = computed(() => (
   selection.registryPath !== null
     ? `registry:${selection.registryPath}`
@@ -640,9 +545,6 @@ function sceneHasMapBuildData(sceneId) {
   if (metaLoading.value) return null
   return mapBuildSceneIds.value.has(sceneId)
 }
-const hasBlockTree = computed(() => (
-  (overview.value?.blocks?.length || 0) + (overview.value?.auxiliary_blocks?.length || 0)
-) > 0)
 const comparisonBatch = computed(() => overview.value?.comparison?.batch || null)
 const comparisonCandidates = computed(() => overview.value?.comparison?.available_batches || [])
 const selectableComparisonCandidates = computed(() => comparisonCandidates.value.filter(
@@ -733,12 +635,6 @@ const selectedDetail = computed(() => {
     effectiveScope,
   }
 })
-const detailRows = computed(() => rankMetricDetails(
-  selectedDetail.value?.metrics,
-  selectedDetail.value?.comparisonMetrics,
-))
-const detailMaximum = computed(() => detailRows.value[0]?.value || 0)
-
 function isSelected(blockIndex = null, subBlockIndex = null) {
   const key = blockIndex === null ? 'world' : `${blockIndex}:${subBlockIndex ?? 'block'}`
   return selectionKey.value === key
@@ -749,21 +645,6 @@ function isAuxiliarySelected(registryPath) {
 function gridHeaderScope(node) {
   if (metricScope.value === 'subtree' && node?.subtree_metrics) return 'subtree'
   return node?.self_metrics ? 'self' : 'subtree'
-}
-function gridHeaderMetrics(node) {
-  return gridHeaderScope(node) === 'self'
-    ? node.self_metrics || node.metrics
-    : node.subtree_metrics || node.metrics
-}
-function gridHeaderComparisonMetrics(node) {
-  return node?.comparison_metrics?.[gridHeaderScope(node)] || null
-}
-function detailBarWidth(value) {
-  if (!detailMaximum.value || !value) return '0%'
-  return `${Math.max(3, value * 100 / detailMaximum.value)}%`
-}
-function formatCount(value) {
-  return Number(value || 0).toLocaleString('zh-CN')
 }
 function batchLabel(batch, isLatest = false) {
   const date = batch.created_at?.replace('T', ' ').slice(0, 16) || '—'
@@ -776,7 +657,7 @@ function comparisonOptionValue(batch) {
   }
   return String(batch.id) === String(defaultComparisonBatch.value?.id)
     ? 'previous'
-    : comparisonBatchValue(batch)
+    : mapBuildComparison.batchValue(batch)
 }
 
 function comparisonOptionLabel(batch) {
@@ -788,7 +669,7 @@ function comparisonOptionLabel(batch) {
 
 onMounted(async () => {
   unregisterPageRefresh = registerPageRefresh(refresh)
-  const requestedBranchTag = routeQueryValue('branch_tag') || 'main'
+  const requestedBranchTag = mapBuildRoute.queryValue(route, 'branch_tag') || 'main'
   // bootstrap 会先启动项目初始化再挂载页面。等待同一轮初始化完成后再校验
   // 深链分支，避免 meta 尚只有默认 main 时把有效的 engine-ue5 错误回退。
   if (!store.initialized && typeof store.init === 'function') {
@@ -799,11 +680,11 @@ onMounted(async () => {
     }
   }
   filters.branchTag = availableBranchTag(requestedBranchTag)
-  applyAnalysisState(routeAnalysisState())
+  applyAnalysisState(mapBuildRoute.parse(route, { routeReady: routeReady.value }))
   // 与热力图一致，浏览器重新进入/刷新工作区时跳到最新批次；
   // 用户在页面内主动选择历史批次仍会立即生效并同步 URL。
   filters.batchId = ''
-  const loaded = await loadMeta(routeSceneId())
+  const loaded = await loadMeta(mapBuildRoute.sceneId(route))
   if (loaded && filters.sceneId && selectedSceneHasData.value) {
     const loadedOverview = await loadOverview(filters.batchId)
     if (loadedOverview) await loadTrend()
@@ -818,9 +699,9 @@ watch(
     route.query?.batch,
     route.query?.compare,
     route.query?.compare_batch,
-    route.query?.days,
-    route.query?.start,
-    route.query?.end,
+    route.query?.range_mode,
+    route.query?.from,
+    route.query?.to,
     route.query?.scope,
     route.query?.block,
     route.query?.sub,
@@ -830,7 +711,7 @@ watch(
 )
 onUnmounted(() => {
   unregisterPageRefresh?.()
-  Object.values(requests).forEach((request) => request.controller?.abort())
+  requestChannels.abortAll()
 })
 </script>
 
@@ -851,7 +732,7 @@ onUnmounted(() => {
         <div class="filter-field scene-field">
           <span class="label">场景ID</span>
           <a-select v-model="filters.sceneId" class="scene-select" :loading="metaLoading"
-            placeholder="全部场景" allow-clear allow-search size="small" style="width: 320px"
+            placeholder="全部场景" allow-clear allow-search size="small"
             popup-container=".map-build-page"
             @change="changeScene">
             <a-option v-for="scene in sceneOptions" :key="scene" :value="scene">
@@ -866,10 +747,17 @@ onUnmounted(() => {
             </a-option>
           </a-select>
         </div>
+        <div class="filter-field batch-date-field">
+          <span class="label">创建时间</span>
+          <a-range-picker :model-value="filters.batchDateRange" class="batch-date-picker"
+            :disabled="!selectedSceneHasData" size="small" value-format="YYYY-MM-DD"
+            format="YYYY-MM-DD" :placeholder="['开始日期', '结束日期']" allow-clear
+            @change="changeBatchDateRange" />
+        </div>
         <div class="filter-field batch-field">
           <span class="label">基线批次</span>
           <a-select v-model="filters.batchId" class="batch-select" :loading="overviewLoading"
-            :disabled="!selectedSceneHasData" allow-search size="small" style="width: 410px"
+            :disabled="!selectedSceneHasData" allow-search size="small"
             popup-container=".map-build-page"
             @change="changeBatch">
             <a-option v-for="(batch, index) in overview?.available_batches || []"
@@ -883,7 +771,7 @@ onUnmounted(() => {
           <a-select v-model="filters.comparisonSelection" class="compare-select"
             :disabled="!selectedSceneHasData || selectableComparisonCandidates.length === 0"
             allow-clear allow-search placeholder="选择对比批次"
-            size="small" style="width: 410px"
+            size="small"
             popup-container=".map-build-page"
             @change="changeComparisonBatch">
             <a-option v-for="batch in comparisonCandidates" :key="batch.id"
@@ -915,6 +803,11 @@ onUnmounted(() => {
         <div class="state-title">该场景还没有烘培数据</div>
         <div class="state-sub">电影档批次上报 map_build_data 后即可查看。</div>
       </div>
+      <div v-else-if="batchWindowEmpty" class="page-state card date-range-empty" role="status">
+        <div class="state-glyph">▦</div>
+        <div class="state-title">当前时间范围没有烘培数据</div>
+        <div class="state-sub">请调整上方的创建时间范围。</div>
+      </div>
 
       <template v-else>
         <div class="atlas-row">
@@ -922,162 +815,14 @@ onUnmounted(() => {
             <a-spin />
             <span>正在切换批次…</span>
           </div>
-          <section class="atlas-card card" :class="{
-            'world-selected': overview && isSelected()
-              && (metricScope === 'subtree' || !overview.world?.has_children),
-            'self-head-selected': overview && isSelected()
-              && metricScope === 'self' && overview.world?.has_children,
-          }">
-            <button type="button" class="atlas-head world-head" :class="{ selected: isSelected() }"
-              :aria-pressed="isSelected()" @click="choose()">
-              <span class="world-select">
-                <span class="section-stripe"></span>
-                <b>主分块</b>
-              </span>
-              <span v-if="overview" class="world-total">
-                <span>
-                  <small>{{ metricScopeLabel(gridHeaderScope(overview.world)) }}</small>
-                  <span class="metric-value-line">
-                    <b>{{ formatMiB(gridHeaderMetrics(overview.world)?.all_mips_bytes) }}</b>
-                    <MapBuildMetricDelta v-bind="comparisonDisplayProps"
-                      :current-value="gridHeaderMetrics(overview.world)?.all_mips_bytes"
-                      :previous-value="gridHeaderComparisonMetrics(overview.world)?.all_mips_bytes" />
-                  </span>
-                </span>
-              </span>
-            </button>
+          <MapBuildAtlas :overview="overview" :loading="overviewLoading"
+            :selection-key="selectionKey" :metric-scope="metricScope"
+            :comparison-props="comparisonDisplayProps"
+            @select="choose" @select-auxiliary="chooseAuxiliary"
+            @change-metric-scope="changeMetricScope" />
 
-            <div v-if="overviewLoading && !overview" class="atlas-loading"><a-spin tip="正在整理分块…" /></div>
-            <div v-else-if="overview && !hasBlockTree" class="no-block-tree" role="status">
-              该场景没有分块数据，仅展示主分块数据
-            </div>
-            <div v-else-if="overview?.blocks?.length" class="block-layout">
-              <article v-for="block in overview.blocks" :key="block.index" class="block-panel"
-                :class="{
-                  selected: isSelected(block.index) && (metricScope === 'subtree' || !block.has_children),
-                  'self-head-selected': isSelected(block.index) && metricScope === 'self' && block.has_children,
-                }">
-                <button class="block-head" :class="{ selected: isSelected(block.index) }"
-                  :aria-pressed="isSelected(block.index)"
-                  @click="choose(block.index)">
-                  <span><i></i>{{ block.label }}</span>
-                  <span class="block-values">
-                    <small>{{ metricScopeLabel(gridHeaderScope(block)) }}</small>
-                    <span class="metric-value-line">
-                      <b>{{ formatMiB(gridHeaderMetrics(block)?.all_mips_bytes) }}</b>
-                      <MapBuildMetricDelta v-bind="comparisonDisplayProps"
-                        :current-value="gridHeaderMetrics(block)?.all_mips_bytes"
-                        :previous-value="gridHeaderComparisonMetrics(block)?.all_mips_bytes" />
-                    </span>
-                  </span>
-                </button>
-                <div class="sub-grid">
-                  <button v-for="cell in block.sub_blocks" :key="cell.index" class="sub-cell"
-                    :class="{ selected: isSelected(block.index, cell.index) }"
-                    :style="{ backgroundColor: atlasColor(cell.self_metrics?.all_mips_bytes ?? cell.metrics.all_mips_bytes, maximumCellMipBytes) }"
-                    :aria-pressed="isSelected(block.index, cell.index)"
-                    @click="choose(block.index, cell.index)">
-                    <span>{{ cell.label }}</span>
-                    <b>{{ formatMiB(cell.self_metrics?.all_mips_bytes ?? cell.metrics.all_mips_bytes) }}</b>
-                    <MapBuildMetricDelta v-bind="comparisonDisplayProps"
-                      :current-value="cell.self_metrics?.all_mips_bytes ?? cell.metrics.all_mips_bytes"
-                      :previous-value="cell.comparison_metrics?.self?.all_mips_bytes" />
-                  </button>
-                </div>
-              </article>
-            </div>
-            <footer v-if="overview && hasBlockTree" class="atlas-card-footer"
-              :class="{ 'auxiliary-only': !overview.blocks?.length }">
-              <div v-if="overview.auxiliary_blocks?.length" class="auxiliary-block-list">
-                <button v-for="block in overview.auxiliary_blocks" :key="block.key || block.path"
-                  type="button" class="auxiliary-block"
-                  :class="{ selected: isAuxiliarySelected(block.path) }"
-                  :aria-pressed="isAuxiliarySelected(block.path)"
-                  @click="chooseAuxiliary(block.path)">
-                  <span><i></i><b>{{ block.label }}</b></span>
-                  <span class="auxiliary-values">
-                    <b>{{ formatMiB(gridHeaderMetrics(block)?.all_mips_bytes) }}</b>
-                    <MapBuildMetricDelta v-bind="comparisonDisplayProps"
-                      :current-value="gridHeaderMetrics(block)?.all_mips_bytes"
-                      :previous-value="gridHeaderComparisonMetrics(block)?.all_mips_bytes" />
-                  </span>
-                </button>
-              </div>
-              <div class="atlas-scope-control">
-                <div class="metric-scope-switch" role="group" aria-label="分块网格统计口径">
-                  <button type="button" :class="{ active: metricScope === 'self' }"
-                    :aria-pressed="metricScope === 'self'" @click="changeMetricScope('self')">
-                    仅自身
-                  </button>
-                  <button type="button" :class="{ active: metricScope === 'subtree' }"
-                    :aria-pressed="metricScope === 'subtree'" @click="changeMetricScope('subtree')">
-                    含子级
-                  </button>
-                </div>
-              </div>
-            </footer>
-          </section>
-
-          <aside v-if="selectedDetail" class="detail-panel card" aria-live="polite">
-            <header class="detail-head">
-              <div class="detail-title">
-                <h3>{{ selectedDetail.label }}<small v-if="selectedDetail.effectiveScope === 'subtree'">（含子级汇总）</small></h3>
-                <p :title="selectedDetail.context">{{ selectedDetail.context }}</p>
-              </div>
-            </header>
-            <div class="detail-summary">
-              <div>
-                <span>总 Mip</span>
-                <span class="summary-value-line">
-                  <b :title="formatExactBytes(selectedDetail.metrics.all_mips_bytes)">
-                    {{ formatMiB(selectedDetail.metrics.all_mips_bytes) }}
-                  </b>
-                  <MapBuildMetricDelta v-bind="comparisonDisplayProps"
-                    :current-value="selectedDetail.metrics.all_mips_bytes"
-                    :previous-value="selectedDetail.comparisonMetrics?.all_mips_bytes" />
-                </span>
-              </div>
-              <div>
-                <span>Cook 估算</span>
-                <span class="summary-value-line">
-                  <b :title="formatExactBytes(selectedDetail.metrics.cook_estimate_bytes)">
-                    {{ formatMiB(selectedDetail.metrics.cook_estimate_bytes) }}
-                  </b>
-                  <MapBuildMetricDelta v-bind="comparisonDisplayProps"
-                    :current-value="selectedDetail.metrics.cook_estimate_bytes"
-                    :previous-value="selectedDetail.comparisonMetrics?.cook_estimate_bytes" />
-                </span>
-              </div>
-              <div>
-                <span>纹理数</span>
-                <span class="summary-value-line">
-                  <b>{{ formatCount(selectedDetail.metrics.texture_count) }}</b>
-                  <MapBuildMetricDelta v-bind="comparisonDisplayProps" value-kind="count"
-                    :current-value="selectedDetail.metrics.texture_count"
-                    :previous-value="selectedDetail.comparisonMetrics?.texture_count" />
-                </span>
-              </div>
-            </div>
-            <div class="detail-section-title">
-              <span>指标明细</span>
-              <small>从高到低</small>
-            </div>
-            <ol class="detail-list">
-              <li v-for="(row, index) in detailRows" :key="row.key" class="detail-row">
-                <div class="detail-row-head">
-                  <span><i>{{ String(index + 1).padStart(2, '0') }}</i>{{ row.label }}</span>
-                  <span class="detail-row-value">
-                    <b :title="formatExactBytes(row.value)">{{ formatMiB(row.value) }}</b>
-                    <MapBuildMetricDelta v-bind="comparisonDisplayProps"
-                      :current-value="row.value" :previous-value="row.previousValue" />
-                  </span>
-                </div>
-                <div class="detail-track" aria-hidden="true">
-                  <i :style="{ width: detailBarWidth(row.value), backgroundColor: row.color }"></i>
-                </div>
-              </li>
-            </ol>
-          </aside>
+          <MapBuildDetailPanel v-if="selectedDetail" :detail="selectedDetail"
+            :comparison-props="comparisonDisplayProps" />
         </div>
 
         <section class="trend-card card">
@@ -1085,21 +830,6 @@ onUnmounted(() => {
             <div class="section-title">
               <span>数据趋势</span>
               <span class="selection-pill">{{ trendSelectionLabel(trend.selection?.label) }}</span>
-            </div>
-            <div class="trend-controls">
-              <a-select :model-value="trendRangeMode === 'custom' ? 'custom' : filters.days"
-                size="small" class="days-select"
-                @change="changeTrendRangeMode">
-                <a-option :value="7">最近 7 天</a-option>
-                <a-option :value="14">最近 14 天</a-option>
-                <a-option :value="30">最近 30 天</a-option>
-                <a-option :value="60">最近 60 天</a-option>
-                <a-option :value="90">最近 90 天</a-option>
-                <a-option value="custom">自定义</a-option>
-              </a-select>
-              <a-range-picker v-if="trendRangeMode === 'custom'" class="custom-range-picker"
-                size="small" value-format="YYYY-MM-DD" :allow-clear="false"
-                :model-value="customDateRange" @change="changeCustomDateRange" />
             </div>
           </header>
           <div class="trend-body" :class="{ loading: trendLoading }">
@@ -1123,8 +853,13 @@ onUnmounted(() => {
 .filter-field { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .filter-field .label { flex: 0 0 auto; color: var(--color-text-3); font-size: 12px; white-space: nowrap; }
 .scene-field { flex: 0 0 auto; }
-.batch-field { flex: 0 0 auto; }
-.compare-field { flex: 0 0 auto; }
+.batch-field,
+.compare-field { flex: 1 1 222px; max-width: 410px; }
+.batch-date-field { flex: 0 0 auto; }
+.scene-field :deep(.scene-select) { width: clamp(240px, 17vw, 320px); }
+.batch-field :deep(.batch-select),
+.compare-field :deep(.compare-select) { width: 168px; min-width: 168px; flex: 1 1 168px; }
+.batch-date-field :deep(.batch-date-picker) { width: 240px; }
 .scene-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .scene-option-name.is-data-empty { color: var(--color-text-4); }
 .unlisted { color: var(--color-text-3); font-size: 11px; }
@@ -1132,7 +867,7 @@ onUnmounted(() => {
 .state-glyph { font-size: 38px; color: var(--color-text-4); }
 .state-title { color: var(--color-text-2); font-size: 15px; font-weight: 600; }
 .state-sub { color: var(--color-text-4); font-size: 12px; }
-.trend-card, .atlas-card, .detail-panel { overflow: hidden; }
+.trend-card { overflow: hidden; }
 .atlas-row {
   position: relative;
   display: grid; grid-template-columns: minmax(0, 3fr) minmax(380px, 2fr);
@@ -1143,185 +878,23 @@ onUnmounted(() => {
   gap: 9px; border-radius: 8px; background: color-mix(in srgb, var(--color-bg-1) 55%, transparent);
   color: var(--color-text-2); font-size: 12px; backdrop-filter: blur(1px);
 }
-.atlas-card {
-  min-width: 0; display: flex; flex-direction: column;
-  transition: border-color .14s ease, box-shadow .14s ease;
-}
-.atlas-card.world-selected {
-  border-color: rgba(var(--arcoblue-6), .9);
-  box-shadow: inset 0 0 0 1px rgba(var(--arcoblue-6), .18),
-    0 0 0 1px rgba(var(--arcoblue-6), .3), 0 0 14px rgba(var(--arcoblue-6), .1);
-}
-.atlas-card.self-head-selected > .world-head {
-  position: relative; z-index: 1;
-  border-top-left-radius: inherit; border-top-right-radius: inherit;
-  background: color-mix(in srgb, rgb(var(--arcoblue-6)) 7%, transparent);
-  box-shadow: inset 0 0 0 1px rgba(var(--arcoblue-6), .78),
-    0 0 12px rgba(var(--arcoblue-6), .12);
-}
-.atlas-scope-control { grid-column: 2; justify-self: end; flex: 0 0 auto; display: flex; align-items: center; }
-.section-head, .atlas-head { min-height: 50px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border-1); }
+.section-head { min-height: 50px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--color-border-1); }
 .section-title { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 600; }
 .selection-pill { padding: 4px 9px; border-radius: 5px; border: 1px solid var(--color-border-2); color: var(--color-text-3); font-size: 11px; font-weight: 500; }
-.trend-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 14px; }
-.trend-controls :deep(.days-select) { width: 130px; }
-.trend-controls :deep(.custom-range-picker) { width: 230px; }
 .trend-body { position: relative; min-height: 300px; padding: 12px 14px 4px 4px; transition: opacity .15s ease; }
 .trend-body.loading > :first-child { opacity: .55; }
 .loading-veil { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
-.atlas-head { min-height: 58px; }
-.world-head {
-  box-sizing: border-box; width: 100%; flex: 0 0 auto; padding-right: 8px; border: 0;
-  border-bottom: 1px solid var(--color-border-1); background: transparent; color: var(--color-text-1);
-  font: inherit; text-align: left; cursor: pointer; transition: background-color .14s ease;
-}
-.world-head:hover { background: var(--color-fill-1); }
-.world-head:focus-visible { outline: 2px solid rgba(var(--arcoblue-6), .85); outline-offset: -3px; }
-.world-head.selected { border-bottom-color: rgba(var(--arcoblue-6), .48); }
-.world-select {
-  min-width: 0; align-self: stretch; flex: 1 1 auto; display: flex; align-items: center; gap: 10px;
-  padding: 6px 0;
-}
-.section-stripe { width: 3px; height: 32px; border-radius: 2px; background: var(--color-border-3); }
-.world-head.selected .section-stripe { background: rgb(var(--arcoblue-6)); box-shadow: 0 0 12px rgba(var(--arcoblue-6), .35); }
-.world-select b { display: block; font-size: 15px; }
-.world-total {
-  min-width: 66px; align-self: stretch; padding: 5px 0 5px 4px; display: flex; align-items: center;
-  justify-content: flex-end; color: inherit; font-family: "Bahnschrift", "Segoe UI", sans-serif;
-}
-.world-total > span { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
-.world-total small { color: var(--color-text-4); font: 9px/1.2 "Segoe UI", sans-serif; }
-.world-total b { color: var(--color-text-1); font-size: 13px; }
-.metric-value-line { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 8px; }
-.atlas-loading { min-height: 360px; display: grid; place-items: center; }
-.no-block-tree {
-  flex: 1 1 auto; min-height: 260px; display: grid; place-items: center;
-  color: var(--color-text-3); font-size: 13px; text-align: center;
-}
-.block-layout { min-width: 0; padding: 12px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.block-panel {
-  min-width: 0; overflow: hidden; border: 1px solid var(--color-border-2); border-radius: 0;
-  background: var(--color-fill-1); transition: border-color .14s ease, box-shadow .14s ease;
-}
-.block-panel.selected {
-  border-color: rgba(var(--arcoblue-6), .95);
-  box-shadow: inset 0 0 0 1px rgba(var(--arcoblue-6), .24),
-    0 0 0 1px rgba(var(--arcoblue-6), .38), 0 0 14px rgba(var(--arcoblue-6), .14);
-}
-.block-panel.self-head-selected > .block-head {
-  position: relative; z-index: 1;
-  border-top-left-radius: inherit; border-top-right-radius: inherit;
-  border-bottom-color: rgba(var(--arcoblue-6), .72);
-  background: color-mix(in srgb, rgb(var(--arcoblue-6)) 7%, transparent);
-  box-shadow: inset 0 0 0 1px rgba(var(--arcoblue-6), .82),
-    0 0 10px rgba(var(--arcoblue-6), .12);
-}
-.block-head {
-  width: 100%; min-height: 42px; padding: 7px 11px; display: flex; align-items: center; justify-content: space-between;
-  border: 0; border-bottom: 1px solid var(--color-border-2); background: color-mix(in srgb, var(--color-fill-2) 65%, transparent);
-  color: var(--color-text-2); cursor: pointer; text-align: left;
-}
-.block-head:hover, .block-head.selected { background: var(--color-fill-3); color: var(--color-text-1); }
-.block-panel.selected .block-head { border-bottom-color: rgba(var(--arcoblue-6), .55); }
-.block-head > span:first-child { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; }
-.block-head i { width: 3px; height: 14px; border-radius: 2px; background: var(--color-border-3); }
-.block-head.selected i { background: rgb(var(--arcoblue-6)); }
-.block-values { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-family: "Bahnschrift", "Segoe UI", sans-serif; }
-.block-values small { color: var(--color-text-4); font: 9px/1.1 "Segoe UI", sans-serif; }
-.block-values b { font-size: 12px; }
-.sub-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; background: transparent; }
-.atlas-card-footer {
-  min-height: 12px; margin-top: auto; padding: 0 12px 10px; display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px;
-}
-.atlas-card-footer.auxiliary-only { padding-top: 12px; }
-.auxiliary-block-list { min-width: 0; grid-column: 1; display: grid; gap: 8px; }
-.auxiliary-block {
-  box-sizing: border-box; width: 100%; min-height: 42px; padding: 7px 11px;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  border: 1px solid var(--color-border-2); border-radius: 0;
-  background: color-mix(in srgb, var(--color-fill-2) 65%, transparent);
-  color: var(--color-text-2); font: inherit; cursor: pointer; text-align: left;
-  transition: color .14s ease, background-color .14s ease, border-color .14s ease, box-shadow .14s ease;
-}
-.auxiliary-block:hover { background: var(--color-fill-3); color: var(--color-text-1); }
-.auxiliary-block.selected {
-  border-color: rgba(var(--arcoblue-6), .95); color: var(--color-text-1);
-  box-shadow: inset 0 0 0 1px rgba(var(--arcoblue-6), .24),
-    0 0 0 1px rgba(var(--arcoblue-6), .38), 0 0 14px rgba(var(--arcoblue-6), .14);
-}
-.auxiliary-block:focus-visible { outline: 2px solid rgba(var(--arcoblue-6), .85); outline-offset: 2px; }
-.auxiliary-block > span { min-width: 0; display: flex; align-items: center; gap: 7px; }
-.auxiliary-block i { width: 3px; height: 14px; flex: 0 0 auto; border-radius: 2px; background: var(--color-border-3); }
-.auxiliary-block.selected i { background: rgb(var(--arcoblue-6)); }
-.auxiliary-block span b { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.auxiliary-block > .auxiliary-values {
-  min-width: 104px; flex: 0 0 auto; display: flex; align-items: baseline; justify-content: flex-end; gap: 8px;
-}
-.auxiliary-block > .auxiliary-values > b { color: var(--color-text-1); font: 600 12px "Bahnschrift", "Segoe UI", sans-serif; }
-.sub-cell {
-  box-sizing: border-box; position: relative; min-height: 72px; padding: 10px 7px 8px; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; border: 0; color: rgba(255, 255, 255, .94);
-  font-family: "Bahnschrift", "Segoe UI", sans-serif; cursor: pointer; isolation: isolate;
-  transition: filter .12s ease, box-shadow .12s ease, transform .12s ease;
-}
-.sub-cell:not(:nth-child(4n)) { border-right: 1px solid rgba(0,0,0,.26); }
-.sub-cell:nth-child(-n+12) { border-bottom: 1px solid rgba(0,0,0,.26); }
-.sub-cell:hover { filter: brightness(1.07); z-index: 1; }
-.sub-cell:active { transform: scale(.985); }
-.sub-cell.selected { z-index: 2; box-shadow: inset 0 0 0 2px #91bdff; }
-.sub-cell > span:first-child { font-size: 11px; opacity: .78; }
-.sub-cell b { margin-top: 3px; font-size: 12px; font-weight: 600; }
-.sub-cell :deep(.metric-delta) { margin-top: 3px; justify-content: center; }
-.sub-cell :deep(.metric-delta.is-steady),
-.sub-cell :deep(.metric-delta.is-unavailable) { color: rgba(255, 255, 255, .68); }
-.detail-panel { min-width: 0; display: flex; flex-direction: column; background: color-mix(in srgb, var(--color-bg-2) 94%, var(--color-fill-1)); }
-.detail-head { padding: 15px 16px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--color-border-2); }
-.detail-title { min-width: 0; }
-.detail-head h3 { margin: 0; color: var(--color-text-1); font-size: 16px; line-height: 1.35; }
-.detail-head h3 small { color: var(--color-text-3); font-size: 11px; font-weight: 500; }
-.detail-head p { margin: 5px 0 0; overflow: hidden; color: var(--color-text-4); font: 11px/1.4 "Bahnschrift", "Segoe UI", sans-serif; text-overflow: ellipsis; white-space: nowrap; }
-.metric-scope-switch { flex: 0 0 auto; padding: 1px; display: flex; gap: 2px; border: 1px solid var(--color-border-2); border-radius: 5px; background: var(--color-fill-1); }
-.metric-scope-switch button { min-height: 23px; padding: 2px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--color-text-3); font: 10px/1.2 "Segoe UI", sans-serif; cursor: pointer; transition: color .12s ease, background-color .12s ease, box-shadow .12s ease; }
-.metric-scope-switch button:hover { color: var(--color-text-1); }
-.metric-scope-switch button.active { color: rgb(var(--arcoblue-6)); background: color-mix(in srgb, rgb(var(--arcoblue-6)) 12%, var(--color-fill-2)); box-shadow: inset 0 0 0 1px rgba(var(--arcoblue-6), .22); }
-.metric-scope-switch button:focus-visible { outline: 2px solid rgba(var(--arcoblue-6), .78); outline-offset: 1px; }
-.detail-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-bottom: 1px solid var(--color-border-2); }
-.detail-summary > div { min-height: 76px; padding: 12px 16px; display: flex; flex-direction: column; justify-content: center; }
-.detail-summary > div + div { border-left: 1px solid var(--color-border-2); }
-.detail-summary > div > span:first-child { color: var(--color-text-4); font-size: 12px; }
-.summary-value-line { margin-top: 6px; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.summary-value-line > b { color: var(--color-text-1); font: 600 15px/1.2 "Bahnschrift", "Segoe UI", sans-serif; }
-.detail-section-title { padding: 12px 16px 7px; display: flex; align-items: baseline; justify-content: space-between; }
-.detail-section-title span { color: var(--color-text-2); font-size: 13px; font-weight: 600; }
-.detail-section-title small { color: var(--color-text-4); font-size: 10px; }
-.detail-list { flex: 1; margin: 0; padding: 0 16px 9px; display: flex; flex-direction: column; justify-content: space-evenly; list-style: none; }
-.detail-row { padding: 7px 0; }
-.detail-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.detail-row-head > span:first-child { min-width: 0; overflow: hidden; color: var(--color-text-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.detail-row-head > span:first-child i { width: 25px; display: inline-block; color: var(--color-text-4); font: normal 10px "Bahnschrift", sans-serif; }
-.detail-row-value { min-width: 126px; flex: 0 0 auto; display: grid; grid-template-columns: minmax(68px, 1fr) 48px; align-items: baseline; gap: 8px; }
-.detail-row-value > b { color: var(--color-text-2); font: 600 12px "Bahnschrift", "Segoe UI", sans-serif; text-align: right; }
-.detail-track { height: 3px; margin: 6px 0 0 25px; overflow: hidden; border-radius: 2px; background: var(--color-fill-3); }
-.detail-track i { height: 100%; display: block; border-radius: inherit; opacity: .9; transition: width .18s ease; }
 @media (max-width: 1050px) {
   .batch-field { flex: 1 1 100%; }
   .atlas-row { grid-template-columns: 1fr; }
 }
 @media (max-width: 680px) {
   .map-build-page { padding: 8px; }
-  .filter-field, .scene-field, .batch-field, .compare-field { width: 100%; flex: 1 1 100%; }
-  .filter-field :deep(.scene-select), .filter-field :deep(.batch-select), .filter-field :deep(.compare-select) {
+  .filter-field, .scene-field, .batch-field, .compare-field, .batch-date-field { width: 100%; flex: 1 1 100%; }
+  .filter-field :deep(.scene-select), .filter-field :deep(.batch-select), .filter-field :deep(.compare-select),
+  .filter-field :deep(.batch-date-picker) {
     min-width: 0; flex: 1 1 auto;
   }
-  .block-layout { grid-template-columns: 1fr; }
-  .atlas-card-footer { grid-template-columns: 1fr; }
-  .auxiliary-block-list, .atlas-scope-control { grid-column: 1; }
-  .world-head { padding-right: 10px; }
   .section-head { align-items: flex-start; padding: 11px 12px; gap: 8px; }
-  .trend-controls { align-items: flex-end; flex-direction: column; }
-  .trend-controls :deep(.days-select),
-  .trend-controls :deep(.custom-range-picker) { max-width: 100%; }
-  .sub-cell { min-height: 62px; }
 }
 </style>

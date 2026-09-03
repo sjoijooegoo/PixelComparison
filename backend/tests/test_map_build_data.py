@@ -382,8 +382,8 @@ def test_map_build_overview_trend_and_meta(client):
 
 
 def test_overview_compares_with_previous_or_selected_compatible_batch(client):
-    _batch(client, "900", "2026-07-31T09:00:00")
-    _batch(client, "901", "2026-08-01T09:00:00")
+    _batch(client, "900", "2026-08-01T09:00:00")
+    _batch(client, "901", "2026-08-02T09:00:00")
     _batch(client, "902", "2026-08-08T09:00:00")
     _batch(client, "903", "2026-08-10T12:00:00", platform="Android")
     _batch(client, "904", "2026-08-09T09:00:00")
@@ -482,6 +482,157 @@ def test_overview_compares_with_previous_or_selected_compatible_batch(client):
     assert client.get(
         "/api/map-build/scenes/MapScene/overview",
         params={"comparison_mode": "batch"},
+    ).status_code == 422
+
+
+def test_overview_batch_calendar_strictly_filters_both_selectors(client):
+    batches = [
+        ("910", "2026-05-01T09:00:00"),
+        ("911", "2026-07-31T09:00:00"),
+        ("912", "2026-08-01T09:00:00"),
+        ("913", "2026-08-29T09:00:00"),
+    ]
+    for batch_id, captured_at in batches:
+        _batch(client, batch_id, captured_at)
+        assert _upload(client, batch_id, _payload()).status_code == 201
+
+    default_window = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"comparison_mode": "off"},
+    ).json()
+    assert [item["id"] for item in default_window["available_batches"]] == [
+        "913",
+        "912",
+    ]
+    assert default_window["batch_window"] == {
+        "start_date": "2026-08-01",
+        "end_date": "2026-08-30",
+    }
+    assert (
+        default_window["comparison"]["available_batches"]
+        == default_window["available_batches"]
+    )
+
+    stale_rolling_selection = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_id": "910", "comparison_mode": "previous"},
+    )
+    assert stale_rolling_selection.status_code == 200, stale_rolling_selection.text
+    stale_rolling_overview = stale_rolling_selection.json()
+    assert stale_rolling_overview["batch"]["id"] == "913"
+    assert stale_rolling_overview["comparison"]["batch"]["id"] == "912"
+    assert [item["id"] for item in stale_rolling_overview["available_batches"]] == [
+        "913",
+        "912",
+    ]
+
+    missing_rolling_selection = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_id": "deleted-batch", "comparison_mode": "previous"},
+    )
+    assert missing_rolling_selection.status_code == 200, missing_rolling_selection.text
+    assert missing_rolling_selection.json()["batch"]["id"] == "913"
+
+    oldest_in_default_window = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_id": "912", "comparison_mode": "previous"},
+    ).json()
+    assert [item["id"] for item in oldest_in_default_window["available_batches"]] == [
+        "913",
+        "912",
+    ]
+    assert oldest_in_default_window["comparison"]["selection"] == "off"
+    assert oldest_in_default_window["comparison"]["batch"] is None
+
+    custom_range = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={
+            "batch_start": "2026-07-01",
+            "batch_end": "2026-08-01",
+            "comparison_mode": "off",
+        },
+    ).json()
+    assert [item["id"] for item in custom_range["available_batches"]] == [
+        "912",
+        "911",
+    ]
+    assert custom_range["batch_window"] == {
+        "start_date": "2026-07-01",
+        "end_date": "2026-08-01",
+    }
+
+    stale_selection = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={
+            "batch_id": "911",
+            "batch_start": "2026-08-01",
+            "batch_end": "2026-08-30",
+            "comparison_mode": "batch",
+            "comparison_batch_id": "910",
+        },
+    ).json()
+    assert stale_selection["batch"]["id"] == "913"
+    assert stale_selection["comparison"]["batch"]["id"] == "912"
+    assert [item["id"] for item in stale_selection["available_batches"]] == [
+        "913",
+        "912",
+    ]
+    assert (
+        stale_selection["comparison"]["available_batches"]
+        == stale_selection["available_batches"]
+    )
+
+    assert client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={
+            "batch_start": "2026-06-01",
+            "batch_end": "2026-06-30",
+        },
+    ).status_code == 404
+
+    assert client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_start": "2026-08-01"},
+    ).status_code == 422
+    assert client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={
+            "batch_start": "2026-08-02",
+            "batch_end": "2026-08-01",
+        },
+    ).status_code == 422
+
+
+def test_batch_and_trend_date_ranges_are_limited_to_sixty_days(client):
+    _batch(client, "range-limit", "2026-08-29T09:00:00")
+    assert _upload(client, "range-limit", _payload()).status_code == 201
+
+    overview_at_limit = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_start": "2026-07-02", "batch_end": "2026-08-30"},
+    )
+    assert overview_at_limit.status_code == 200, overview_at_limit.text
+    overview_over_limit = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_start": "2026-07-01", "batch_end": "2026-08-30"},
+    )
+    assert overview_over_limit.status_code == 422
+    assert "创建时间范围最多为 60 天" in overview_over_limit.json()["detail"]
+
+    trend_at_limit = client.get(
+        "/api/map-build/scenes/MapScene/trend",
+        params={"start_date": "2026-07-02", "end_date": "2026-08-30"},
+    )
+    assert trend_at_limit.status_code == 200, trend_at_limit.text
+    trend_over_limit = client.get(
+        "/api/map-build/scenes/MapScene/trend",
+        params={"start_date": "2026-07-01", "end_date": "2026-08-30"},
+    )
+    assert trend_over_limit.status_code == 400
+    assert "最多为 60 天" in trend_over_limit.json()["detail"]
+    assert client.get(
+        "/api/map-build/scenes/MapScene/trend",
+        params={"days": 61},
     ).status_code == 422
 
 
@@ -638,7 +789,7 @@ def test_registry_count_limit_rejects_oversized_payload_without_partial_snapshot
     assert client.get("/api/map-build/meta").json()["scene_ids"] == []
 
 
-def test_explicit_batch_selection_cannot_escape_requested_scene(client):
+def test_cross_scene_batch_selection_falls_back_to_requested_scene_latest(client):
     _batch(client, "205", "2026-08-01T13:00:00", scene="SceneA")
     _batch(client, "206", "2026-08-01T14:00:00", scene="SceneB")
     assert _upload(client, "205", _payload()).status_code == 201
@@ -649,8 +800,10 @@ def test_explicit_batch_selection_cannot_escape_requested_scene(client):
         params={"batch_id": "206"},
     )
 
-    assert response.status_code == 404
-    assert response.json()["detail"] == "当前筛选没有烘培数据"
+    assert response.status_code == 200, response.text
+    overview = response.json()
+    assert overview["batch"]["id"] == "205"
+    assert overview["batch"]["scene_id"] == "SceneA"
 
 
 def test_unknown_scene_trend_returns_an_empty_stable_window(client):
@@ -803,7 +956,7 @@ def test_trend_uses_calendar_days_and_keeps_multiple_batches_on_same_day(client)
     assert [point["batch"]["id"] for point in one_day["points"]] == ["804"]
 
 
-def test_trend_supports_an_inclusive_custom_date_range_up_to_90_days(client):
+def test_trend_supports_an_inclusive_custom_date_range(client):
     samples = [
         ("811", "2026-05-31T18:00:00"),
         ("812", "2026-06-01T09:00:00"),
@@ -830,6 +983,20 @@ def test_trend_supports_an_inclusive_custom_date_range_up_to_90_days(client):
         "truncated": False,
     }
 
+    for ignored_value in (0, 61):
+        ignored_days = client.get(
+            "/api/map-build/scenes/MapScene/trend",
+            params={
+                "days": ignored_value,
+                "start_date": "2026-06-01",
+                "end_date": "2026-06-30",
+            },
+        )
+        assert ignored_days.status_code == 200, ignored_days.text
+        assert [
+            point["batch"]["id"] for point in ignored_days.json()["points"]
+        ] == ["812", "813", "814"]
+
     assert client.get(
         "/api/map-build/scenes/MapScene/trend",
         params={"start_date": "2026-06-01"},
@@ -838,10 +1005,12 @@ def test_trend_supports_an_inclusive_custom_date_range_up_to_90_days(client):
         "/api/map-build/scenes/MapScene/trend",
         params={"start_date": "2026-06-02", "end_date": "2026-06-01"},
     ).status_code == 400
-    assert client.get(
+    long_range = client.get(
         "/api/map-build/scenes/MapScene/trend",
         params={"start_date": "2026-01-01", "end_date": "2026-04-01"},
-    ).status_code == 400
+    )
+    assert long_range.status_code == 400
+    assert "最多为 60 天" in long_range.json()["detail"]
 
 
 def test_map_build_snapshot_follows_batch_delete_and_overwrite(client):
@@ -943,7 +1112,10 @@ def test_thirty_day_realistic_dataset_keeps_overview_and_trend_responsive(client
     trend_seconds = perf_counter() - started
 
     started = perf_counter()
-    overview = client.get("/api/map-build/scenes/MapScene/overview")
+    overview = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_start": "2026-06-01", "batch_end": "2026-06-30"},
+    )
     overview_seconds = perf_counter() - started
 
     assert trend.status_code == 200, trend.text

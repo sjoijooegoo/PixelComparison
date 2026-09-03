@@ -115,7 +115,7 @@ function reset() {
 </script>
 
 <template>
-  <div class="filter-bar card">
+  <div class="filter-bar workspace-filter-card card">
     <div class="field">
       <span class="label">分支</span>
       <a-select :model-value="store.filters.branch_tag" size="small" style="width: 150px"
@@ -146,14 +146,14 @@ function reset() {
         <a-option v-for="option in qualityOptions" :key="option.value" :value="option.value">{{ option.label }}</a-option>
       </a-select>
     </div>
-    <div class="field">
+    <div class="field date-field">
       <span class="label">创建时间</span>
       <a-radio-group :model-value="store.filters.dateMode" type="button" size="small"
         @change="onModeChange">
         <a-radio value="range">范围</a-radio>
         <a-radio value="days">指定日期</a-radio>
       </a-radio-group>
-      <a-range-picker v-if="store.filters.dateMode === 'range'" size="small" style="width: 230px"
+      <a-range-picker v-if="store.filters.dateMode === 'range'" class="date-range-picker" size="small"
         :allow-clear="false" value-format="YYYY-MM-DD" :model-value="dateRange" @change="onDateChange" />
       <template v-else>
         <a-date-picker size="small" value-format="YYYY-MM-DD" :model-value="dayPick"
@@ -179,8 +179,11 @@ function reset() {
 </template>
 
 <style scoped>
-.filter-bar { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 14px; }
 .field { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.filter-bar > .field:not(.date-field) { flex: 0 0 auto; }
+.date-field { min-width: 360px; flex: 1 1 390px; flex-wrap: nowrap; }
+.date-field :deep(.arco-radio-group-button) { flex: 0 0 auto; }
+.date-field :deep(.date-range-picker) { min-width: 180px; max-width: 230px; flex: 1 1 230px; width: auto; }
 .field .label { color: var(--color-text-3); font-size: 12px; white-space: nowrap; }
 .scene-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .scene-option-name.is-data-empty { color: var(--color-text-4); }
@@ -189,5 +192,6 @@ function reset() {
 .day-cell { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; cursor: pointer; user-select: none; }
 .day-cell-value { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; }
 .day-cell.selected .day-cell-value { color: #fff; background: rgb(var(--primary-6)); font-weight: 600; }
-.spacer { flex: 1; }
+.spacer { min-width: 0; flex: 1 1 0; }
+.filter-bar > :deep(.arco-btn) { flex: 0 0 auto; }
 </style>

@@ -38,6 +38,7 @@ from .gpm_retention import gpm_retention_scheduler
 from .gpm_storage import GpmSchemaMismatchError, initialize_gpm_database
 from .map_build import (
     FORMAT_VERSION as MAP_BUILD_FORMAT_VERSION,
+    MAX_BATCH_WINDOW_DAYS as MAP_BUILD_MAX_BATCH_WINDOW_DAYS,
     MapBuildDataIn,
     SnapshotContentConflict,
     get_overview as get_map_build_overview,
@@ -1131,6 +1132,8 @@ def map_build_overview(
     platform: str | None = None,
     shading_quality: int | None = None,
     batch_id: str | None = None,
+    batch_start: date | None = None,
+    batch_end: date | None = None,
     comparison_mode: Literal["off", "previous", "batch"] = "previous",
     comparison_batch_id: str | None = Query(None, min_length=1, max_length=128),
     db: Session = Depends(get_db),
@@ -1139,20 +1142,29 @@ def map_build_overview(
 
     if comparison_mode == "batch" and not comparison_batch_id:
         raise HTTPException(422, "指定对比批次时必须提供 comparison_batch_id")
+    if (batch_start is None) != (batch_end is None):
+        raise HTTPException(422, "batch_start 和 batch_end 必须同时提供")
+    if batch_start is not None and batch_end is not None and batch_start > batch_end:
+        raise HTTPException(422, "batch_start 不能晚于 batch_end")
     try:
         branch_tag = normalize_branch_tag(branch_tag)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    result = get_map_build_overview(
-        db,
-        scene_id,
-        branch_tag=branch_tag,
-        platform=platform,
-        shading_quality=shading_quality,
-        batch_id=batch_id,
-        comparison_mode=comparison_mode,
-        comparison_batch_id=comparison_batch_id,
-    )
+    try:
+        result = get_map_build_overview(
+            db,
+            scene_id,
+            branch_tag=branch_tag,
+            platform=platform,
+            shading_quality=shading_quality,
+            batch_id=batch_id,
+            batch_start=batch_start,
+            batch_end=batch_end,
+            comparison_mode=comparison_mode,
+            comparison_batch_id=comparison_batch_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if result is None:
         raise HTTPException(404, "当前筛选没有烘培数据")
     return result
@@ -1168,7 +1180,7 @@ def map_build_trend(
     sub_block_index: int | None = Query(None, ge=0, le=65535),
     registry_path: str | None = Query(None, min_length=1, max_length=4096),
     metric_scope: Literal["self", "subtree"] = "self",
-    days: int = Query(30, ge=1, le=365),
+    days: int = 30,
     start_date: date | None = None,
     end_date: date | None = None,
     db: Session = Depends(get_db),
@@ -1178,6 +1190,15 @@ def map_build_trend(
         branch_tag = normalize_branch_tag(branch_tag)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+    if (
+        start_date is None
+        and end_date is None
+        and not 1 <= days <= MAP_BUILD_MAX_BATCH_WINDOW_DAYS
+    ):
+        raise HTTPException(
+            422,
+            f"days 必须在 1 到 {MAP_BUILD_MAX_BATCH_WINDOW_DAYS} 之间",
+        )
     try:
         return get_map_build_trend(
             db,

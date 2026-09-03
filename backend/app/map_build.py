@@ -18,8 +18,16 @@ from .models import Batch, MapBuildRegistry, MapBuildSnapshot
 FORMAT_VERSION = "map-build-data/v2"
 MAX_REGISTRIES = 5000
 MAX_TREND_POINTS = 2000
+MAX_BATCH_WINDOW_DAYS = 60
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 LEGACY_DEFAULT_SHADING_QUALITY = 4
+DEFAULT_BATCH_WINDOW_DAYS = 30
+
+
+def _today() -> date:
+    """集中当前日历日期，便于固定滚动窗口的边界测试。"""
+
+    return date.today()
 
 
 class SnapshotContentConflict(ValueError):
@@ -402,6 +410,41 @@ def _snapshot_order(stmt):
     )
 
 
+def _batch_window_snapshots(
+    db: Session,
+    base,
+    batch_start: date | None,
+    batch_end: date | None,
+) -> tuple[list[MapBuildSnapshot], date | None, date | None]:
+    """返回日期范围内的候选批次；未指定时取截至当天的最近 30 天。"""
+
+    if (batch_start is None) != (batch_end is None):
+        raise ValueError("batch_start 和 batch_end 必须同时提供")
+    if batch_start is not None and batch_end is not None and batch_start > batch_end:
+        raise ValueError("batch_start 不能晚于 batch_end")
+
+    if batch_start is None:
+        batch_end = _today()
+        batch_start = batch_end - timedelta(days=DEFAULT_BATCH_WINDOW_DAYS - 1)
+
+    if (batch_end - batch_start).days + 1 > MAX_BATCH_WINDOW_DAYS:
+        raise ValueError(f"创建时间范围最多为 {MAX_BATCH_WINDOW_DAYS} 天")
+
+    window_start = datetime.combine(batch_start, datetime.min.time())
+    window_end = datetime.combine(batch_end + timedelta(days=1), datetime.min.time())
+    snapshots = list(
+        db.scalars(
+            _snapshot_order(
+                base.where(
+                    Batch.created_at >= window_start,
+                    Batch.created_at < window_end,
+                )
+            )
+        )
+    )
+    return snapshots, batch_start, batch_end
+
+
 def _snapshot_sort_key(snapshot: MapBuildSnapshot) -> tuple[datetime, int, str]:
     """Mirror the batch selector order for snapshots added outside the first page."""
 
@@ -591,46 +634,10 @@ def _registry_subtree_rows(
     return result
 
 
-def _comparison_snapshot_query(
-    current: MapBuildSnapshot,
-    platform: str | None,
-    shading_quality: int | None,
-):
-    """返回与基线批次列表范围完全相同的快照查询。"""
-
-    return _base_snapshot_query(
-        current.batch.scene_id,
-        current.batch.branch_tag,
-        platform,
-        shading_quality,
-    )
-
-
-def _older_snapshot_condition(current: MapBuildSnapshot):
-    """返回与列表排序一致的“早于当前批次”条件。"""
-
-    current_id = str(current.batch.id)
-    numeric_id = int(current_id) if current_id.isdigit() else 0
-    numeric_batch_id = cast(Batch.id, Integer)
-    return or_(
-        Batch.created_at < current.batch.created_at,
-        and_(
-            Batch.created_at == current.batch.created_at,
-            or_(
-                numeric_batch_id < numeric_id,
-                and_(numeric_batch_id == numeric_id, Batch.id < current_id),
-            ),
-        ),
-    )
-
-
 def _comparison_snapshot(
-    db: Session,
     current: MapBuildSnapshot,
     comparison_mode: str,
     comparison_batch_id: str | None,
-    platform: str | None,
-    shading_quality: int | None,
     candidates: list[MapBuildSnapshot],
 ) -> tuple[
     str,
@@ -640,11 +647,17 @@ def _comparison_snapshot(
 ]:
     """解析默认相邻批次或用户指定的兼容对比批次。"""
 
-    base = _comparison_snapshot_query(current, platform, shading_quality)
     candidates = _include_snapshot_in_order(list(candidates), current)
-    default_comparison = db.scalars(
-        _snapshot_order(base.where(_older_snapshot_condition(current))).limit(1)
-    ).first()
+    current_index = next(
+        index
+        for index, candidate in enumerate(candidates)
+        if candidate.batch_id == current.batch_id
+    )
+    default_comparison = (
+        candidates[current_index + 1]
+        if current_index + 1 < len(candidates)
+        else None
+    )
     if comparison_mode == "off":
         return "off", None, candidates, default_comparison
     if comparison_mode == "batch" and comparison_batch_id:
@@ -657,15 +670,6 @@ def _comparison_snapshot(
             ),
             None,
         )
-        if comparison is None:
-            comparison = db.scalars(
-                base.where(
-                    MapBuildSnapshot.batch_id == comparison_batch_id,
-                    MapBuildSnapshot.batch_id != current.batch_id,
-                )
-            ).first()
-            if comparison is not None:
-                candidates = _include_snapshot_in_order(candidates, comparison)
         if comparison is not None:
             # 默认项使用语义值，避免下拉菜单重复展示同一个批次。
             selection = (
@@ -699,22 +703,27 @@ def get_overview(
     platform: str | None = None,
     shading_quality: int | None = None,
     batch_id: str | None = None,
+    batch_start: date | None = None,
+    batch_end: date | None = None,
     comparison_mode: str = "previous",
     comparison_batch_id: str | None = None,
 ) -> dict | None:
     """返回一个批次的分块指标，以及可选的历史时间点对照。"""
 
     base = _base_snapshot_query(scene_id, branch_tag, platform, shading_quality)
-    recent = list(db.scalars(_snapshot_order(base).limit(100)))
-    if not recent:
-        return None
+    recent, resolved_batch_start, resolved_batch_end = _batch_window_snapshots(
+        db,
+        base,
+        batch_start,
+        batch_end,
+    )
 
     current = next((item for item in recent if item.batch_id == batch_id), None)
-    if batch_id and current is None:
-        current = db.scalars(base.where(MapBuildSnapshot.batch_id == batch_id)).first()
-        if current is None:
-            return None
     if current is None:
+        if not recent:
+            return None
+        # 未指定批次，或者深链中的批次已删除、滑出窗口、属于切换前场景时，
+        # 一律只在当前筛选结果内回退，绝不读取其他场景的数据。
         current = recent[0]
     recent = _include_snapshot_in_order(recent, current)
 
@@ -724,12 +733,9 @@ def get_overview(
         comparison_candidates,
         default_comparison,
     ) = _comparison_snapshot(
-        db,
         current,
         comparison_mode,
         comparison_batch_id,
-        platform,
-        shading_quality,
         recent,
     )
     recent = comparison_candidates
@@ -883,6 +889,10 @@ def get_overview(
     comparison_world_root = _world_registry(comparison_rows)
     return {
         "batch": _batch_dto(current),
+        "batch_window": {
+            "start_date": resolved_batch_start.isoformat(),
+            "end_date": resolved_batch_end.isoformat(),
+        },
         "available_batches": [_batch_dto(snapshot) for snapshot in recent],
         "comparison": {
             "selection": comparison_selection,
@@ -943,15 +953,15 @@ def get_trend(
         raise ValueError("registry_path 不能与 block_index/sub_block_index 同时使用")
     if metric_scope not in {"self", "subtree"}:
         raise ValueError("metric_scope 必须是 self 或 subtree")
-    if not 1 <= days <= 365:
-        raise ValueError("days 必须在 1 到 365 之间")
     if (start_date is None) != (end_date is None):
         raise ValueError("自定义日期范围必须同时提供 start_date 和 end_date")
     if start_date is not None and end_date is not None:
         if end_date < start_date:
             raise ValueError("end_date 不能早于 start_date")
-        if (end_date - start_date).days + 1 > 90:
-            raise ValueError("自定义日期范围最多 90 天")
+        if (end_date - start_date).days + 1 > MAX_BATCH_WINDOW_DAYS:
+            raise ValueError(f"趋势日期范围最多为 {MAX_BATCH_WINDOW_DAYS} 天")
+    elif not 1 <= days <= MAX_BATCH_WINDOW_DAYS:
+        raise ValueError(f"days 必须在 1 到 {MAX_BATCH_WINDOW_DAYS} 之间")
 
     base = _base_snapshot_query(scene_id, branch_tag, platform, shading_quality)
     snapshots = []
