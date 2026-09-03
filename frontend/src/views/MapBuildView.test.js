@@ -667,7 +667,7 @@ describe('MapBuildView', () => {
     expect(wrapper.find('.block-layout').exists()).toBe(false)
     expect(wrapper.find('.atlas-card-footer').exists()).toBe(false)
     expect(wrapper.find('.metric-scope-switch').exists()).toBe(false)
-    expect(wrapper.get('.world-total small').text()).toBe('仅自身')
+    expect(wrapper.find('.world-total small').exists()).toBe(false)
     expect(wrapper.get('.detail-head h3').text()).toBe('主分块')
     expect(wrapper.find('.detail-eyebrow').exists()).toBe(false)
     expect(wrapper.get('.atlas-card').classes()).toContain('world-selected')
@@ -1182,26 +1182,20 @@ describe('MapBuildView', () => {
     expect(wrapper.get('.atlas-card-footer .metric-scope-switch button[aria-pressed="true"]').text()).toBe('仅自身')
     expect(wrapper.find('.world-head .metric-scope-switch').exists()).toBe(false)
     expect(wrapper.find('.detail-head .metric-scope-switch').exists()).toBe(false)
-    expect(wrapper.get('.world-total small').text()).toBe('仅自身')
-    expect(wrapper.get('.block-values small').text()).toBe('仅自身')
+    expect(wrapper.find('.world-total small').exists()).toBe(false)
+    expect(wrapper.find('.block-values small').exists()).toBe(false)
 
     await wrapper.findAll('.metric-scope-switch button')[1].trigger('click')
     await flushPromises()
-    expect(wrapper.get('.world-total small').text()).toBe('含子级汇总')
-    expect(wrapper.get('.block-values small').text()).toBe('含子级汇总')
 
     await wrapper.get('.block-head').trigger('click')
     await flushPromises()
-    expect(wrapper.get('.world-total small').text()).toBe('含子级汇总')
-    expect(wrapper.get('.block-values small').text()).toBe('含子级汇总')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
       branch_tag: 'main', ...defaultTrendRange, metric_scope: 'subtree', block_index: 3,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
 
     await wrapper.findAll('.sub-cell')[0].trigger('click')
     await flushPromises()
-    expect(wrapper.get('.world-total small').text()).toBe('含子级汇总')
-    expect(wrapper.get('.block-values small').text()).toBe('含子级汇总')
     expect(wrapper.get('.metric-scope-switch button[aria-pressed="true"]').text()).toBe('含子级')
     expect(wrapper.get('.detail-head h3').text()).toBe('分块 3 / 0x00（含子级汇总）')
     expect(wrapper.find('.detail-eyebrow').exists()).toBe(false)
@@ -1283,7 +1277,7 @@ describe('MapBuildView', () => {
     expect(wrapper.findAll('.detail-summary > div > span:first-child').map((node) => node.text())).toEqual([
       '总 Mip', 'Cook 估算', '纹理数',
     ])
-    expect(wrapper.get('.world-total small').text()).toBe('仅自身')
+    expect(wrapper.find('.world-total small').exists()).toBe(false)
     expect(wrapper.get('.world-total b').attributes('title')).toBeUndefined()
     expect(wrapper.get('.world-total').text()).not.toContain('Cook 估算')
     expect(wrapper.find('.atlas-foot').exists()).toBe(false)
@@ -1617,7 +1611,7 @@ describe('MapBuildView', () => {
     await flushPromises()
 
     expect(wrapper.find('.metric-scope-switch').exists()).toBe(false)
-    expect(wrapper.get('.world-total small').text()).toBe('仅自身')
+    expect(wrapper.find('.world-total small').exists()).toBe(false)
     expect(wrapper.get('.selection-pill').text()).toBe('主分块 · 仅自身')
     expect(apiMock.mapBuildTrend).toHaveBeenLastCalledWith('Coral_WP', {
       branch_tag: 'main', ...defaultTrendRange, metric_scope: 'self',

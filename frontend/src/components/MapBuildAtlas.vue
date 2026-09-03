@@ -50,10 +50,6 @@ function nodeMetrics(node) {
 function comparisonMetrics(node) {
   return node?.comparison_metrics?.[nodeScope(node)] || null
 }
-
-function scopeLabel(scope) {
-  return scope === 'self' ? '仅自身' : '含子级汇总'
-}
 </script>
 
 <template>
@@ -70,14 +66,11 @@ function scopeLabel(scope) {
         <b>主分块</b>
       </span>
       <span v-if="overview" class="world-total">
-        <span>
-          <small>{{ scopeLabel(nodeScope(overview.world)) }}</small>
-          <span class="metric-value-line">
-            <MapBuildMetricDelta v-bind="comparisonProps"
-              :current-value="nodeMetrics(overview.world)?.all_mips_bytes"
-              :previous-value="comparisonMetrics(overview.world)?.all_mips_bytes" />
-            <b>{{ formatMiB(nodeMetrics(overview.world)?.all_mips_bytes) }}</b>
-          </span>
+        <span class="metric-value-line">
+          <MapBuildMetricDelta v-bind="comparisonProps"
+            :current-value="nodeMetrics(overview.world)?.all_mips_bytes"
+            :previous-value="comparisonMetrics(overview.world)?.all_mips_bytes" />
+          <b>{{ formatMiB(nodeMetrics(overview.world)?.all_mips_bytes) }}</b>
         </span>
       </span>
     </button>
@@ -97,7 +90,6 @@ function scopeLabel(scope) {
           @click="emit('select', block.index, null)">
           <span><i></i>{{ block.label }}</span>
           <span class="block-values">
-            <small>{{ scopeLabel(nodeScope(block)) }}</small>
             <span class="metric-value-line">
               <MapBuildMetricDelta v-bind="comparisonProps"
                 :current-value="nodeMetrics(block)?.all_mips_bytes"
@@ -168,10 +160,8 @@ function scopeLabel(scope) {
 .section-stripe { width: 3px; height: 32px; border-radius: 2px; background: var(--color-border-3); }
 .world-head.selected .section-stripe { background: rgb(var(--arcoblue-6)); box-shadow: 0 0 12px rgba(var(--arcoblue-6), .35); }
 .world-select b { display: block; font-size: 15px; }
-.world-total { min-width: 66px; align-self: stretch; padding: 5px 0 5px 4px; display: flex; align-items: center; justify-content: flex-end; color: inherit; font-family: "Bahnschrift", "Segoe UI", sans-serif; }
-.world-total > span { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
-.world-total small { color: var(--color-text-4); font: 9px/1.2 "Segoe UI", sans-serif; }
-.world-total b { color: var(--color-text-1); font-size: 13px; }
+.world-total { min-width: 66px; align-self: stretch; padding: 5px 4px; display: flex; align-items: center; justify-content: flex-end; color: inherit; font-family: "Bahnschrift", "Segoe UI", sans-serif; }
+.world-total b { color: var(--color-text-1); font-size: 15px; }
 .metric-value-line { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 6px; }
 .atlas-loading { min-height: 360px; display: grid; place-items: center; }
 .no-block-tree { flex: 1 1 auto; min-height: 260px; display: grid; place-items: center; color: var(--color-text-3); font-size: 13px; text-align: center; }
@@ -186,7 +176,6 @@ function scopeLabel(scope) {
 .block-head i { width: 3px; height: 14px; border-radius: 2px; background: var(--color-border-3); }
 .block-head.selected i { background: rgb(var(--arcoblue-6)); }
 .block-values { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-family: "Bahnschrift", "Segoe UI", sans-serif; }
-.block-values small { color: var(--color-text-4); font: 9px/1.1 "Segoe UI", sans-serif; }
 .block-values b { font-size: 12px; }
 .sub-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; background: transparent; }
 .atlas-card-footer { min-height: 12px; margin-top: auto; padding: 0 12px 10px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; }
