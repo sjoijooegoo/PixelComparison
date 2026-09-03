@@ -109,7 +109,8 @@ describe('TopBar contextual workspace tools', () => {
     wrapper.unmount()
   })
 
-  it('烘培数据保留刷新和手动上报', async () => {
+  it('烘培数据保留手动刷新和上报，但不执行定时自动刷新', async () => {
+    vi.useFakeTimers()
     const refreshPage = vi.fn().mockResolvedValue()
     const unregister = registerPageRefresh(refreshPage)
     const wrapper = mountTopBar()
@@ -120,8 +121,15 @@ describe('TopBar contextual workspace tools', () => {
     expect(messageMock.success).toHaveBeenCalledWith('已刷新')
     await wrapper.get('button[aria-label="手动上报"]').trigger('click')
     expect(projectMock.uploadVisible).toBe(true)
+    refreshPage.mockClear()
+    projectMock.loadMeta.mockClear()
+    vi.advanceTimersByTime(240000)
+    await flushPromises()
+    expect(refreshPage).not.toHaveBeenCalled()
+    expect(projectMock.loadMeta).not.toHaveBeenCalled()
     unregister()
     wrapper.unmount()
+    vi.useRealTimers()
   })
 
   it('管理页使用来源工作区高亮，并从顶栏返回完整来源地址', async () => {

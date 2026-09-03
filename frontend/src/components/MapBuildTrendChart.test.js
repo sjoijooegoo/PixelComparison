@@ -55,7 +55,7 @@ describe('MapBuildTrendChart', () => {
     expect(wrapper.get('.tooltip-heading').text()).not.toContain('批次')
   })
 
-  it('点击趋势点会选择对应网格批次且命中区不会产生焦点框', async () => {
+  it('点击趋势点会选择对应基线批次且命中区不会产生焦点框', async () => {
     const points = [
       {
         batch: { id: '802', created_at: '2026-08-01T09:00', p4_version: 6514223 },

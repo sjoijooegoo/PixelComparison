@@ -44,7 +44,7 @@ const showGpmConfigurationTransfer = computed(() => (
   context.value.isSettings && context.value.workspace === 'gpm'
 ))
 const supportsAutoRefresh = computed(() => (
-  showRefresh.value && context.value.workspace !== 'gpm'
+  showRefresh.value && context.value.workspace === 'screenshot'
 ))
 
 function currentBranch() {
@@ -131,7 +131,7 @@ let autoTimer = null
 
 function autoTick() {
   if (document.hidden) return                       // 后台标签页不刷,省请求
-  if (!supportsAutoRefresh.value) return             // 热力图仅手动刷新，其他数据页自动刷
+  if (!supportsAutoRefresh.value) return             // 烘培数据与热力图仅手动刷新
   if (project.uploadVisible || screenshot.running) return  // 上传弹窗 / 对比中,不打断
   // 截图网格也刷新:渲染 key 稳定(列=批次id、行=检查点名),Vue 复用 DOM,
   // 已有图片不重载、滚动位置不丢;有新批次时仅在末尾插入新列。

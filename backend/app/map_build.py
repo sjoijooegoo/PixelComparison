@@ -10,7 +10,7 @@ import threading
 from datetime import date, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import Integer, cast, func, or_, select
+from sqlalchemy import Integer, and_, cast, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .models import Batch, MapBuildRegistry, MapBuildSnapshot
@@ -402,6 +402,23 @@ def _snapshot_order(stmt):
     )
 
 
+def _snapshot_sort_key(snapshot: MapBuildSnapshot) -> tuple[datetime, int, str]:
+    """Mirror the batch selector order for snapshots added outside the first page."""
+
+    batch_id = str(snapshot.batch.id)
+    numeric_id = int(batch_id) if batch_id.isdigit() else 0
+    return snapshot.batch.created_at, numeric_id, batch_id
+
+
+def _include_snapshot_in_order(
+    snapshots: list[MapBuildSnapshot],
+    snapshot: MapBuildSnapshot,
+) -> list[MapBuildSnapshot]:
+    if any(item.batch_id == snapshot.batch_id for item in snapshots):
+        return snapshots
+    return sorted([*snapshots, snapshot], key=_snapshot_sort_key, reverse=True)
+
+
 def _empty_metrics() -> dict[str, int]:
     return {key: 0 for key in _METRIC_KEYS}
 
@@ -574,6 +591,106 @@ def _registry_subtree_rows(
     return result
 
 
+def _comparison_snapshot_query(
+    current: MapBuildSnapshot,
+    platform: str | None,
+    shading_quality: int | None,
+):
+    """返回与基线批次列表范围完全相同的快照查询。"""
+
+    return _base_snapshot_query(
+        current.batch.scene_id,
+        current.batch.branch_tag,
+        platform,
+        shading_quality,
+    )
+
+
+def _older_snapshot_condition(current: MapBuildSnapshot):
+    """返回与列表排序一致的“早于当前批次”条件。"""
+
+    current_id = str(current.batch.id)
+    numeric_id = int(current_id) if current_id.isdigit() else 0
+    numeric_batch_id = cast(Batch.id, Integer)
+    return or_(
+        Batch.created_at < current.batch.created_at,
+        and_(
+            Batch.created_at == current.batch.created_at,
+            or_(
+                numeric_batch_id < numeric_id,
+                and_(numeric_batch_id == numeric_id, Batch.id < current_id),
+            ),
+        ),
+    )
+
+
+def _comparison_snapshot(
+    db: Session,
+    current: MapBuildSnapshot,
+    comparison_mode: str,
+    comparison_batch_id: str | None,
+    platform: str | None,
+    shading_quality: int | None,
+    candidates: list[MapBuildSnapshot],
+) -> tuple[
+    str,
+    MapBuildSnapshot | None,
+    list[MapBuildSnapshot],
+    MapBuildSnapshot | None,
+]:
+    """解析默认相邻批次或用户指定的兼容对比批次。"""
+
+    base = _comparison_snapshot_query(current, platform, shading_quality)
+    candidates = _include_snapshot_in_order(list(candidates), current)
+    default_comparison = db.scalars(
+        _snapshot_order(base.where(_older_snapshot_condition(current))).limit(1)
+    ).first()
+    if comparison_mode == "off":
+        return "off", None, candidates, default_comparison
+    if comparison_mode == "batch" and comparison_batch_id:
+        comparison = next(
+            (
+                item
+                for item in candidates
+                if item.batch_id == comparison_batch_id
+                and item.batch_id != current.batch_id
+            ),
+            None,
+        )
+        if comparison is None:
+            comparison = db.scalars(
+                base.where(
+                    MapBuildSnapshot.batch_id == comparison_batch_id,
+                    MapBuildSnapshot.batch_id != current.batch_id,
+                )
+            ).first()
+            if comparison is not None:
+                candidates = _include_snapshot_in_order(candidates, comparison)
+        if comparison is not None:
+            # 默认项使用语义值，避免下拉菜单重复展示同一个批次。
+            selection = (
+                "previous"
+                if default_comparison is not None
+                and default_comparison.batch_id == comparison.batch_id
+                else comparison.batch_id
+            )
+            return selection, comparison, candidates, default_comparison
+
+    # 指定批次失效时回退默认相邻批次，避免深链因历史批次删除而阻断页面。
+    selection = "previous" if default_comparison is not None else "off"
+    return selection, default_comparison, candidates, default_comparison
+
+
+def _comparison_metrics(
+    comparison: MapBuildSnapshot | None,
+    self_metrics: dict[str, int] | None,
+    subtree_metrics: dict[str, int] | None,
+) -> dict[str, dict[str, int] | None] | None:
+    if comparison is None:
+        return None
+    return {"self": self_metrics, "subtree": subtree_metrics}
+
+
 def get_overview(
     db: Session,
     scene_id: str,
@@ -582,8 +699,10 @@ def get_overview(
     platform: str | None = None,
     shading_quality: int | None = None,
     batch_id: str | None = None,
+    comparison_mode: str = "previous",
+    comparison_batch_id: str | None = None,
 ) -> dict | None:
-    """返回一个批次的世界/分块/子分块指标，不做批次间对照。"""
+    """返回一个批次的分块指标，以及可选的历史时间点对照。"""
 
     base = _base_snapshot_query(scene_id, branch_tag, platform, shading_quality)
     recent = list(db.scalars(_snapshot_order(base).limit(100)))
@@ -597,13 +716,38 @@ def get_overview(
             return None
     if current is None:
         current = recent[0]
+    recent = _include_snapshot_in_order(recent, current)
 
-    rows_by_batch = _rows_by_batch(db, [current.batch_id])
+    (
+        comparison_selection,
+        comparison,
+        comparison_candidates,
+        default_comparison,
+    ) = _comparison_snapshot(
+        db,
+        current,
+        comparison_mode,
+        comparison_batch_id,
+        platform,
+        shading_quality,
+        recent,
+    )
+    recent = comparison_candidates
+    batch_ids = [current.batch_id]
+    if comparison is not None:
+        batch_ids.append(comparison.batch_id)
+    rows_by_batch = _rows_by_batch(db, batch_ids)
     current_rows = rows_by_batch[current.batch_id]
+    comparison_rows = rows_by_batch.get(comparison.batch_id, []) if comparison else []
 
     current_by_cell = {
         (row.block_index, row.sub_block_index): row
         for row in current_rows
+        if row.block_index is not None
+    }
+    comparison_by_cell = {
+        (row.block_index, row.sub_block_index): row
+        for row in comparison_rows
         if row.block_index is not None
     }
     blocks = []
@@ -617,6 +761,15 @@ def get_overview(
             current_block_rows,
             current_header,
         )
+        comparison_block_rows = [
+            row for row in comparison_rows if row.block_index == block_index
+        ]
+        comparison_header = comparison_by_cell.get((block_index, None))
+        comparison_block = (
+            _aggregate_metrics(comparison_block_rows, comparison_header)
+            if comparison_block_rows
+            else None
+        )
         sub_blocks = []
         for key, row in sorted(
             current_by_cell.items(),
@@ -629,6 +782,10 @@ def get_overview(
             if key[0] != block_index or key[1] is None:
                 continue
             cell_metrics = _row_metrics(row)
+            comparison_row = comparison_by_cell.get(key)
+            comparison_cell_metrics = (
+                _row_metrics(comparison_row) if comparison_row is not None else None
+            )
             sub_blocks.append(
                 {
                     "index": key[1],
@@ -639,6 +796,11 @@ def get_overview(
                     "metrics": cell_metrics,
                     "self_metrics": cell_metrics,
                     "subtree_metrics": cell_metrics,
+                    "comparison_metrics": _comparison_metrics(
+                        comparison,
+                        comparison_cell_metrics,
+                        comparison_cell_metrics,
+                    ),
                     "has_children": False,
                 }
             )
@@ -656,6 +818,13 @@ def get_overview(
                 "metrics": current_block,
                 "self_metrics": block_self,
                 "subtree_metrics": current_block,
+                "comparison_metrics": _comparison_metrics(
+                    comparison,
+                    _row_metrics(comparison_header)
+                    if comparison_header is not None
+                    else None,
+                    comparison_block,
+                ),
                 "has_children": bool(sub_blocks),
                 "sub_blocks": sub_blocks,
             }
@@ -667,6 +836,7 @@ def get_overview(
         if world_root is not None
         else None
     )
+    comparison_by_path = {row.path: row for row in comparison_rows}
     auxiliary_blocks = []
     if world_root is not None:
         auxiliary_rows = sorted(
@@ -683,6 +853,12 @@ def get_overview(
             subtree_rows = _registry_subtree_rows(current_rows, row)
             self_metrics = _row_metrics(row)
             subtree_metrics = _aggregate_metrics(subtree_rows, row)
+            comparison_row = comparison_by_path.get(row.path)
+            comparison_subtree_rows = (
+                _registry_subtree_rows(comparison_rows, comparison_row)
+                if comparison_row is not None
+                else []
+            )
             auxiliary_blocks.append(
                 {
                     "key": row.path,
@@ -691,19 +867,50 @@ def get_overview(
                     "metrics": subtree_metrics,
                     "self_metrics": self_metrics,
                     "subtree_metrics": subtree_metrics,
+                    "comparison_metrics": _comparison_metrics(
+                        comparison,
+                        _row_metrics(comparison_row)
+                        if comparison_row is not None
+                        else None,
+                        _aggregate_metrics(comparison_subtree_rows, comparison_row)
+                        if comparison_row is not None
+                        else None,
+                    ),
                     "has_children": len(subtree_rows) > 1,
                 }
             )
     world_subtree = _world_metrics(current, current_rows)
+    comparison_world_root = _world_registry(comparison_rows)
     return {
         "batch": _batch_dto(current),
         "available_batches": [_batch_dto(snapshot) for snapshot in recent],
+        "comparison": {
+            "selection": comparison_selection,
+            "batch": _batch_dto(comparison) if comparison is not None else None,
+            "default_batch": (
+                _batch_dto(default_comparison)
+                if default_comparison is not None
+                else None
+            ),
+            "available_batches": [
+                _batch_dto(snapshot) for snapshot in comparison_candidates
+            ],
+        },
         "world": {
             "label": "主分块",
             "path": _world_registry_path(current_rows),
             "metrics": world_subtree,
             "self_metrics": world_self,
             "subtree_metrics": world_subtree,
+            "comparison_metrics": _comparison_metrics(
+                comparison,
+                _row_metrics(comparison_world_root)
+                if comparison_world_root is not None
+                else None,
+                _world_metrics(comparison, comparison_rows)
+                if comparison is not None
+                else None,
+            ),
             "has_children": bool(blocks or auxiliary_blocks),
         },
         "blocks": blocks,

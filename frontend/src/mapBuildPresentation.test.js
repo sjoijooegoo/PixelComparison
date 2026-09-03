@@ -3,10 +3,13 @@ import {
   MAP_BUILD_SERIES,
   atlasColor,
   bytesToMiB,
+  compareMetricValues,
   formatBytes,
   formatExactBytes,
+  formatMetricDelta,
   formatMiB,
   linePath,
+  metricComparisonPercentRange,
   niceChartMaximum,
   rankMetricDetails,
   trendAxisLabel,
@@ -99,13 +102,49 @@ describe('map build presentation helpers', () => {
       precomputed_instanced_pr_bytes: 8,
       lightmap_resource_cluster_bytes: 7,
       texture_count: 999,
-    })
+    }, { precomputed_light_volume_bytes: 350 })
     expect(rows).toHaveLength(12)
     expect(rows[0].key).toBe('precomputed_light_volume_bytes')
     expect(rows.map((row) => row.key)).toContain('lightmap_all_mips_bytes')
     expect(rows.map((row) => row.key)).not.toContain('lightmap_bytes')
     expect(rows.map((row) => row.key)).not.toContain('total_bytes')
     expect(rows.map((row) => row.key)).not.toContain('texture_count')
+    expect(rows[0].previousValue).toBe(350)
+    expect(rows[1].previousValue).toBeNull()
+  })
+
+  it('历史对比覆盖上升、下降、稳定、新增和无基准边界', () => {
+    expect(formatMetricDelta(compareMetricValues(120, 100))).toBe('↑20.0%')
+    expect(formatMetricDelta(compareMetricValues(75, 100))).toBe('↓25.0%')
+    expect(formatMetricDelta(compareMetricValues(100.04, 100))).toBe('0.0%')
+    expect(formatMetricDelta(compareMetricValues(1, 0))).toBe('新增')
+    expect(formatMetricDelta(compareMetricValues(0, 0))).toBe('0.0%')
+    expect(formatMetricDelta(compareMetricValues(1, null))).toBe('新增')
+    expect(formatMetricDelta(compareMetricValues(1, 1, false))).toBe('—')
+  })
+
+  it('从当前页面的可比较指标动态计算变化率范围', () => {
+    expect(metricComparisonPercentRange([
+      {
+        current: {
+          all_mips_bytes: 80,
+          cook_estimate_bytes: 130,
+          texture_count: 5,
+          total_bytes: 1000,
+        },
+        previous: {
+          all_mips_bytes: 100,
+          cook_estimate_bytes: 100,
+          texture_count: null,
+          total_bytes: 1,
+        },
+      },
+      {
+        current: { lightmap_all_mips_bytes: 20 },
+        previous: { lightmap_all_mips_bytes: 20 },
+      },
+    ])).toEqual([-20, 30])
+    expect(metricComparisonPercentRange([])).toEqual([0, 0])
   })
 
   it('同一天多个批次在横轴补充时刻以便区分', () => {

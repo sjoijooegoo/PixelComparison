@@ -143,6 +143,40 @@ const overviewWithoutBlocks = {
   blocks: [],
   auxiliary_blocks: [],
 }
+function overviewWithComparison() {
+  const orderedBatches = [
+    batch('3', '2026-08-06T09:30'),
+    batch('2', '2026-08-05T10:00'),
+    batch('1', '2026-07-29T09:30'),
+    batch('0', '2026-07-20T09:30'),
+  ]
+  return {
+    ...overview,
+    available_batches: orderedBatches,
+    comparison: {
+      selection: 'previous',
+      batch: batch('1', '2026-07-29T09:30'),
+      default_batch: batch('1', '2026-07-29T09:30'),
+      available_batches: orderedBatches,
+    },
+    world: {
+      ...overview.world,
+      comparison_metrics: { self: metrics(10), subtree: metrics(100) },
+    },
+    blocks: overview.blocks.map((block) => ({
+      ...block,
+      comparison_metrics: { self: metrics(15), subtree: metrics(90) },
+      sub_blocks: block.sub_blocks.map((cell) => ({
+        ...cell,
+        comparison_metrics: { self: metrics(cell.index === 0 ? 40 : 50), subtree: metrics(cell.index === 0 ? 40 : 50) },
+      })),
+    })),
+    auxiliary_blocks: overview.auxiliary_blocks.map((block) => ({
+      ...block,
+      comparison_metrics: { self: metrics(6 * 1024 * 1024), subtree: metrics(6 * 1024 * 1024) },
+    })),
+  }
+}
 const worldTrend = {
   selection: { scope: 'main_block', metric_scope: 'self', label: '主分块 · 自身数据' },
   points: [{ batch: batch('1', '2026-08-04T10:00'), metrics: metrics(100) }],
@@ -192,7 +226,7 @@ beforeEach(() => {
 })
 
 describe('MapBuildView', () => {
-  it('网格批次使用 P4 和采集时间展示并标记最新项', async () => {
+  it('基线批次使用 P4 和采集时间展示并标记最新项', async () => {
     const wrapper = mountView()
     await flushPromises()
 
@@ -205,6 +239,108 @@ describe('MapBuildView', () => {
     )
     expect(wrapper.get('.batch-select').text()).not.toContain('#2')
     expect(wrapper.get('.batch-select').text()).not.toContain('P4 1（最新）')
+  })
+
+  it('分块与指标明细使用同一历史批次展示变化率', async () => {
+    apiMock.mapBuildOverview.mockResolvedValueOnce(overviewWithComparison())
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findComponent('.compare-select').props('modelValue')).toBe('previous')
+    expect(wrapper.get('.compare-select').text()).toContain('P4 1 · 2026-07-29 09:30')
+    expect(wrapper.get('.compare-select').text()).toContain('P4 3 · 2026-08-06 09:30')
+    expect(wrapper.get('.compare-select').text()).toContain(
+      'P4 2 · 2026-08-05 10:00（当前基线）',
+    )
+    expect(wrapper.get('.compare-select').text()).not.toContain('上一个批次')
+    const baselineText = wrapper.get('.batch-select').text()
+    const comparisonText = wrapper.get('.compare-select').text()
+    for (const [left, right] of [['P4 3', 'P4 2'], ['P4 2', 'P4 1'], ['P4 1', 'P4 0']]) {
+      expect(baselineText.indexOf(left)).toBeLessThan(baselineText.indexOf(right))
+      expect(comparisonText.indexOf(left)).toBeLessThan(comparisonText.indexOf(right))
+    }
+    const currentBaselineOption = wrapper.findAll('.compare-select > div')
+      .find((node) => node.text().includes('当前基线'))
+    expect(currentBaselineOption?.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('.compare-field').attributes('title')).toContain('P4 1 · 2026-07-29 09:30')
+    expect(wrapper.get('.world-total .metric-delta').text()).toBe('↑100.0%')
+    expect(wrapper.findAll('.block-values .metric-delta')).toHaveLength(1)
+    expect(wrapper.findAll('.sub-cell .metric-delta').map((node) => node.text())).toEqual([
+      '↑100.0%', '↑100.0%',
+    ])
+    expect(wrapper.findAll('.detail-summary .metric-delta')).toHaveLength(3)
+    expect(wrapper.findAll('.detail-row .metric-delta')).toHaveLength(12)
+  })
+
+  it('可以选择一个明确的历史批次作为对比基准', async () => {
+    apiMock.mapBuildOverview.mockResolvedValueOnce(overviewWithComparison())
+    const wrapper = mountView()
+    await flushPromises()
+    vi.clearAllMocks()
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overviewWithComparison(),
+      comparison: {
+        selection: '0',
+        batch: batch('0', '2026-07-20T09:30'),
+        default_batch: batch('1', '2026-07-29T09:30'),
+        available_batches: [
+          batch('2', '2026-08-05T10:00'),
+          batch('1', '2026-07-29T09:30'),
+          batch('0', '2026-07-20T09:30'),
+        ],
+      },
+    })
+
+    const compareSelect = wrapper.findComponent('.compare-select')
+    await compareSelect.vm.$emit('update:modelValue', 'batch:0')
+    await compareSelect.vm.$emit('change', 'batch:0')
+    await flushPromises()
+
+    expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
+      batch_id: '2',
+      comparison_mode: 'batch',
+      comparison_batch_id: '0',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(apiMock.mapBuildTrend).not.toHaveBeenCalled()
+    expect(wrapper.findComponent('.compare-select').props('modelValue')).toBe('batch:0')
+    expect(routerMock.replace).toHaveBeenLastCalledWith(expect.objectContaining({
+      query: expect.objectContaining({ compare: 'batch', compare_batch: '0' }),
+    }))
+  })
+
+  it('清除对比批次后停止对比并把状态写入 URL', async () => {
+    apiMock.mapBuildOverview.mockResolvedValueOnce(overviewWithComparison())
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.get('.compare-select').attributes('allow-clear')).toBeDefined()
+    vi.clearAllMocks()
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overviewWithComparison(),
+      comparison: {
+        selection: 'off',
+        batch: null,
+        default_batch: batch('1', '2026-07-29T09:30'),
+        available_batches: overviewWithComparison().available_batches,
+      },
+    })
+
+    const compareSelect = wrapper.findComponent('.compare-select')
+    await compareSelect.vm.$emit('update:modelValue', undefined)
+    await compareSelect.vm.$emit('change', undefined)
+    await flushPromises()
+
+    expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
+      batch_id: '2',
+      comparison_mode: 'off',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(wrapper.findComponent('.compare-select').props('modelValue')).toBe('')
+    expect(wrapper.findAll('.metric-delta')).toHaveLength(0)
+    expect(routerMock.replace).toHaveBeenLastCalledWith(expect.objectContaining({
+      query: expect.objectContaining({ compare: 'off' }),
+    }))
   })
 
   it('重复点击当前分块不重复请求趋势，失败后仍可点击重试', async () => {
@@ -256,7 +392,7 @@ describe('MapBuildView', () => {
     expect(routerMock.replace).toHaveBeenLastCalledWith({
       path: '/map-build/Coral_WP',
       query: {
-        branch_tag: 'main', batch: '2', start: '2026-06-01', end: '2026-08-29', scope: 'self',
+        branch_tag: 'main', batch: '2', compare: 'previous', start: '2026-06-01', end: '2026-08-29', scope: 'self',
       },
     })
   })
@@ -393,6 +529,13 @@ describe('MapBuildView', () => {
     expect(mapBuildViewSource).not.toMatch(/\.sub-cell b \{[^}]*text-shadow:/s)
   })
 
+  it('分块面板不再显示重复的原生 Hover 提示', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('.atlas-card').findAll('[title]')).toHaveLength(0)
+  })
+
   it('异常网格值不会污染正常格子的全局热力色阶', async () => {
     const [firstCell, secondCell] = overview.blocks[0].sub_blocks
     const invalidMetrics = { ...firstCell.metrics, all_mips_bytes: Number.NaN }
@@ -443,13 +586,14 @@ describe('MapBuildView', () => {
     expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
       branch_tag: 'main',
       batch_id: '',
+      comparison_mode: 'previous',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
       branch_tag: 'main', days: 30, metric_scope: 'self',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(routerMock.replace).toHaveBeenLastCalledWith({
       path: '/map-build/Coral_WP',
-      query: { branch_tag: 'main', batch: '2', days: '30', scope: 'self' },
+      query: { branch_tag: 'main', batch: '2', compare: 'previous', days: '30', scope: 'self' },
     })
   })
 
@@ -521,11 +665,16 @@ describe('MapBuildView', () => {
     routeMock.path = '/map-build/Coral_WP'
     routeMock.params.sceneId = 'Coral_WP'
     routeMock.query = {
-      batch: '1', days: '14', scope: 'subtree', block: '3', sub: '1',
+      batch: '1', compare: 'batch', compare_batch: '0', days: '14', scope: 'subtree', block: '3', sub: '1',
     }
     apiMock.mapBuildOverview.mockResolvedValueOnce({
       ...overview,
       batch: batch('1', '2026-08-04T10:00'),
+      comparison: {
+        selection: '0',
+        batch: batch('0', '2026-08-03T10:00'),
+        available_batches: [batch('0', '2026-08-03T10:00')],
+      },
     })
     apiMock.mapBuildTrend.mockResolvedValueOnce({
       ...worldTrend,
@@ -538,6 +687,8 @@ describe('MapBuildView', () => {
     expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
       branch_tag: 'main',
       batch_id: '',
+      comparison_mode: 'batch',
+      comparison_batch_id: '0',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(apiMock.mapBuildTrend).toHaveBeenCalledWith('Coral_WP', {
       branch_tag: 'main',
@@ -548,7 +699,56 @@ describe('MapBuildView', () => {
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.findComponent('.batch-select').props('modelValue')).toBe('1')
     expect(wrapper.get('.detail-head h3').text()).toBe('分块 3 / 0x01（含子级汇总）')
+    expect(wrapper.findComponent('.compare-select').props('modelValue')).toBe('batch:0')
     expect(wrapper.findComponent('.days-select').props('modelValue')).toBe(14)
+  })
+
+  it('旧的 compare=1 参数会回退到上一批次', async () => {
+    routeMock.path = '/map-build/Coral_WP'
+    routeMock.params.sceneId = 'Coral_WP'
+    routeMock.query = { compare: '1' }
+    apiMock.mapBuildOverview.mockResolvedValueOnce(overviewWithComparison())
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
+      batch_id: '',
+      comparison_mode: 'previous',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(wrapper.findComponent('.compare-select').props('modelValue')).toBe('previous')
+    expect(routerMock.replace).toHaveBeenLastCalledWith(expect.objectContaining({
+      query: expect.objectContaining({ compare: 'previous' }),
+    }))
+  })
+
+  it('重新进入页面时恢复关闭对比状态', async () => {
+    routeMock.path = '/map-build/Coral_WP'
+    routeMock.params.sceneId = 'Coral_WP'
+    routeMock.query = { compare: 'off' }
+    apiMock.mapBuildOverview.mockResolvedValueOnce({
+      ...overviewWithComparison(),
+      comparison: {
+        selection: 'off',
+        batch: null,
+        default_batch: batch('1', '2026-07-29T09:30'),
+        available_batches: overviewWithComparison().available_batches,
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
+      branch_tag: 'main',
+      batch_id: '',
+      comparison_mode: 'off',
+    }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(wrapper.findComponent('.compare-select').props('modelValue')).toBe('')
+    expect(routerMock.replace).toHaveBeenLastCalledWith(expect.objectContaining({
+      query: expect.objectContaining({ compare: 'off' }),
+    }))
   })
 
   it('选择分块后把可分享的完整分析状态写入 URL', async () => {
@@ -562,7 +762,7 @@ describe('MapBuildView', () => {
     expect(routerMock.replace).toHaveBeenLastCalledWith({
       path: '/map-build/Coral_WP',
       query: {
-        branch_tag: 'main', batch: '2', days: '30', scope: 'self', block: '3', sub: '1',
+        branch_tag: 'main', batch: '2', compare: 'previous', days: '30', scope: 'self', block: '3', sub: '1',
       },
     })
   })
@@ -630,6 +830,7 @@ describe('MapBuildView', () => {
     expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
       branch_tag: 'main',
       batch_id: '',
+      comparison_mode: 'previous',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(apiMock.mapBuildTrend).toHaveBeenCalledTimes(1)
     expect(wrapper.findComponent('.batch-select').props('modelValue')).toBe('3')
@@ -825,6 +1026,7 @@ describe('MapBuildView', () => {
     expect(apiMock.mapBuildOverview).toHaveBeenCalledWith('Coral_WP', {
       branch_tag: 'main',
       batch_id: '',
+      comparison_mode: 'previous',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.text()).not.toContain('平台')
     expect(wrapper.text()).not.toContain('画质')
@@ -851,11 +1053,11 @@ describe('MapBuildView', () => {
     expect(wrapper.findAll('.detail-row')).toHaveLength(12)
     expect(wrapper.text()).toContain('总 Mip')
     expect(wrapper.text()).toContain('Cook 估算')
-    expect(wrapper.findAll('.detail-summary span').map((node) => node.text())).toEqual([
+    expect(wrapper.findAll('.detail-summary > div > span:first-child').map((node) => node.text())).toEqual([
       '总 Mip', 'Cook 估算', '纹理数',
     ])
     expect(wrapper.get('.world-total small').text()).toBe('仅自身')
-    expect(wrapper.get('.world-total b').attributes('title')).toBeTruthy()
+    expect(wrapper.get('.world-total b').attributes('title')).toBeUndefined()
     expect(wrapper.get('.world-total').text()).not.toContain('Cook 估算')
     expect(wrapper.find('.atlas-foot').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('驻留总大小')
@@ -1110,7 +1312,7 @@ describe('MapBuildView', () => {
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 
-  it('点击趋势点会复用网格批次切换流程并更新当前批次', async () => {
+  it('点击趋势点会复用基线批次切换流程并更新当前批次', async () => {
     const wrapper = mountView()
     await flushPromises()
 
@@ -1125,6 +1327,7 @@ describe('MapBuildView', () => {
     expect(apiMock.mapBuildOverview).toHaveBeenLastCalledWith('Coral_WP', {
       branch_tag: 'main',
       batch_id: '1',
+      comparison_mode: 'previous',
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.findComponent('.batch-select').props('modelValue')).toBe('1')
     expect(chart.props('currentBatchId')).toBe('1')

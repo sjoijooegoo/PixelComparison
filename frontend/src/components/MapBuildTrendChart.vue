@@ -154,7 +154,7 @@ const tooltipStyle = computed(() => {
 })
 
 function pointAriaLabel(point) {
-  return `${fullDate(point)}，批次 ${point?.batch?.id ?? '—'}，${p4Label(point?.batch?.p4_version)}，点击切换网格批次`
+  return `${fullDate(point)}，批次 ${point?.batch?.id ?? '—'}，${p4Label(point?.batch?.p4_version)}，点击切换基线批次`
 }
 
 function selectPoint(point, index) {

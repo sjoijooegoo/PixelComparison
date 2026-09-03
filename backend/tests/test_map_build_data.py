@@ -5,6 +5,7 @@ import json
 import sqlite3
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from time import perf_counter
 
 
@@ -250,6 +251,13 @@ def test_map_build_overview_trend_and_meta(client):
     )
     # 旧 metrics 字段继续指向含子级汇总，避免旧客户端突然改变口径。
     assert overview["world"]["metrics"]["total_bytes"] == 200
+    assert overview["comparison"] == {
+        "selection": "previous",
+        "batch": overview["available_batches"][1],
+        "default_batch": overview["available_batches"][1],
+        "available_batches": overview["available_batches"],
+    }
+    assert overview["world"]["comparison_metrics"]["self"]["total_bytes"] == 10
     assert "previous_batch" not in overview
     assert "delta" not in overview["world"]["metrics"]
     block = overview["blocks"][0]
@@ -371,6 +379,153 @@ def test_map_build_overview_trend_and_meta(client):
         point["metrics"]["total_bytes"]
         for point in block_subtree_trend["points"]
     ] == [100, 200]
+
+
+def test_overview_compares_with_previous_or_selected_compatible_batch(client):
+    _batch(client, "900", "2026-07-31T09:00:00")
+    _batch(client, "901", "2026-08-01T09:00:00")
+    _batch(client, "902", "2026-08-08T09:00:00")
+    _batch(client, "903", "2026-08-10T12:00:00", platform="Android")
+    _batch(client, "904", "2026-08-09T09:00:00")
+    baseline_payload = _payload(1)
+    baseline_payload["registries"] = [
+        row for row in baseline_payload["registries"] if row["subBlockIndex"] != 1
+    ]
+    assert _upload(client, "900", _payload(1)).status_code == 201
+    assert _upload(client, "901", baseline_payload).status_code == 201
+    assert _upload(client, "902", _payload(2)).status_code == 201
+    assert _upload(client, "903", _payload(9)).status_code == 201
+    assert _upload(client, "904", _payload(4)).status_code == 201
+
+    response = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_id": "902", "comparison_mode": "previous"},
+    )
+
+    assert response.status_code == 200, response.text
+    overview = response.json()
+    assert overview["comparison"]["selection"] == "previous"
+    assert overview["comparison"]["batch"]["id"] == "901"
+    assert overview["comparison"]["default_batch"]["id"] == "901"
+    assert [item["id"] for item in overview["comparison"]["available_batches"]] == [
+        "903",
+        "904",
+        "902",
+        "901",
+        "900",
+    ]
+    assert overview["world"]["comparison_metrics"]["self"]["total_bytes"] == 10
+    assert overview["world"]["comparison_metrics"]["subtree"]["total_bytes"] == 100
+    block = overview["blocks"][0]
+    assert block["comparison_metrics"]["self"]["total_bytes"] == 10
+    assert block["comparison_metrics"]["subtree"]["total_bytes"] == 100
+    assert block["sub_blocks"][0]["comparison_metrics"]["self"]["total_bytes"] == 30
+    assert block["sub_blocks"][1]["comparison_metrics"] == {
+        "self": None,
+        "subtree": None,
+    }
+
+    explicit = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={
+            "batch_id": "902",
+            "comparison_mode": "batch",
+            "comparison_batch_id": "900",
+        },
+    ).json()
+    assert explicit["comparison"]["selection"] == "900"
+    assert explicit["comparison"]["batch"]["id"] == "900"
+
+    current_is_not_selectable = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={
+            "batch_id": "902",
+            "comparison_mode": "batch",
+            "comparison_batch_id": "902",
+        },
+    ).json()
+    assert current_is_not_selectable["comparison"]["selection"] == "previous"
+    assert current_is_not_selectable["comparison"]["batch"]["id"] == "901"
+
+    newer = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={
+            "batch_id": "901",
+            "comparison_mode": "batch",
+            "comparison_batch_id": "904",
+        },
+    ).json()
+    assert newer["comparison"]["selection"] == "904"
+    assert newer["comparison"]["batch"]["id"] == "904"
+
+    stale_explicit = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={
+            "batch_id": "902",
+            "comparison_mode": "batch",
+            "comparison_batch_id": "deleted-batch",
+        },
+    ).json()
+    assert stale_explicit["comparison"]["selection"] == "previous"
+    assert stale_explicit["comparison"]["batch"]["id"] == "901"
+
+    disabled = client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"batch_id": "902", "comparison_mode": "off"},
+    )
+    assert disabled.status_code == 200, disabled.text
+    disabled_overview = disabled.json()
+    assert disabled_overview["comparison"]["selection"] == "off"
+    assert disabled_overview["comparison"]["batch"] is None
+    assert disabled_overview["comparison"]["default_batch"]["id"] == "901"
+    assert disabled_overview["world"]["comparison_metrics"] is None
+    assert client.get(
+        "/api/map-build/scenes/MapScene/overview",
+        params={"comparison_mode": "batch"},
+    ).status_code == 422
+
+
+def test_oldest_deep_link_stays_visible_without_reversing_default_comparison(client):
+    from app.db import SessionLocal
+    from app.models import Batch, MapBuildSnapshot
+
+    captured_at = datetime(2026, 8, 1, 9, 0)
+    with SessionLocal() as db:
+        for offset in range(101):
+            batch_id = str(1000 + offset)
+            batch = Batch(
+                id=batch_id,
+                branch_tag="main",
+                scene_id="DeepLinkScene",
+                p4_version=1000 + offset,
+                platform="Windows",
+                creator="test",
+                created_at=captured_at,
+                shading_quality=5,
+            )
+            db.add(MapBuildSnapshot(
+                batch=batch,
+                format_version="map-build-data/v2",
+                world_resident_bytes=0,
+                world_all_mips_bytes=0,
+                world_cook_estimate_bytes=0,
+                world_texture_count=0,
+                raw_payload={},
+            ))
+        db.commit()
+
+    response = client.get(
+        "/api/map-build/scenes/DeepLinkScene/overview",
+        params={"batch_id": "1000", "comparison_mode": "previous"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["batch"]["id"] == "1000"
+    assert body["available_batches"][-1]["id"] == "1000"
+    assert body["comparison"]["available_batches"] == body["available_batches"]
+    assert body["comparison"]["selection"] == "off"
+    assert body["comparison"]["batch"] is None
+    assert body["comparison"]["default_batch"] is None
 
 
 def test_unindexed_reflection_block_is_selectable_in_overview_and_trend(client):

@@ -21,6 +21,13 @@ const DEFAULT_DETAIL_SERIES_KEYS = new Set([
   'hue_all_mips_bytes',
 ])
 
+export const MAP_BUILD_COMPARISON_METRIC_KEYS = [
+  'all_mips_bytes',
+  'cook_estimate_bytes',
+  'texture_count',
+  ...MAP_BUILD_DETAIL_METRICS.map((metric) => metric.key),
+]
+
 export const MAP_BUILD_SERIES = [
   { key: 'all_mips_bytes', label: '总 Mip', color: '#e8952d', defaultVisible: true },
   { key: 'cook_estimate_bytes', label: 'Cook 估算', color: '#91a4bb', defaultVisible: true },
@@ -31,14 +38,69 @@ export const MAP_BUILD_SERIES = [
 ]
 
 /** 字节指标才参与排行；纹理数等不同单位由界面单独展示。 */
-export function rankMetricDetails(metrics = {}) {
+export function rankMetricDetails(metrics = {}, comparisonMetrics = null) {
   return MAP_BUILD_DETAIL_METRICS
     .map((metric, order) => ({
       ...metric,
       order,
       value: Number(metrics?.[metric.key] || 0),
+      previousValue: comparisonMetrics?.[metric.key] ?? null,
     }))
     .sort((left, right) => right.value - left.value || left.order - right.order)
+}
+
+/**
+ * 变化率只在展示时派生，不写入数据库。按一位小数归零，避免出现 0.0% 仍带箭头。
+ */
+export function compareMetricValues(currentValue, previousValue, baselineAvailable = true) {
+  const current = Number(currentValue)
+  if (!baselineAvailable || !Number.isFinite(current)) {
+    return { kind: 'unavailable', current, previous: null, delta: null, percent: null }
+  }
+  if (previousValue === null || previousValue === undefined || !Number.isFinite(Number(previousValue))) {
+    return { kind: 'added', current, previous: null, delta: null, percent: null }
+  }
+  const previous = Number(previousValue)
+  const delta = current - previous
+  if (previous === 0) {
+    if (current === 0) return { kind: 'steady', current, previous, delta, percent: 0 }
+    return { kind: 'added', current, previous, delta, percent: null }
+  }
+  const percent = delta / Math.abs(previous) * 100
+  const roundedPercent = Number(percent.toFixed(1))
+  return {
+    kind: roundedPercent === 0 ? 'steady' : roundedPercent > 0 ? 'increase' : 'decrease',
+    current,
+    previous,
+    delta,
+    percent: roundedPercent === 0 ? 0 : roundedPercent,
+  }
+}
+
+/** 根据当前页面全部可比较指标计算动态变化率范围，并以 0 作为语义中点。 */
+export function metricComparisonPercentRange(metricPairs) {
+  let minimum = 0
+  let maximum = 0
+  for (const pair of metricPairs || []) {
+    const currentMetrics = pair?.current
+    if (!currentMetrics) continue
+    for (const key of MAP_BUILD_COMPARISON_METRIC_KEYS) {
+      if (!(key in currentMetrics)) continue
+      const comparison = compareMetricValues(currentMetrics[key], pair.previous?.[key])
+      if (!Number.isFinite(comparison.percent)) continue
+      minimum = Math.min(minimum, comparison.percent)
+      maximum = Math.max(maximum, comparison.percent)
+    }
+  }
+  return [minimum, maximum]
+}
+
+export function formatMetricDelta(comparison) {
+  if (!comparison || comparison.kind === 'unavailable') return '—'
+  if (comparison.kind === 'added') return '新增'
+  if (comparison.kind === 'steady') return '0.0%'
+  const arrow = comparison.kind === 'increase' ? '↑' : '↓'
+  return `${arrow}${Math.abs(comparison.percent).toFixed(1)}%`
 }
 
 export function bytesToMiB(value) {

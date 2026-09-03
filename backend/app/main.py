@@ -1131,9 +1131,14 @@ def map_build_overview(
     platform: str | None = None,
     shading_quality: int | None = None,
     batch_id: str | None = None,
+    comparison_mode: Literal["off", "previous", "batch"] = "previous",
+    comparison_batch_id: str | None = Query(None, min_length=1, max_length=128),
     db: Session = Depends(get_db),
 ):
     """最新或指定批次的独立分块网格。"""
+
+    if comparison_mode == "batch" and not comparison_batch_id:
+        raise HTTPException(422, "指定对比批次时必须提供 comparison_batch_id")
     try:
         branch_tag = normalize_branch_tag(branch_tag)
     except ValueError as exc:
@@ -1145,6 +1150,8 @@ def map_build_overview(
         platform=platform,
         shading_quality=shading_quality,
         batch_id=batch_id,
+        comparison_mode=comparison_mode,
+        comparison_batch_id=comparison_batch_id,
     )
     if result is None:
         raise HTTPException(404, "当前筛选没有烘培数据")
