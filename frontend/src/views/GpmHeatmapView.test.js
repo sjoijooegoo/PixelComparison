@@ -49,6 +49,7 @@ import GpmHeatmapView from './GpmHeatmapView.vue'
 
 const EmptyView = defineComponent({ template: '<div class="target-page" />' })
 const AppView = defineComponent({ template: '<router-view />' })
+const SlotStub = defineComponent({ template: '<div><slot /></div>' })
 const TrendStub = defineComponent({
   emits: ['select-batch'],
   template: '<button class="trend-stub" @click="$emit(\'select-batch\', \'batch-2\')" />',
@@ -76,6 +77,7 @@ describe('GpmHeatmapView route ownership', () => {
     vi.clearAllMocks()
     storeMock.frame = null
     storeMock.trends = null
+    storeMock.batchOptions = []
     storeMock.filters.batchId = 'batch-1'
     storeMock.applyRoute.mockImplementation(() => new Promise((resolve) => {
       resolveApplyRoute = resolve
@@ -177,6 +179,65 @@ describe('GpmHeatmapView route ownership', () => {
     await flushRoute()
 
     expect(storeMock.changeScope).toHaveBeenCalledWith({ batchId: 'batch-2' })
+    wrapper.unmount()
+  })
+
+  it('只给当前平台最高 P4 中最新采集的一项标记最新', async () => {
+    storeMock.frame = {
+      latest_p4_version: 300,
+      heat_map: [],
+      points: [],
+      trend: [],
+    }
+    storeMock.batchOptions = [
+      {
+        batch_id: 'lower-p4-newer-time',
+        p4_version: 200,
+        captured_at: '2026-09-04T12:00:00+08:00',
+      },
+      {
+        batch_id: 'latest-p4-newer-capture',
+        p4_version: 300,
+        captured_at: '2026-09-04T11:00:00+08:00',
+      },
+      {
+        batch_id: 'latest-p4-older-capture',
+        p4_version: 300,
+        captured_at: '2026-09-04T10:00:00+08:00',
+      },
+    ]
+    storeMock.applyRoute.mockResolvedValue()
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/gpm-heatmap/:mapName?', component: GpmHeatmapView }],
+    })
+    await router.push('/gpm-heatmap/Forest_WP')
+    await router.isReady()
+    const wrapper = mount(AppView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          GpmDetailPanel: true,
+          GpmMapCanvas: true,
+          GpmScreenshotStrip: true,
+          GpmTrendCard: true,
+          'a-button': true,
+          'a-empty': true,
+          'a-option': SlotStub,
+          'a-radio': true,
+          'a-radio-group': true,
+          'a-select': SlotStub,
+          'a-spin': true,
+        },
+      },
+    })
+    await flushRoute()
+
+    const batchLabels = wrapper.get('.batch-select').text()
+    expect(batchLabels.match(/（最新）/g)).toHaveLength(1)
+    expect(batchLabels).toContain('P4 300 · 2026-09-04 11:00（最新）')
+    expect(batchLabels).not.toContain('P4 200 · 2026-09-04 12:00（最新）')
+    expect(batchLabels).not.toContain('P4 300 · 2026-09-04 10:00（最新）')
     wrapper.unmount()
   })
 

@@ -655,6 +655,97 @@ def test_map_and_point_trends_use_map_name(client, png_bytes):
     assert [item["metrics"]["Scene_DC"] for item in point_trend["points"]] == [200, 300]
 
 
+def test_frame_uses_platform_latest_p4_and_falls_back_to_scope_highest_p4(
+    client,
+    png_bytes,
+):
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="scope-high-p4",
+        captured_at=_captured_at(hours_ago=3),
+        report=_report(p4_version=300),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="scope-newer-time-low-p4",
+        captured_at=_captured_at(hours_ago=1),
+        report=_report(p4_version=200),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="platform-latest-other-map",
+        captured_at=_captured_at(hours_ago=4),
+        report=_report(map_name="Forest_WP", quality=3, p4_version=400),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="other-platform-higher-p4",
+        captured_at=_captured_at(hours_ago=1),
+        report=_report(platform="IOS", p4_version=900),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="other-branch-higher-p4",
+        branch_tag="develop",
+        captured_at=_captured_at(hours_ago=1),
+        report=_report(p4_version=1000),
+    ).status_code == 201
+
+    frame = client.get(
+        "/api/gpm-heatmaps/maps/Village_Dimension_Main/frame",
+        params={"branch_tag": "main", "platform": "Android", "shading_quality": 5},
+    ).json()
+
+    assert frame["latest_p4_version"] == 400
+    assert frame["batch"]["batch_id"] == "scope-high-p4"
+    assert [item["batch_id"] for item in frame["available_batches"]] == [
+        "scope-high-p4",
+        "scope-newer-time-low-p4",
+    ]
+
+
+def test_frame_selects_newest_capture_within_latest_p4(client, png_bytes):
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="latest-p4-older-capture",
+        captured_at=_captured_at(hours_ago=3),
+        report=_report(p4_version=500),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="latest-p4-newer-capture",
+        captured_at=_captured_at(hours_ago=2),
+        report=_report(p4_version=500),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="lower-p4-newest-capture",
+        captured_at=_captured_at(hours_ago=1),
+        report=_report(p4_version=499),
+    ).status_code == 201
+
+    frame = client.get(
+        "/api/gpm-heatmaps/maps/Village_Dimension_Main/frame",
+        params={"branch_tag": "main", "platform": "Android", "shading_quality": 5},
+    ).json()
+
+    assert frame["latest_p4_version"] == 500
+    assert frame["batch"]["batch_id"] == "latest-p4-newer-capture"
+    assert [item["batch_id"] for item in frame["available_batches"]] == [
+        "latest-p4-newer-capture",
+        "latest-p4-older-capture",
+        "lower-p4-newest-capture",
+    ]
+
+
 def test_frame_compares_with_previous_upload_id_in_the_same_scope(client, png_bytes):
     assert _upload(
         client,

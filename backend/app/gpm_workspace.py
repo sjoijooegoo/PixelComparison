@@ -92,6 +92,26 @@ def _metric_change_percentages(
     return changes
 
 
+def _latest_platform_p4(
+    connection,
+    *,
+    branch_tag: str,
+    platform: str,
+) -> int | None:
+    """Return the highest reported P4 for one branch/platform scope."""
+
+    row = connection.execute(
+        """
+        SELECT MAX(p4_version) AS latest_p4_version
+        FROM gpm_uploads
+        WHERE branch_tag = ? AND platform = ?
+        """,
+        (branch_tag, platform),
+    ).fetchone()
+    value = row["latest_p4_version"] if row else None
+    return int(value) if value is not None else None
+
+
 @router.get("/api/gpm-heatmaps/maps/{map_name}/frame")
 def get_map_frame(
     map_name: str,
@@ -119,12 +139,21 @@ def get_map_frame(
                    m.id AS upload_map_id, m.map_name, m.show_direction
             FROM gpm_uploads u JOIN gpm_upload_maps m ON m.upload_id = u.id
             WHERE {' AND '.join(clauses)}
-            ORDER BY u.captured_at_epoch DESC, u.id DESC
+            ORDER BY u.p4_version DESC, u.captured_at_epoch DESC, u.id DESC
             """,
             tuple(params),
         ).fetchall()
         if not batches:
             raise http_error(404, "GPM_MAP_DATA_NOT_FOUND", "当前筛选下没有热力图数据")
+        latest_p4_version = (
+            _latest_platform_p4(
+                connection,
+                branch_tag=branch_tag,
+                platform=platform,
+            )
+            if platform
+            else None
+        )
         selected = next((row for row in batches if row["batch_id"] == batch_id), None) if batch_id else None
         if selected is None:
             if batch_id:
@@ -138,7 +167,20 @@ def get_map_frame(
                     ),
                 )
             else:
-                selected = batches[0]
+                selected = next(
+                    (
+                        row for row in batches
+                        if latest_p4_version is not None
+                        and int(row["p4_version"]) == latest_p4_version
+                    ),
+                    batches[0],
+                )
+        if latest_p4_version is None:
+            latest_p4_version = _latest_platform_p4(
+                connection,
+                branch_tag=branch_tag,
+                platform=selected["platform"],
+            )
         comparison_batches = sorted(
             (
                 row for row in batches
@@ -206,6 +248,7 @@ def get_map_frame(
             "batch": batch_dto(selected),
             "previous_batch": batch_dto(previous) if previous else None,
             "available_batches": [batch_dto(row) for row in batches],
+            "latest_p4_version": latest_p4_version,
             "map": {
                 "map_name": map_name,
                 "show_direction": bool(selected["show_direction"]),

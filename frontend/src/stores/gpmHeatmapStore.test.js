@@ -375,7 +375,7 @@ describe('GPMHeatmap store request ordering', () => {
     expect(store.qualityHasBatches(5)).toBe(false)
   })
 
-  it('切换筛选范围时清除旧批次并按当前 P4 请求最近批次', async () => {
+  it('切换平台时清除旧批次并按当前 P4 请求最近批次', async () => {
     const pending = deferred()
     apiMock.gpmHeatmapFrame.mockReturnValue(pending.promise)
     apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 9, detail_data: [] })
@@ -431,9 +431,43 @@ describe('GPMHeatmap store request ordering', () => {
 
     await store.changeScope({ shadingQuality: 3 })
 
+    expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledWith(
+      'Village_Dimension_Main',
+      expect.objectContaining({
+        shading_quality: 3, batch_id: '', nearest_p4_version: null,
+      }),
+      expect.any(Object),
+    )
     expect(store.selectedPointId).toBe(22)
     expect(store.pointDetail.id).toBe(22)
     expect(apiMock.gpmHeatmapPoint).toHaveBeenCalledWith(22, expect.any(Object))
+  })
+
+  it('切换场景时不匹配旧 P4，由后端选择目标范围最新批次', async () => {
+    const store = useGpmHeatmapStore()
+    Object.assign(store.filters, {
+      mapName: 'OldScene', platform: 'Android', shadingQuality: 5, batchId: 'old-batch',
+    })
+    store.meta = {
+      ...meta('OldScene'),
+      maps: [meta('OldScene').maps[0], meta('NewScene').maps[0]],
+    }
+    store.frame = frame('OldScene', 11, 'old-batch', 2960783)
+    apiMock.gpmHeatmapFrame.mockResolvedValue(
+      frame('NewScene', 21, 'new-scene-latest', 2960900),
+    )
+    apiMock.gpmHeatmapPoint.mockResolvedValue({ id: 21, detail_data: [] })
+
+    await store.changeScope({ mapName: 'NewScene' })
+
+    expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledWith(
+      'NewScene',
+      expect.objectContaining({
+        batch_id: '', nearest_p4_version: null,
+      }),
+      expect.any(Object),
+    )
+    expect(store.filters.batchId).toBe('new-scene-latest')
   })
 
   it('截图 ID 的数字格式改变时仍以点位序号为准', async () => {

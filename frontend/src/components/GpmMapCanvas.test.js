@@ -83,4 +83,42 @@ describe('GpmMapCanvas legend interactions', () => {
     expect(wrapper.get('.metric-change').text()).toBe('↑ 28%')
     expect(wrapper.get('.metric-change').classes()).toContain('is-up')
   })
+
+  it('小于 0.1% 的非零变化显示为近似零并使用零变化颜色', async () => {
+    const point = frame.points[0]
+    const frameWithChange = (change) => ({
+      ...frame,
+      previous_batch: { batch_id: 'previous' },
+      points: [{
+        ...point,
+        metric_change_percent: { Scene_DC: change },
+      }],
+    })
+    const wrapper = mount(GpmMapCanvas, {
+      props: { frame: frameWithChange(0.04), metricKey: 'Scene_DC' },
+    })
+    wrapper.vm.hoveredPointId = 1
+    wrapper.vm.tooltipAnchor = { x: 20, y: 20, side: 'right' }
+    await wrapper.vm.$nextTick()
+
+    const change = () => wrapper.get('.metric-change')
+    expect(change().text()).toBe('≈0.0%')
+    expect(change().classes()).toContain('is-flat')
+    expect(change().classes()).not.toContain('is-up')
+
+    await wrapper.setProps({ frame: frameWithChange(-0.04) })
+    wrapper.vm.hoveredPointId = 1
+    wrapper.vm.tooltipAnchor = { x: 20, y: 20, side: 'right' }
+    await wrapper.vm.$nextTick()
+    expect(change().text()).toBe('≈0.0%')
+    expect(change().classes()).toContain('is-flat')
+    expect(change().classes()).not.toContain('is-down')
+
+    await wrapper.setProps({ frame: frameWithChange(0) })
+    wrapper.vm.hoveredPointId = 1
+    wrapper.vm.tooltipAnchor = { x: 20, y: 20, side: 'right' }
+    await wrapper.vm.$nextTick()
+    expect(change().text()).toBe('0%')
+    expect(change().classes()).toContain('is-flat')
+  })
 })

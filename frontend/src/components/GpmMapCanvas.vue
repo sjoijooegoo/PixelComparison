@@ -68,6 +68,9 @@ function changeIndicator(value) {
   if (!Number.isFinite(number)) {
     return { label: '—', direction: 'unavailable' }
   }
+  if (number !== 0 && Math.abs(number) < 0.1) {
+    return { label: '≈0.0%', direction: 'flat' }
+  }
   const percentage = new Intl.NumberFormat('zh-CN', {
     maximumFractionDigits: 1,
   }).format(Math.abs(number))

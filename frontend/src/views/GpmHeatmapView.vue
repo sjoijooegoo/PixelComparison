@@ -185,6 +185,15 @@ async function refresh() {
   await syncRoute()
 }
 
+const latestVersionBatchId = computed(() => {
+  const latestP4 = store.frame?.latest_p4_version
+  if (latestP4 === null || latestP4 === undefined || latestP4 === '') return null
+  const match = store.batchOptions.find(
+    (batch) => Number(batch.p4_version) === Number(latestP4),
+  )
+  return match?.batch_id ?? null
+})
+
 function formatBatch(batch, isLatest = false) {
   const time = String(batch?.captured_at || '').replace('T', ' ').slice(0, 16)
   return `P4 ${batch?.p4_version ?? '—'} · ${time || '时间未知'}${isLatest ? '（最新）' : ''}`
@@ -286,9 +295,9 @@ onBeforeUnmount(() => {
           popup-container=".gpm-page"
           :model-value="store.filters.batchId" :loading="store.loading.frame"
           @change="changeScope({ batchId: $event })">
-          <a-option v-for="(item, index) in store.batchOptions"
+          <a-option v-for="item in store.batchOptions"
             :key="item.batch_id" :value="item.batch_id">
-            {{ formatBatch(item, index === 0) }}
+            {{ formatBatch(item, String(item.batch_id) === String(latestVersionBatchId)) }}
           </a-option>
         </a-select>
       </div>

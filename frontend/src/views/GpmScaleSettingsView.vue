@@ -619,21 +619,39 @@ onBeforeUnmount(() => {
         <section class="map-definition-editor editor-panel">
           <header><strong>基础与坐标</strong></header>
           <div class="map-fields">
-            <label class="map-field map-name-field">
+            <div class="map-field map-name-field">
               <span>地图名称</span>
               <a-input v-model="mapForm.map_name" size="small" :disabled="mapEditorIntent === 'edit'"
-                placeholder="必须与上报 map_name 一致" />
-            </label>
-            <label class="map-field description-field">
+                aria-label="地图名称" placeholder="必须与上报 map_name 一致" />
+            </div>
+            <div class="map-field description-field">
               <span>描述</span>
-              <a-input v-model="mapForm.description" size="small" placeholder="可选" />
-            </label>
-            <label class="map-field"><span>起点 X</span><a-input-number v-model="mapForm.origin_x" size="small" /></label>
-            <label class="map-field"><span>起点 Y</span><a-input-number v-model="mapForm.origin_y" size="small" /></label>
-            <label class="map-field"><span>范围 X</span><a-input-number v-model="mapForm.range_x" size="small" :min="0.000001" /></label>
-            <label class="map-field"><span>范围 Y</span><a-input-number v-model="mapForm.range_y" size="small" :min="0.000001" /></label>
-            <label class="axis-toggle"><a-switch v-model="mapForm.x_reverse" size="small" />反转 X 轴</label>
-            <label class="axis-toggle"><a-switch v-model="mapForm.y_reverse" size="small" />反转 Y 轴</label>
+              <a-input v-model="mapForm.description" size="small" aria-label="描述" placeholder="可选" />
+            </div>
+            <div class="map-field">
+              <span>起点 X</span>
+              <a-input-number v-model="mapForm.origin_x" size="small" aria-label="起点 X" />
+            </div>
+            <div class="map-field">
+              <span>起点 Y</span>
+              <a-input-number v-model="mapForm.origin_y" size="small" aria-label="起点 Y" />
+            </div>
+            <div class="map-field">
+              <span>范围 X</span>
+              <a-input-number v-model="mapForm.range_x" size="small" aria-label="范围 X" :min="0.000001" />
+            </div>
+            <div class="map-field">
+              <span>范围 Y</span>
+              <a-input-number v-model="mapForm.range_y" size="small" aria-label="范围 Y" :min="0.000001" />
+            </div>
+            <div class="axis-toggle">
+              <a-switch v-model="mapForm.x_reverse" size="small" aria-label="反转 X 轴" />
+              <span>反转 X 轴</span>
+            </div>
+            <div class="axis-toggle">
+              <a-switch v-model="mapForm.y_reverse" size="small" aria-label="反转 Y 轴" />
+              <span>反转 Y 轴</span>
+            </div>
           </div>
         </section>
 

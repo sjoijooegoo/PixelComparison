@@ -48,47 +48,50 @@ function reset() {
 
 <template>
   <section v-no-native-title class="gpm-batch-filters card">
-    <label class="filter-field">
+    <div class="filter-field">
       <span>分支</span>
       <a-select class="select-branch" :model-value="store.filters.branchTag" size="small"
-        @change="change('branchTag', $event)">
+        aria-label="分支" @change="change('branchTag', $event)">
         <a-option v-for="item in store.meta.branch_tags" :key="item" :value="item">
           {{ item }}
         </a-option>
       </a-select>
-    </label>
-    <label class="filter-field">
+    </div>
+    <div class="filter-field">
       <span>平台</span>
       <a-select class="select-platform" :model-value="store.filters.platform" size="small"
-        placeholder="全部平台" allow-clear @change="change('platform', $event)">
+        aria-label="平台" placeholder="全部平台" allow-clear @change="change('platform', $event)">
         <a-option v-for="item in store.meta.platforms" :key="item" :value="item">
           {{ item }}
         </a-option>
       </a-select>
-    </label>
-    <label class="filter-field">
+    </div>
+    <div class="filter-field">
       <span>地图名称</span>
       <a-select class="select-scene" :model-value="store.filters.mapName" size="small"
-        placeholder="全部地图" allow-clear allow-search @change="change('mapName', $event)">
+        aria-label="地图名称" placeholder="全部地图" allow-clear allow-search
+        @change="change('mapName', $event)">
         <a-option v-for="item in store.meta.maps" :key="item" :value="item">
           {{ item }}
         </a-option>
       </a-select>
-    </label>
-    <label class="filter-field">
+    </div>
+    <div class="filter-field">
       <span>画质</span>
       <a-select class="select-quality" :model-value="store.filters.shadingQuality" size="small"
-        placeholder="全部画质" allow-clear @change="change('shadingQuality', $event)">
+        aria-label="画质" placeholder="全部画质" allow-clear
+        @change="change('shadingQuality', $event)">
         <a-option v-for="item in store.meta.shading_qualities" :key="item.value" :value="item.value">
           {{ item.label }}
         </a-option>
       </a-select>
-    </label>
-    <label class="filter-field">
+    </div>
+    <div class="filter-field">
       <span>采集时间</span>
       <a-range-picker class="select-range" :model-value="capturedRange" size="small"
-        :allow-clear="false" value-format="YYYY-MM-DD" @change="changeRange" />
-    </label>
+        aria-label="采集时间" :allow-clear="false" value-format="YYYY-MM-DD"
+        @change="changeRange" />
+    </div>
     <a-button class="reset-button" size="small" @click="reset">清空</a-button>
   </section>
 </template>

@@ -432,7 +432,10 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       invalidateRouteApplication(this)
       const routeSequence = runtime(this).routeSequence
       const isCurrent = () => routeSequence === runtime(this).routeSequence
-      const nearestP4Version = this.frame?.batch?.p4_version ?? null
+      const switchingPlatform = platform !== undefined && platform !== this.filters.platform
+      const nearestP4Version = switchingPlatform
+        ? (this.frame?.batch?.p4_version ?? null)
+        : null
       const selectingBatch = batchId !== undefined
       const keepsMap = mapName === undefined || mapName === this.filters.mapName
       const keepsPointScope = keepsMap
