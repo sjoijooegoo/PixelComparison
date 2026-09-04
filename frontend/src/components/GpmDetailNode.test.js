@@ -212,6 +212,7 @@ describe('GpmDetailNode', () => {
             cols: [{ key: 'source', name: '源数据' }],
             data: [
               ['http://example.com/report.csv'],
+              ['https://example.com/report.CSV?download=1'],
               ['https://example.com/task/1'],
               ['ftp://example.com/file.csv'],
               ['javascript:alert(1)'],
@@ -224,10 +225,20 @@ describe('GpmDetailNode', () => {
     const links = wrapper.findAll('.detail-link')
     expect(links.map((link) => link.text())).toEqual([
       'http://example.com/report.csv',
+      'https://example.com/report.CSV?download=1',
       'https://example.com/task/1',
     ])
     expect(links.every((link) => link.attributes('target') === '_blank')).toBe(true)
     expect(links.every((link) => link.attributes('rel') === 'noopener noreferrer')).toBe(true)
+    const excelLinks = wrapper.findAll('.excel-open-link')
+    expect(excelLinks.map((link) => link.text())).toEqual([
+      '用 Excel 打开',
+      '用 Excel 打开',
+    ])
+    expect(excelLinks.map((link) => link.attributes('href'))).toEqual([
+      'ms-excel:ofv|u|http://example.com/report.csv',
+      'ms-excel:ofv|u|https://example.com/report.CSV?download=1',
+    ])
     expect(wrapper.text()).toContain('ftp://example.com/file.csv')
     expect(wrapper.text()).toContain('javascript:alert(1)')
   })

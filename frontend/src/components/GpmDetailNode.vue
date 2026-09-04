@@ -147,6 +147,17 @@ function externalLink(value) {
   }
 }
 
+function excelOpenLink(value) {
+  const link = externalLink(value)
+  if (!link) return ''
+  try {
+    if (!new URL(link).pathname.toLowerCase().endsWith('.csv')) return ''
+    return `ms-excel:ofv|u|${link}`
+  } catch {
+    return ''
+  }
+}
+
 function toggleSort(columnIndex) {
   currentPage.value = 1
   if (sortColumnIndex.value === columnIndex) {
@@ -291,12 +302,20 @@ function resizeColumnByKeyboard(columnIndex, event) {
             <tr v-for="(row, rowIndex) in pagedRows"
               :key="`${currentPage}-${rowIndex}`">
               <td v-for="(column, columnIndex) in columns" :key="column.key || column.name || columnIndex">
-                <a v-if="externalLink(cellValue(row, column, columnIndex))"
-                  v-overflow-title="cellTitle(row, column, columnIndex)" class="cell-content detail-link"
-                  :href="externalLink(cellValue(row, column, columnIndex))"
-                  target="_blank" rel="noopener noreferrer">
-                  {{ cellValue(row, column, columnIndex) }}
-                </a>
+                <div v-if="externalLink(cellValue(row, column, columnIndex))" class="linked-cell">
+                  <a v-overflow-title="cellTitle(row, column, columnIndex)"
+                    class="cell-content detail-link"
+                    :href="externalLink(cellValue(row, column, columnIndex))"
+                    target="_blank" rel="noopener noreferrer">
+                    {{ cellValue(row, column, columnIndex) }}
+                  </a>
+                  <a v-if="excelOpenLink(cellValue(row, column, columnIndex))"
+                    class="excel-open-link"
+                    :href="excelOpenLink(cellValue(row, column, columnIndex))"
+                    :aria-label="`用 Excel 打开 ${cellTitle(row, column, columnIndex)}`">
+                    <span>用 Excel 打开</span>
+                  </a>
+                </div>
                 <span v-else v-overflow-title="cellTitle(row, column, columnIndex)" class="cell-content">
                   {{ cellValue(row, column, columnIndex) }}
                 </span>
@@ -385,11 +404,25 @@ td {
   margin-bottom: -2px; padding-bottom: 2px;
   text-overflow: ellipsis; white-space: nowrap;
 }
+.linked-cell { width: 100%; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.linked-cell > .cell-content { flex: 1 1 auto; width: auto; }
 .detail-link {
   color: rgb(var(--arcoblue-5)); text-decoration: none;
 }
 .detail-link:hover { color: rgb(var(--arcoblue-4)); text-decoration: underline; }
 .detail-link:focus-visible { outline: 1px solid rgb(var(--arcoblue-5)); outline-offset: 2px; }
+.excel-open-link {
+  flex: 0 0 auto; min-height: 22px; padding: 0 7px; border: 1px solid rgba(51, 160, 111, .46);
+  border-radius: 4px; display: inline-flex; align-items: center;
+  color: #63c99a; background: rgba(33, 115, 70, .15); font-size: 11px; font-weight: 600;
+  line-height: 1; text-decoration: none; white-space: nowrap;
+  transition: color .12s ease, background-color .12s ease, border-color .12s ease;
+}
+.excel-open-link:hover {
+  color: #83ddb4; background: rgba(33, 115, 70, .25); border-color: rgba(74, 190, 135, .68);
+}
+.excel-open-link:active { background: rgba(33, 115, 70, .34); }
+.excel-open-link:focus-visible { outline: 1px solid #63c99a; outline-offset: 2px; }
 .table-sort {
   width: 100%; min-height: 32px; padding: 7px 14px 7px 9px; border: 0; display: flex;
   align-items: center; justify-content: space-between; gap: 8px; color: inherit;
@@ -450,7 +483,7 @@ th:last-child, td:last-child { border-right: 0; }
   to { opacity: 1; transform: translateY(0); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .detail-summary, .toggle { transition: none; }
+  .detail-summary, .toggle, .excel-open-link { transition: none; }
   .detail-content { animation: none; }
 }
 </style>
