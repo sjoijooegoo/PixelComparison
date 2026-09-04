@@ -126,7 +126,12 @@ describe('GpmMapCanvas interactions', () => {
 
   it('只在指针稳定停留后切换面板，离开点位后立即开始关闭', async () => {
     vi.useFakeTimers()
-    const wrapper = mount(GpmMapCanvas, { props: { frame, metricKey: 'Scene_DC' } })
+    const wrapper = mount(GpmMapCanvas, {
+      props: {
+        frame: { ...frame, map: { show_direction: true } },
+        metricKey: 'Scene_DC',
+      },
+    })
 
     wrapper.vm.requestTooltip(1, { x: 20, y: 20, side: 'right' })
     await vi.advanceTimersByTimeAsync(60)
@@ -136,15 +141,23 @@ describe('GpmMapCanvas interactions', () => {
 
     await vi.advanceTimersByTimeAsync(1)
     expect(wrapper.vm.tooltipPointId).toBe(2)
+    expect(wrapper.vm.tooltipArrowProgressById.get('2')).toBe(0)
+    await vi.advanceTimersByTimeAsync(180)
+    expect(wrapper.vm.tooltipArrowProgressById.get('2')).toBe(1)
 
     wrapper.vm.requestTooltip(1, { x: 20, y: 20, side: 'right' })
     await vi.advanceTimersByTimeAsync(149)
     expect(wrapper.vm.tooltipPointId).toBe(2)
     await vi.advanceTimersByTimeAsync(1)
     expect(wrapper.vm.tooltipPointId).toBe(1)
+    await vi.advanceTimersByTimeAsync(180)
+    expect(wrapper.vm.tooltipArrowProgressById.get('1')).toBe(1)
+    expect(wrapper.vm.tooltipArrowProgressById.has('2')).toBe(false)
 
     wrapper.vm.requestTooltip(null, null)
     await vi.advanceTimersByTimeAsync(0)
     expect(wrapper.vm.tooltipPointId).toBeNull()
+    await vi.advanceTimersByTimeAsync(180)
+    expect(wrapper.vm.tooltipArrowProgressById.size).toBe(0)
   })
 })

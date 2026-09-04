@@ -23,6 +23,7 @@ const emit = defineEmits(['select', 'metric'])
 const TOOLTIP_SHOW_DELAY_MS = 200
 const TOOLTIP_SWITCH_DELAY_MS = 150
 const TOOLTIP_HIDE_DELAY_MS = 0
+const TOOLTIP_ARROW_DURATION_MS = 140
 
 const host = ref(null)
 const canvas = ref(null)
@@ -38,6 +39,10 @@ let tooltipIntentTimer = null
 let pendingTooltipPointId = null
 let pendingTooltipAnchor = null
 let hasPendingTooltip = false
+let tooltipArrowFrame = null
+let tooltipArrowLastTimestamp = null
+let tooltipArrowTargetId = null
+const tooltipArrowProgressById = new Map()
 
 const metric = computed(() => props.frame?.heat_map?.find((item) => item.key === props.metricKey))
 const valueRange = computed(() => metricRange(props.frame?.points, props.metricKey))
@@ -74,6 +79,70 @@ function sameTooltipAnchor(left, right) {
     && left.x === right.x
     && left.y === right.y
     && left.side === right.side
+}
+
+function cancelTooltipArrowFrame() {
+  if (tooltipArrowFrame !== null) window.cancelAnimationFrame(tooltipArrowFrame)
+  tooltipArrowFrame = null
+  tooltipArrowLastTimestamp = null
+}
+
+function clearTooltipArrows() {
+  cancelTooltipArrowFrame()
+  tooltipArrowTargetId = null
+  tooltipArrowProgressById.clear()
+}
+
+function prefersReducedMotion() {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function animateTooltipArrows(timestamp) {
+  const previousTimestamp = tooltipArrowLastTimestamp ?? timestamp
+  const step = Math.min(1, Math.max(0, timestamp - previousTimestamp) / TOOLTIP_ARROW_DURATION_MS)
+  tooltipArrowLastTimestamp = timestamp
+  let animating = false
+
+  for (const [pointId, progress] of tooltipArrowProgressById) {
+    const target = pointId === tooltipArrowTargetId ? 1 : 0
+    const next = target > progress
+      ? Math.min(target, progress + step)
+      : Math.max(target, progress - step)
+    if (next <= 0 && target === 0) tooltipArrowProgressById.delete(pointId)
+    else tooltipArrowProgressById.set(pointId, next)
+    if (next !== target) animating = true
+  }
+
+  draw()
+  if (animating) tooltipArrowFrame = window.requestAnimationFrame(animateTooltipArrows)
+  else cancelTooltipArrowFrame()
+}
+
+function setTooltipArrowTarget(pointId) {
+  tooltipArrowTargetId = pointId === null || pointId === undefined
+    ? null
+    : String(pointId)
+  if (tooltipArrowTargetId !== null && !tooltipArrowProgressById.has(tooltipArrowTargetId)) {
+    tooltipArrowProgressById.set(tooltipArrowTargetId, 0)
+  }
+
+  if (!props.frame?.map?.show_direction || prefersReducedMotion()) {
+    cancelTooltipArrowFrame()
+    tooltipArrowProgressById.clear()
+    if (tooltipArrowTargetId !== null) tooltipArrowProgressById.set(tooltipArrowTargetId, 1)
+    draw()
+    return
+  }
+  if (tooltipArrowTargetId === null && tooltipArrowProgressById.size === 0) {
+    cancelTooltipArrowFrame()
+    draw()
+    return
+  }
+  if (tooltipArrowFrame === null) {
+    tooltipArrowLastTimestamp = null
+    tooltipArrowFrame = window.requestAnimationFrame(animateTooltipArrows)
+  }
 }
 
 function clearTooltipIntent() {
@@ -118,6 +187,7 @@ function requestTooltip(pointId, anchor) {
 
 function resetHoverState() {
   clearTooltipIntent()
+  clearTooltipArrows()
   hoveredPointId.value = null
   tooltipPointId.value = null
   tooltipAnchor.value = null
@@ -170,13 +240,15 @@ function projectionForSize(width, height) {
   return createMapProjection(config, rect)
 }
 
-function traceDirectionArrow(context, point, direction) {
+function traceDirectionArrow(context, point, direction, progress = 1, coveredRadius = 6) {
   const startX = point.x
   const startY = point.y
-  const endX = point.x + direction.x * 20
-  const endY = point.y + direction.y * 20
+  // 动画从方块边缘开始，箭头会像从点位下方向外生长，而不是整体缩放。
+  const length = coveredRadius + 14 * progress
+  const endX = point.x + direction.x * length
+  const endY = point.y + direction.y * length
   const angle = Math.atan2(direction.y, direction.x)
-  const headLength = 5
+  const headLength = 5 * progress
   const headSpread = Math.PI / 5
   context.beginPath()
   context.moveTo(startX, startY)
@@ -193,17 +265,18 @@ function traceDirectionArrow(context, point, direction) {
   )
 }
 
-function drawDirectionArrow(context, point, direction) {
+function drawDirectionArrow(context, point, direction, progress = 1, coveredRadius = 6) {
+  if (progress <= 0) return
   context.save()
   context.lineCap = 'round'
   context.lineJoin = 'round'
 
-  traceDirectionArrow(context, point, direction)
+  traceDirectionArrow(context, point, direction, progress, coveredRadius)
   context.strokeStyle = 'rgba(0, 0, 0, .72)'
   context.lineWidth = 4
   context.stroke()
 
-  traceDirectionArrow(context, point, direction)
+  traceDirectionArrow(context, point, direction, progress, coveredRadius)
   context.strokeStyle = 'rgba(255, 255, 255, .96)'
   context.lineWidth = 1.7
   context.stroke()
@@ -271,27 +344,38 @@ function draw() {
       value, activeScale.value, valueRange.value,
     )
     renderPoints.push({
-      point, direction, selected, hovered, size, color,
+      id: String(source.id), point, direction, selected, hovered, size, color,
       alpha: dimmedByLegend ? 0.18 : 1,
     })
-    projected.push({ source, x: point.x, y: point.y, hit: Math.max(13, size + 2) })
+    projected.push({
+      source,
+      x: point.x,
+      y: point.y,
+      hit: Math.max(13, size + 2),
+    })
   }
   pointHitIndex = createPointHitIndex(projected)
 
-  // 方块先统一绘制；活动箭头随后提升到所有普通点位之上，最后再覆盖活动
-  // 点位自己的方块，确保箭头从方块下方伸出且不会被其他点位截断。
+  // 方块先统一绘制；活动点随后按层级重绘箭头和自身方块。悬停点最后绘制，
+  // 确保它的箭头位于其他点位之上，同时仍从自己的方块下方伸出。
   renderPoints.forEach((item) => drawPointSquare(context, item))
-  const activePoints = renderPoints.filter((item) => item.selected || item.hovered)
+  const activePoints = renderPoints.filter((item) => (
+    item.selected || item.hovered || (tooltipArrowProgressById.get(item.id) ?? 0) > 0
+  ))
     // Canvas 后绘制的元素位于上层；悬停点必须排在选中点之后。
     .sort((left, right) => Number(left.hovered) - Number(right.hovered))
-  const arrowPoints = props.frame?.map?.show_direction ? activePoints : []
-  arrowPoints.forEach((item) => {
-    context.save()
-    context.globalAlpha = item.alpha
-    drawDirectionArrow(context, item.point, item.direction)
-    context.restore()
+  activePoints.forEach((item) => {
+    const arrowProgress = item.selected
+      ? 1
+      : tooltipArrowProgressById.get(item.id) ?? 0
+    if (props.frame?.map?.show_direction && arrowProgress > 0) {
+      context.save()
+      context.globalAlpha = item.alpha
+      drawDirectionArrow(context, item.point, item.direction, arrowProgress, item.size / 2)
+      context.restore()
+    }
+    drawPointSquare(context, item)
   })
-  activePoints.forEach((item) => drawPointSquare(context, item))
 }
 
 function pointAtEvent(event) {
@@ -342,6 +426,7 @@ watch(() => props.metricKey, () => {
   hoveredBandIndex.value = null
   hiddenBandIndexes.value = new Set()
 })
+watch(tooltipPointId, setTooltipArrowTarget, { flush: 'sync' })
 watch(() => [
   props.frame,
   props.metricKey,
@@ -364,6 +449,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   clearTooltipIntent()
+  clearTooltipArrows()
   observer?.disconnect()
 })
 </script>
