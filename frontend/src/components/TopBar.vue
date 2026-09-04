@@ -246,13 +246,13 @@ onUnmounted(() => {
   --logo-window-back: #a9c2f8;
   --logo-window-front: #4d82f6;
 }
-.logo-mark { width: 25px; height: 25px; flex: 0 0 auto; display: block; }
+.logo-mark { width: 29px; height: 29px; flex: 0 0 auto; display: block; }
 .logo-window-back { stroke: var(--logo-window-back); }
 .logo-window-front { stroke: var(--logo-window-front); }
 .logo-wordmark {
   color: var(--logo-wordmark);
   font-family: "Segoe UI Variable Display", "Segoe UI", Arial, sans-serif;
-  font-size: 17px; font-weight: 600; line-height: 1; letter-spacing: -.35px;
+  font-size: 18px; font-weight: 600; line-height: 1; letter-spacing: -.4px;
 }
 .tabs { display: flex; gap: 8px; height: 100%; }
 .tab {
