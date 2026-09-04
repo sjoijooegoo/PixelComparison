@@ -20,15 +20,24 @@ const props = defineProps({
 })
 const emit = defineEmits(['select', 'metric'])
 
+const TOOLTIP_SHOW_DELAY_MS = 200
+const TOOLTIP_SWITCH_DELAY_MS = 150
+const TOOLTIP_HIDE_DELAY_MS = 0
+
 const host = ref(null)
 const canvas = ref(null)
 const mapImage = ref(null)
 const hoveredPointId = ref(null)
+const tooltipPointId = ref(null)
 const tooltipAnchor = ref(null)
 const hoveredBandIndex = ref(null)
 const hiddenBandIndexes = ref(new Set())
 let observer = null
 let pointHitIndex = createPointHitIndex([])
+let tooltipIntentTimer = null
+let pendingTooltipPointId = null
+let pendingTooltipAnchor = null
+let hasPendingTooltip = false
 
 const metric = computed(() => props.frame?.heat_map?.find((item) => item.key === props.metricKey))
 const valueRange = computed(() => metricRange(props.frame?.points, props.metricKey))
@@ -37,13 +46,13 @@ const scaleBands = computed(() => configuredBands(activeScale.value))
 const pointsById = computed(() => new Map(
   (props.frame?.points || []).map((point) => [String(point.id), point]),
 ))
-const hoveredPoint = computed(() => pointsById.value.get(String(hoveredPointId.value)))
-const hoveredValue = computed(() => hoveredPoint.value?.heat_map_data?.[props.metricKey])
-const hoveredChangePercent = computed(() => (
-  hoveredPoint.value?.metric_change_percent?.[props.metricKey]
+const tooltipPoint = computed(() => pointsById.value.get(String(tooltipPointId.value)))
+const tooltipValue = computed(() => tooltipPoint.value?.heat_map_data?.[props.metricKey])
+const tooltipChangePercent = computed(() => (
+  tooltipPoint.value?.metric_change_percent?.[props.metricKey]
 ))
-const hoveredValueColor = computed(() => resolvedHeatColor(
-  hoveredValue.value,
+const tooltipValueColor = computed(() => resolvedHeatColor(
+  tooltipValue.value,
   activeScale.value,
   valueRange.value,
 ))
@@ -52,6 +61,66 @@ function samePointId(left, right) {
   return left !== null && left !== undefined
     && right !== null && right !== undefined
     && String(left) === String(right)
+}
+
+function sameOptionalPointId(left, right) {
+  const leftEmpty = left === null || left === undefined
+  const rightEmpty = right === null || right === undefined
+  return leftEmpty && rightEmpty ? true : samePointId(left, right)
+}
+
+function sameTooltipAnchor(left, right) {
+  return left && right
+    && left.x === right.x
+    && left.y === right.y
+    && left.side === right.side
+}
+
+function clearTooltipIntent() {
+  if (tooltipIntentTimer !== null) window.clearTimeout(tooltipIntentTimer)
+  tooltipIntentTimer = null
+  pendingTooltipPointId = null
+  pendingTooltipAnchor = null
+  hasPendingTooltip = false
+}
+
+function requestTooltip(pointId, anchor) {
+  const nextId = pointId ?? null
+  if (sameOptionalPointId(nextId, tooltipPointId.value)) {
+    clearTooltipIntent()
+    if (nextId !== null && anchor && !sameTooltipAnchor(anchor, tooltipAnchor.value)) {
+      tooltipAnchor.value = anchor
+    }
+    return
+  }
+  if (hasPendingTooltip && sameOptionalPointId(nextId, pendingTooltipPointId)) {
+    pendingTooltipAnchor = anchor
+    return
+  }
+
+  clearTooltipIntent()
+  hasPendingTooltip = true
+  pendingTooltipPointId = nextId
+  pendingTooltipAnchor = anchor
+  const delay = nextId === null
+    ? TOOLTIP_HIDE_DELAY_MS
+    : tooltipPointId.value === null
+      ? TOOLTIP_SHOW_DELAY_MS
+      : TOOLTIP_SWITCH_DELAY_MS
+  tooltipIntentTimer = window.setTimeout(() => {
+    const committedId = pendingTooltipPointId
+    const committedAnchor = pendingTooltipAnchor
+    clearTooltipIntent()
+    tooltipPointId.value = committedId
+    tooltipAnchor.value = committedId === null ? null : committedAnchor
+  }, delay)
+}
+
+function resetHoverState() {
+  clearTooltipIntent()
+  hoveredPointId.value = null
+  tooltipPointId.value = null
+  tooltipAnchor.value = null
 }
 
 function formatValue(value) {
@@ -79,7 +148,7 @@ function changeIndicator(value) {
   return { label: '0%', direction: 'flat' }
 }
 
-const hoveredChange = computed(() => changeIndicator(hoveredChangePercent.value))
+const tooltipChange = computed(() => changeIndicator(tooltipChangePercent.value))
 
 function setHoveredBand(index) {
   hoveredBandIndex.value = index
@@ -249,18 +318,14 @@ function moveMap(event) {
     y: nearest.y,
     side: nearest.x > canvas.value.clientWidth - 225 ? 'left' : 'right',
   } : null
-  if (!tooltipAnchor.value || !nextAnchor
-    || tooltipAnchor.value.x !== nextAnchor.x || tooltipAnchor.value.y !== nextAnchor.y
-    || tooltipAnchor.value.side !== nextAnchor.side) {
-    tooltipAnchor.value = nextAnchor
-  }
   if (!unchanged) hoveredPointId.value = nextId
+  requestTooltip(nextId, nextAnchor)
 }
 
 function leaveMap() {
   if (canvas.value) canvas.value.style.cursor = 'default'
   hoveredPointId.value = null
-  tooltipAnchor.value = null
+  requestTooltip(null, null)
 }
 
 function imageReady() {
@@ -269,8 +334,7 @@ function imageReady() {
 
 // frame 由 store 以不可变响应对象整体替换，无需深度遍历可能很大的点位数组。
 watch(() => props.frame, () => {
-  hoveredPointId.value = null
-  tooltipAnchor.value = null
+  resetHoverState()
   hoveredBandIndex.value = null
   hiddenBandIndexes.value = new Set()
 })
@@ -298,7 +362,10 @@ onMounted(() => {
   if (host.value) observer.observe(host.value)
   draw()
 })
-onBeforeUnmount(() => observer?.disconnect())
+onBeforeUnmount(() => {
+  clearTooltipIntent()
+  observer?.disconnect()
+})
 </script>
 
 <template>
@@ -315,31 +382,33 @@ onBeforeUnmount(() => observer?.disconnect())
       <img ref="mapImage" class="map-image" :src="frame.map_config.image_url"
         alt="场景地图" @load="imageReady" />
       <canvas ref="canvas" @click="clickMap" @mousemove="moveMap" @mouseleave="leaveMap"></canvas>
-      <div v-if="hoveredPoint && tooltipAnchor" class="point-tooltip"
-        :class="`on-${tooltipAnchor.side}`"
-        :style="{ left: `${tooltipAnchor.x}px`, top: `clamp(80px, ${tooltipAnchor.y}px, calc(100% - 10px))` }">
-        <div class="tooltip-id">
-          <span>序号</span>
-          <strong>{{ String(hoveredPoint.index ?? hoveredPoint.id).padStart(2, '0') }}</strong>
-        </div>
-        <div class="tooltip-position">
-          <span>坐标</span>
-          <strong>
-            <b>X</b> {{ formatCoordinateValue(hoveredPoint.position?.[0]) }}
-            <b>Y</b> {{ formatCoordinateValue(hoveredPoint.position?.[1]) }}
-          </strong>
-        </div>
-        <div class="tooltip-metric">
-          <span>{{ metric?.name || metricKey }}</span>
-          <div class="metric-reading">
-            <strong :style="{ color: hoveredValueColor }">{{ formatValue(hoveredValue) }}</strong>
-            <small class="metric-change" :class="`is-${hoveredChange.direction}`"
-              :title="frame?.previous_batch ? '较上一次批次' : '没有可对比的上一批次'">
-              {{ hoveredChange.label }}
-            </small>
+      <Transition name="point-tooltip">
+        <div v-if="tooltipPoint && tooltipAnchor" :key="String(tooltipPoint.id)"
+          class="point-tooltip" :class="`on-${tooltipAnchor.side}`" role="tooltip"
+          :style="{ left: `${tooltipAnchor.x}px`, top: `clamp(80px, ${tooltipAnchor.y}px, calc(100% - 10px))` }">
+          <div class="tooltip-id">
+            <span>序号</span>
+            <strong>{{ String(tooltipPoint.index ?? tooltipPoint.id).padStart(2, '0') }}</strong>
+          </div>
+          <div class="tooltip-position">
+            <span>坐标</span>
+            <strong>
+              <b>X</b> {{ formatCoordinateValue(tooltipPoint.position?.[0]) }}
+              <b>Y</b> {{ formatCoordinateValue(tooltipPoint.position?.[1]) }}
+            </strong>
+          </div>
+          <div class="tooltip-metric">
+            <span>{{ metric?.name || metricKey }}</span>
+            <div class="metric-reading">
+              <strong :style="{ color: tooltipValueColor }">{{ formatValue(tooltipValue) }}</strong>
+              <small class="metric-change" :class="`is-${tooltipChange.direction}`"
+                :title="frame?.previous_batch ? '较上一次批次' : '没有可对比的上一批次'">
+                {{ tooltipChange.label }}
+              </small>
+            </div>
           </div>
         </div>
-      </div>
+      </Transition>
     </div>
     <div v-else class="map-empty">
       当前场景尚未配置地图，请先上传地图图片与坐标范围
@@ -401,9 +470,6 @@ onBeforeUnmount(() => observer?.disconnect())
   box-shadow: inset 0 0 0 1px rgba(var(--arcoblue-6), .06);
 }
 .metric-tabs button.active > span { font-weight: 600; }
-@media (prefers-reduced-motion: reduce) {
-  .metric-tabs button { transition: none; }
-}
 .map-stage { position: relative; flex: 1; min-height: 390px; overflow: hidden; background: var(--color-bg-2); }
 .map-stage img { position: absolute; inset: 0; width: 100%; height: 100%; user-select: none; pointer-events: none; }
 .map-image { object-fit: contain; }
@@ -413,9 +479,28 @@ onBeforeUnmount(() => observer?.disconnect())
   pointer-events: none; border: 1px solid rgba(255, 255, 255, .16); border-radius: 4px;
   color: rgba(255, 255, 255, .92); background: rgba(12, 16, 22, .68);
   box-shadow: 0 5px 16px rgba(0, 0, 0, .3); backdrop-filter: blur(6px);
+  will-change: opacity, transform;
 }
-.point-tooltip.on-right { transform: translate(15px, calc(-100% - 10px)); }
-.point-tooltip.on-left { transform: translate(calc(-100% - 15px), calc(-100% - 10px)); }
+.point-tooltip.on-right {
+  transform: translate(15px, calc(-100% - 10px)); transform-origin: left bottom;
+}
+.point-tooltip.on-left {
+  transform: translate(calc(-100% - 15px), calc(-100% - 10px)); transform-origin: right bottom;
+}
+.point-tooltip-enter-active,
+.point-tooltip-leave-active {
+  transition: opacity .12s ease-out, transform .14s cubic-bezier(.2, .75, .35, 1);
+}
+.point-tooltip-enter-from,
+.point-tooltip-leave-to { opacity: 0; }
+.point-tooltip-enter-from.on-right,
+.point-tooltip-leave-to.on-right {
+  transform: translate(15px, calc(-100% - 5px)) scale(.985);
+}
+.point-tooltip-enter-from.on-left,
+.point-tooltip-leave-to.on-left {
+  transform: translate(calc(-100% - 15px), calc(-100% - 5px)) scale(.985);
+}
 .point-tooltip > div { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; }
 .point-tooltip > div + div { margin-top: 5px; }
 .point-tooltip span { color: rgba(255, 255, 255, .58); font-size: 11px; white-space: nowrap; }
@@ -465,6 +550,9 @@ onBeforeUnmount(() => observer?.disconnect())
   font-style: normal; text-overflow: ellipsis; white-space: nowrap;
 }
 @media (prefers-reduced-motion: reduce) {
-  .band-legend { transition: none; }
+  .metric-tabs button,
+  .band-legend,
+  .point-tooltip-enter-active,
+  .point-tooltip-leave-active { transition: none; }
 }
 </style>

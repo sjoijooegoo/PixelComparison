@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import GpmMapCanvas from './GpmMapCanvas.vue'
 
@@ -37,7 +37,7 @@ const frame = {
   ],
 }
 
-describe('GpmMapCanvas legend interactions', () => {
+describe('GpmMapCanvas interactions', () => {
   beforeEach(() => {
     globalThis.ResizeObserver = class {
       observe() {}
@@ -49,6 +49,8 @@ describe('GpmMapCanvas legend interactions', () => {
       clearRect: vi.fn(),
     }))
   })
+
+  afterEach(() => vi.useRealTimers())
 
   it('悬停强调颜色段，点击切换该段的显示状态', async () => {
     const wrapper = mount(GpmMapCanvas, { props: { frame, metricKey: 'Scene_DC' } })
@@ -75,7 +77,7 @@ describe('GpmMapCanvas legend interactions', () => {
       },
     })
 
-    wrapper.vm.hoveredPointId = 1
+    wrapper.vm.tooltipPointId = 1
     wrapper.vm.tooltipAnchor = { x: 20, y: 20, side: 'right' }
     await wrapper.vm.$nextTick()
 
@@ -97,7 +99,7 @@ describe('GpmMapCanvas legend interactions', () => {
     const wrapper = mount(GpmMapCanvas, {
       props: { frame: frameWithChange(0.04), metricKey: 'Scene_DC' },
     })
-    wrapper.vm.hoveredPointId = 1
+    wrapper.vm.tooltipPointId = 1
     wrapper.vm.tooltipAnchor = { x: 20, y: 20, side: 'right' }
     await wrapper.vm.$nextTick()
 
@@ -107,7 +109,7 @@ describe('GpmMapCanvas legend interactions', () => {
     expect(change().classes()).not.toContain('is-up')
 
     await wrapper.setProps({ frame: frameWithChange(-0.04) })
-    wrapper.vm.hoveredPointId = 1
+    wrapper.vm.tooltipPointId = 1
     wrapper.vm.tooltipAnchor = { x: 20, y: 20, side: 'right' }
     await wrapper.vm.$nextTick()
     expect(change().text()).toBe('≈0.0%')
@@ -115,10 +117,34 @@ describe('GpmMapCanvas legend interactions', () => {
     expect(change().classes()).not.toContain('is-down')
 
     await wrapper.setProps({ frame: frameWithChange(0) })
-    wrapper.vm.hoveredPointId = 1
+    wrapper.vm.tooltipPointId = 1
     wrapper.vm.tooltipAnchor = { x: 20, y: 20, side: 'right' }
     await wrapper.vm.$nextTick()
     expect(change().text()).toBe('0%')
     expect(change().classes()).toContain('is-flat')
+  })
+
+  it('只在指针稳定停留后切换面板，离开点位后立即开始关闭', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(GpmMapCanvas, { props: { frame, metricKey: 'Scene_DC' } })
+
+    wrapper.vm.requestTooltip(1, { x: 20, y: 20, side: 'right' })
+    await vi.advanceTimersByTimeAsync(60)
+    wrapper.vm.requestTooltip(2, { x: 40, y: 40, side: 'right' })
+    await vi.advanceTimersByTimeAsync(199)
+    expect(wrapper.vm.tooltipPointId).toBeNull()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(wrapper.vm.tooltipPointId).toBe(2)
+
+    wrapper.vm.requestTooltip(1, { x: 20, y: 20, side: 'right' })
+    await vi.advanceTimersByTimeAsync(149)
+    expect(wrapper.vm.tooltipPointId).toBe(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(wrapper.vm.tooltipPointId).toBe(1)
+
+    wrapper.vm.requestTooltip(null, null)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(wrapper.vm.tooltipPointId).toBeNull()
   })
 })
