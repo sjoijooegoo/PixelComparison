@@ -136,7 +136,7 @@ describe('GpmMapCanvas interactions', () => {
     wrapper.vm.requestTooltip(1, { x: 20, y: 20, side: 'right' })
     await vi.advanceTimersByTimeAsync(60)
     wrapper.vm.requestTooltip(2, { x: 40, y: 40, side: 'right' })
-    await vi.advanceTimersByTimeAsync(199)
+    await vi.advanceTimersByTimeAsync(129)
     expect(wrapper.vm.tooltipPointId).toBeNull()
 
     await vi.advanceTimersByTimeAsync(1)
@@ -146,7 +146,7 @@ describe('GpmMapCanvas interactions', () => {
     expect(wrapper.vm.tooltipArrowProgressById.get('2')).toBe(1)
 
     wrapper.vm.requestTooltip(1, { x: 20, y: 20, side: 'right' })
-    await vi.advanceTimersByTimeAsync(149)
+    await vi.advanceTimersByTimeAsync(129)
     expect(wrapper.vm.tooltipPointId).toBe(2)
     await vi.advanceTimersByTimeAsync(1)
     expect(wrapper.vm.tooltipPointId).toBe(1)
@@ -159,5 +159,31 @@ describe('GpmMapCanvas interactions', () => {
     expect(wrapper.vm.tooltipPointId).toBeNull()
     await vi.advanceTimersByTimeAsync(180)
     expect(wrapper.vm.tooltipArrowProgressById.size).toBe(0)
+  })
+
+  it('Hover 方块在 130ms 内平滑放大，切换点位时同步过渡', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(GpmMapCanvas, { props: { frame, metricKey: 'Scene_DC' } })
+
+    wrapper.vm.hoveredPointId = 1
+    expect(wrapper.vm.hoveredSquareProgressById.get('1')).toBe(0)
+    await vi.advanceTimersByTimeAsync(80)
+    expect(wrapper.vm.hoveredSquareProgressById.get('1')).toBeGreaterThan(0)
+    expect(wrapper.vm.hoveredSquareProgressById.get('1')).toBeLessThan(1)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(wrapper.vm.hoveredSquareProgressById.get('1')).toBe(1)
+
+    wrapper.vm.hoveredPointId = 2
+    expect(wrapper.vm.hoveredSquareProgressById.get('2')).toBe(0)
+    await vi.advanceTimersByTimeAsync(80)
+    expect(wrapper.vm.hoveredSquareProgressById.get('1')).toBeLessThan(1)
+    expect(wrapper.vm.hoveredSquareProgressById.get('2')).toBeGreaterThan(0)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(wrapper.vm.hoveredSquareProgressById.has('1')).toBe(false)
+    expect(wrapper.vm.hoveredSquareProgressById.get('2')).toBe(1)
+
+    wrapper.vm.hoveredPointId = null
+    await vi.advanceTimersByTimeAsync(180)
+    expect(wrapper.vm.hoveredSquareProgressById.size).toBe(0)
   })
 })

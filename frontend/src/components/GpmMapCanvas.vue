@@ -20,10 +20,10 @@ const props = defineProps({
 })
 const emit = defineEmits(['select', 'metric'])
 
-const TOOLTIP_SHOW_DELAY_MS = 200
-const TOOLTIP_SWITCH_DELAY_MS = 150
+const TOOLTIP_SHOW_DELAY_MS = 130
+const TOOLTIP_SWITCH_DELAY_MS = 130
 const TOOLTIP_HIDE_DELAY_MS = 0
-const TOOLTIP_ARROW_DURATION_MS = 140
+const POINT_MOTION_DURATION_MS = 130
 
 const host = ref(null)
 const canvas = ref(null)
@@ -39,10 +39,12 @@ let tooltipIntentTimer = null
 let pendingTooltipPointId = null
 let pendingTooltipAnchor = null
 let hasPendingTooltip = false
-let tooltipArrowFrame = null
-let tooltipArrowLastTimestamp = null
+let pointMotionFrame = null
+let pointMotionLastTimestamp = null
 let tooltipArrowTargetId = null
+let hoveredSquareTargetId = null
 const tooltipArrowProgressById = new Map()
+const hoveredSquareProgressById = new Map()
 
 const metric = computed(() => props.frame?.heat_map?.find((item) => item.key === props.metricKey))
 const valueRange = computed(() => metricRange(props.frame?.points, props.metricKey))
@@ -81,16 +83,18 @@ function sameTooltipAnchor(left, right) {
     && left.side === right.side
 }
 
-function cancelTooltipArrowFrame() {
-  if (tooltipArrowFrame !== null) window.cancelAnimationFrame(tooltipArrowFrame)
-  tooltipArrowFrame = null
-  tooltipArrowLastTimestamp = null
+function cancelPointMotionFrame() {
+  if (pointMotionFrame !== null) window.cancelAnimationFrame(pointMotionFrame)
+  pointMotionFrame = null
+  pointMotionLastTimestamp = null
 }
 
-function clearTooltipArrows() {
-  cancelTooltipArrowFrame()
+function clearPointMotion() {
+  cancelPointMotionFrame()
   tooltipArrowTargetId = null
+  hoveredSquareTargetId = null
   tooltipArrowProgressById.clear()
+  hoveredSquareProgressById.clear()
 }
 
 function prefersReducedMotion() {
@@ -98,25 +102,59 @@ function prefersReducedMotion() {
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-function animateTooltipArrows(timestamp) {
-  const previousTimestamp = tooltipArrowLastTimestamp ?? timestamp
-  const step = Math.min(1, Math.max(0, timestamp - previousTimestamp) / TOOLTIP_ARROW_DURATION_MS)
-  tooltipArrowLastTimestamp = timestamp
+function advancePointMotion(progressById, targetId, step) {
   let animating = false
-
-  for (const [pointId, progress] of tooltipArrowProgressById) {
-    const target = pointId === tooltipArrowTargetId ? 1 : 0
+  for (const [pointId, progress] of progressById) {
+    const target = pointId === targetId ? 1 : 0
     const next = target > progress
       ? Math.min(target, progress + step)
       : Math.max(target, progress - step)
-    if (next <= 0 && target === 0) tooltipArrowProgressById.delete(pointId)
-    else tooltipArrowProgressById.set(pointId, next)
+    if (next <= 0 && target === 0) progressById.delete(pointId)
+    else progressById.set(pointId, next)
     if (next !== target) animating = true
   }
+  return animating
+}
+
+function settlePointMotion(progressById, targetId) {
+  progressById.clear()
+  if (targetId !== null) progressById.set(targetId, 1)
+}
+
+function animatePointMotion(timestamp) {
+  const previousTimestamp = pointMotionLastTimestamp ?? timestamp
+  const step = Math.min(1, Math.max(0, timestamp - previousTimestamp) / POINT_MOTION_DURATION_MS)
+  pointMotionLastTimestamp = timestamp
+  const arrowAnimating = advancePointMotion(
+    tooltipArrowProgressById, tooltipArrowTargetId, step,
+  )
+  const squareAnimating = advancePointMotion(
+    hoveredSquareProgressById, hoveredSquareTargetId, step,
+  )
 
   draw()
-  if (animating) tooltipArrowFrame = window.requestAnimationFrame(animateTooltipArrows)
-  else cancelTooltipArrowFrame()
+  if (arrowAnimating || squareAnimating) {
+    pointMotionFrame = window.requestAnimationFrame(animatePointMotion)
+  } else cancelPointMotionFrame()
+}
+
+function schedulePointMotion() {
+  if (prefersReducedMotion()) {
+    cancelPointMotionFrame()
+    settlePointMotion(tooltipArrowProgressById, tooltipArrowTargetId)
+    settlePointMotion(hoveredSquareProgressById, hoveredSquareTargetId)
+    draw()
+    return
+  }
+  if (tooltipArrowProgressById.size === 0 && hoveredSquareProgressById.size === 0) {
+    cancelPointMotionFrame()
+    draw()
+    return
+  }
+  if (pointMotionFrame === null) {
+    pointMotionLastTimestamp = window.performance.now()
+    pointMotionFrame = window.requestAnimationFrame(animatePointMotion)
+  }
 }
 
 function setTooltipArrowTarget(pointId) {
@@ -127,22 +165,22 @@ function setTooltipArrowTarget(pointId) {
     tooltipArrowProgressById.set(tooltipArrowTargetId, 0)
   }
 
-  if (!props.frame?.map?.show_direction || prefersReducedMotion()) {
-    cancelTooltipArrowFrame()
+  if (!props.frame?.map?.show_direction) {
+    tooltipArrowTargetId = null
     tooltipArrowProgressById.clear()
-    if (tooltipArrowTargetId !== null) tooltipArrowProgressById.set(tooltipArrowTargetId, 1)
-    draw()
-    return
   }
-  if (tooltipArrowTargetId === null && tooltipArrowProgressById.size === 0) {
-    cancelTooltipArrowFrame()
-    draw()
-    return
+  schedulePointMotion()
+}
+
+function setHoveredSquareTarget(pointId) {
+  hoveredSquareTargetId = pointId === null || pointId === undefined
+    ? null
+    : String(pointId)
+  if (hoveredSquareTargetId !== null
+    && !hoveredSquareProgressById.has(hoveredSquareTargetId)) {
+    hoveredSquareProgressById.set(hoveredSquareTargetId, 0)
   }
-  if (tooltipArrowFrame === null) {
-    tooltipArrowLastTimestamp = null
-    tooltipArrowFrame = window.requestAnimationFrame(animateTooltipArrows)
-  }
+  schedulePointMotion()
 }
 
 function clearTooltipIntent() {
@@ -187,7 +225,7 @@ function requestTooltip(pointId, anchor) {
 
 function resetHoverState() {
   clearTooltipIntent()
-  clearTooltipArrows()
+  clearPointMotion()
   hoveredPointId.value = null
   tooltipPointId.value = null
   tooltipAnchor.value = null
@@ -339,7 +377,8 @@ function draw() {
     const emphasizedByLegend = hoveredBandIndex.value !== null
       && bandIndex === hoveredBandIndex.value
     const dimmedByLegend = hoveredBandIndex.value !== null && !emphasizedByLegend
-    const size = (selected ? 13 : hovered ? 12 : 10) + (emphasizedByLegend ? 4 : 0)
+    const hoverProgress = hoveredSquareProgressById.get(String(source.id)) ?? 0
+    const size = (selected ? 13 : 10 + 2 * hoverProgress) + (emphasizedByLegend ? 4 : 0)
     const color = resolvedHeatColor(
       value, activeScale.value, valueRange.value,
     )
@@ -360,7 +399,9 @@ function draw() {
   // 确保它的箭头位于其他点位之上，同时仍从自己的方块下方伸出。
   renderPoints.forEach((item) => drawPointSquare(context, item))
   const activePoints = renderPoints.filter((item) => (
-    item.selected || item.hovered || (tooltipArrowProgressById.get(item.id) ?? 0) > 0
+    item.selected || item.hovered
+    || (tooltipArrowProgressById.get(item.id) ?? 0) > 0
+    || (hoveredSquareProgressById.get(item.id) ?? 0) > 0
   ))
     // Canvas 后绘制的元素位于上层；悬停点必须排在选中点之后。
     .sort((left, right) => Number(left.hovered) - Number(right.hovered))
@@ -426,6 +467,7 @@ watch(() => props.metricKey, () => {
   hoveredBandIndex.value = null
   hiddenBandIndexes.value = new Set()
 })
+watch(hoveredPointId, setHoveredSquareTarget, { flush: 'sync' })
 watch(tooltipPointId, setTooltipArrowTarget, { flush: 'sync' })
 watch(() => [
   props.frame,
@@ -449,7 +491,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   clearTooltipIntent()
-  clearTooltipArrows()
+  clearPointMotion()
   observer?.disconnect()
 })
 </script>
@@ -575,7 +617,7 @@ onBeforeUnmount(() => {
 }
 .point-tooltip-enter-active,
 .point-tooltip-leave-active {
-  transition: opacity .12s ease-out, transform .14s cubic-bezier(.2, .75, .35, 1);
+  transition: opacity .13s ease-out, transform .13s cubic-bezier(.2, .75, .35, 1);
 }
 .point-tooltip-enter-from,
 .point-tooltip-leave-to { opacity: 0; }
