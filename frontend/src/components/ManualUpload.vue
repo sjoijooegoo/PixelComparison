@@ -409,7 +409,7 @@ async function startUpload() {
         @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false"
         @drop.prevent="onDrop" @click="fileInput.click()">
         <div class="big">＋</div>
-        <div>把 <b>PixelComparison</b> 数据包文件夹拖到这里</div>
+        <div>把 <b>SceneScope</b> 数据包文件夹拖到这里</div>
         <div class="sub">或点击选择文件夹 · 需包含 manifest.json，以及截图或烘培数据</div>
       </div>
       <input ref="fileInput" type="file" webkitdirectory directory multiple

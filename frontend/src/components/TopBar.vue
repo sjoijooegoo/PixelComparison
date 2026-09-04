@@ -151,15 +151,15 @@ onUnmounted(() => {
 
 <template>
   <header class="topbar">
-    <div class="logo">
-      <!-- 两帧叠加 + 差异点:像素对比的意象 -->
-      <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="2.5" y="2.5" width="13" height="13" rx="3.5" fill="rgb(var(--arcoblue-6))" />
-        <rect x="8.5" y="8.5" width="13" height="13" rx="3.5" fill="none"
-          stroke="rgb(var(--arcoblue-5))" stroke-width="2" />
-        <circle cx="18.5" cy="5.5" r="3" fill="rgb(var(--red-5))" />
+    <div class="logo" aria-label="SceneScope 场景质量观测台">
+      <!-- 双视窗表示同一场景在不同采集结果间的观测与对比。 -->
+      <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M6 19V8a2 2 0 0 1 2-2h11" class="logo-window-back"
+          fill="none" stroke-width="3" stroke-linecap="round" />
+        <rect x="11" y="11" width="15" height="15" rx="3.2" class="logo-window-front"
+          fill="none" stroke-width="3" />
       </svg>
-      PixelComparison
+      <span class="logo-wordmark">SceneScope</span>
     </div>
     <nav class="tabs">
       <button v-for="t in tabs" :key="t.path" class="tab"
@@ -235,7 +235,25 @@ onUnmounted(() => {
   padding: 0 20px; background: var(--color-bg-2);
   border-bottom: 1px solid var(--color-border-1);
 }
-.logo { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 9px; letter-spacing: .2px; }
+.logo {
+  --logo-wordmark: #172033;
+  --logo-window-back: #7c9fe8;
+  --logo-window-front: #356ff3;
+  display: flex; flex: 0 0 auto; align-items: center; gap: 8px; white-space: nowrap;
+}
+:global(body[arco-theme="dark"] .logo) {
+  --logo-wordmark: #f3f5f7;
+  --logo-window-back: #a9c2f8;
+  --logo-window-front: #4d82f6;
+}
+.logo-mark { width: 25px; height: 25px; flex: 0 0 auto; display: block; }
+.logo-window-back { stroke: var(--logo-window-back); }
+.logo-window-front { stroke: var(--logo-window-front); }
+.logo-wordmark {
+  color: var(--logo-wordmark);
+  font-family: "Segoe UI Variable Display", "Segoe UI", Arial, sans-serif;
+  font-size: 17px; font-weight: 600; line-height: 1; letter-spacing: -.35px;
+}
 .tabs { display: flex; gap: 8px; height: 100%; }
 .tab {
   border: none; background: none; padding: 0 16px; font-size: 14px; cursor: pointer;
