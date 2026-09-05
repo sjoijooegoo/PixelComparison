@@ -36,6 +36,55 @@ beforeEach(() => {
 })
 
 describe('GPM batch catalog store', () => {
+  it('接受服务器定位页码，窗口改变每页数量后继续定位，手动翻页解除定位', async () => {
+    const store = useGpmBatchStore()
+    apiMock.gpmHeatmapUploads.mockResolvedValue({
+      items: [{ batch_id: 'source' }], total: 40, page: 3, located_batch_id: 'source',
+    })
+    const state = await store.applyRoute({ branchTag: 'main', focusBatchId: 'source', page: 1 })
+    expect(apiMock.gpmHeatmapUploads).toHaveBeenCalledWith(expect.objectContaining({ locate_batch_id: 'source' }))
+    expect(state).toMatchObject({ page: 3, focusBatchId: 'source' })
+    store.batchPageSize = 5
+    apiMock.gpmHeatmapUploads.mockResolvedValue({ items: [{ batch_id: 'source' }], total: 40, page: 6, located_batch_id: 'source' })
+    await store.loadBatches()
+    expect(store.batchPage).toBe(6)
+    expect(apiMock.gpmHeatmapUploads).toHaveBeenLastCalledWith(expect.objectContaining({ page_size: 5, locate_batch_id: 'source' }))
+    apiMock.gpmHeatmapUploads.mockResolvedValue({ items: [], total: 40, page: 7 })
+    await store.applyRoute({ branchTag: 'main', page: 7 })
+    expect(store.focusBatchId).toBe('')
+    expect(apiMock.gpmHeatmapUploads.mock.lastCall[0]).not.toHaveProperty('locate_batch_id')
+    expect(store.batchPage).toBe(7)
+  })
+
+  it('来源消失时清除定位并提示，仍保留正常批次列表', async () => {
+    const store = useGpmBatchStore()
+    apiMock.gpmHeatmapUploads.mockResolvedValue({ items: [{ batch_id: 'other' }], total: 1, page: 1, located_batch_id: null })
+    const state = await store.applyRoute({ branchTag: 'main', focusBatchId: 'deleted' })
+    expect(state.focusBatchId).toBe('')
+    expect(store.locationMessage).toContain('来源批次 deleted')
+    expect(store.batches).toEqual([{ batch_id: 'other' }])
+    expect(store.error).toBe('')
+  })
+
+  it('新路由等待元数据期间，旧定位请求不得覆盖当前状态', async () => {
+    const store = useGpmBatchStore()
+    const oldPage = deferred()
+    apiMock.gpmHeatmapUploads.mockReturnValueOnce(oldPage.promise)
+    store.focusBatchId = 'old'
+    const oldLoad = store.loadBatches()
+    const meta = deferred()
+    apiMock.gpmHeatmapCatalog.mockReturnValueOnce(meta.promise)
+    const newRoute = store.applyRoute({ branchTag: 'main', focusBatchId: 'new' })
+    oldPage.resolve({ items: [], page: 9, located_batch_id: null })
+    await oldLoad
+    expect(store.locationMessage).toBe('')
+    expect(store.batchPage).toBe(1)
+    apiMock.gpmHeatmapUploads.mockResolvedValue({ items: [{ batch_id: 'new' }], page: 2, located_batch_id: 'new' })
+    meta.resolve(heatmapMeta)
+    await newRoute
+    expect(store.focusBatchId).toBe('new')
+    expect(store.batchPage).toBe(2)
+  })
   it('按路由规范化筛选并读取独立批次目录', async () => {
     const store = useGpmBatchStore()
     const state = await store.applyRoute({

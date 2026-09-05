@@ -24,9 +24,10 @@ const routerMock = vi.hoisted(() => ({
 const projectMock = vi.hoisted(() => ({
   uploadVisible: false,
   loadMeta: vi.fn(),
-  meta: { scene_data_flags: {} },
+  meta: { runtime_mode: 'online', scene_data_flags: {} },
 }))
 const screenshotMock = vi.hoisted(() => ({ running: false }))
+const gpmMock = vi.hoisted(() => ({ frame: null, routeState: vi.fn(() => ({})) }))
 const catalogMock = vi.hoisted(() => ({ filters: { branch_tag: 'engine-ue5' } }))
 const messageMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }))
 
@@ -36,6 +37,7 @@ vi.mock('../stores/screenshotComparisonStore', () => ({
   useScreenshotComparisonStore: () => screenshotMock,
 }))
 vi.mock('../stores/batchCatalogStore', () => ({ useBatchCatalogStore: () => catalogMock }))
+vi.mock('../stores/gpmHeatmapStore', () => ({ useGpmHeatmapStore: () => gpmMock }))
 vi.mock('@arco-design/web-vue', () => ({ Message: messageMock }))
 
 import TopBar from './TopBar.vue'
@@ -69,12 +71,50 @@ beforeEach(() => {
     fullPath: '/map-build/Coral_WP?branch_tag=engine-ue5',
   })
   projectMock.uploadVisible = false
-  projectMock.meta = { scene_data_flags: {} }
+  projectMock.meta = { runtime_mode: 'online', scene_data_flags: {} }
   projectMock.loadMeta.mockResolvedValue()
   screenshotMock.running = false
+  gpmMock.frame = null
 })
 
 describe('TopBar contextual workspace tools', () => {
+  it('从热力图按实际显示批次定位，避免使用尚未同步的 URL 批次', async () => {
+    setRoute('/gpm-heatmap/Forest_WP', {
+      query: { batch: 'old-url' },
+      fullPath: '/gpm-heatmap/Forest_WP?batch=old-url',
+    })
+    gpmMock.frame = {
+      map: { map_name: 'Forest_WP' },
+      batch: { batch_id: 'shown-batch', branch_tag: 'engine-ue5', platform: 'IOS', shading_quality: 0 },
+    }
+    const wrapper = mountTopBar()
+    await wrapper.get('button[aria-label="批次管理"]').trigger('click')
+    expect(routerMock.push).toHaveBeenCalledWith({
+      path: '/batch-management/gpm',
+      query: {
+        return_to: '/gpm-heatmap/Forest_WP?batch=shown-batch&branch_tag=engine-ue5&platform=IOS&quality=0',
+        branch_tag: 'engine-ue5', range_mode: 'rolling',
+        map_name: 'Forest_WP', platform: 'IOS', quality: '0', focus_batch: 'shown-batch',
+      },
+    })
+    wrapper.unmount()
+  })
+  it('离线热力图只保留热力图入口和刷新，不暴露在线管理功能', () => {
+    projectMock.meta = { runtime_mode: 'offline_heatmap', scene_data_flags: {} }
+    setRoute('/gpm-heatmap/Forest_WP', {
+      params: { mapName: 'Forest_WP' },
+      fullPath: '/gpm-heatmap/Forest_WP',
+    })
+    const wrapper = mountTopBar()
+
+    expect(wrapper.findAll('.tab').map((tab) => tab.text())).toEqual(['热力图'])
+    expect(wrapper.find('.offline-badge').text()).toBe('离线数据')
+    expect(wrapper.find('button[aria-label="刷新"]').exists()).toBe(true)
+    expect(wrapper.find('button[aria-label="批次管理"]').exists()).toBe(false)
+    expect(wrapper.find('button[aria-label="热力图设置"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('主导航只保留三个工作区，烘培数据提供批次入口但不提供截图设置', () => {
     const wrapper = mountTopBar()
 

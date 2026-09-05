@@ -24,13 +24,12 @@ from fastapi import UploadFile
 from PIL import Image, UnidentifiedImageError
 
 from .gpm_common import IMAGE_SUFFIXES, PLATFORMS, SAFE_IDENTIFIER, safe_segment
+from .gpm_configuration_format import PACKAGE_FORMAT, PACKAGE_VERSION
 from .gpm_scale_expressions import ScaleExpressionError, compile_scale_segments
 from .gpm_map_config import MAX_MAP_IMAGE_BYTES
 from .gpm_storage import connect_gpm_database, gpm_assets_dir
 
 
-PACKAGE_FORMAT = "pixelcomparison-gpm-config"
-PACKAGE_VERSION = 1
 MAX_PACKAGE_BYTES = 512 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_PACKAGE_FILES = 1000

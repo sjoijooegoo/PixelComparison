@@ -1,3 +1,5 @@
+import { defaultGpmCapturedRange, gpmBatchLocation } from './gpmBatchRoute'
+
 const WORKSPACE_PATHS = {
   screenshot: '/screenshot',
   mapBuild: '/map-build',
@@ -50,8 +52,42 @@ export function workspaceContext(route) {
   }
 }
 
-export function batchManagementLocation(route) {
+function heatmapReturnTo(route, frame, state) {
+  // 帧已切换而详情/趋势尚未完成时，地址栏可能仍是上一批次。
+  const target = new URL(route.fullPath || WORKSPACE_PATHS.gpm, 'http://localhost')
+  if (frame.map?.map_name) target.pathname = `${WORKSPACE_PATHS.gpm}/${encodeURIComponent(frame.map.map_name)}`
+  const batch = frame.batch
+  const values = {
+    branch_tag: batch.branch_tag, platform: batch.platform, quality: batch.shading_quality, batch: batch.batch_id,
+    point: state?.point, metric: state?.metric, trend_mode: state?.trendMode, days: state?.days,
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined) continue
+    if (value === null || value === '') target.searchParams.delete(key)
+    else target.searchParams.set(key, String(value))
+  }
+  return `${target.pathname}${target.search}${target.hash}`
+}
+
+export function batchManagementLocation(route, gpmFrame = null, gpmState = null) {
   const context = workspaceContext(route)
+  if (context.batchDomain === 'gpm' && gpmFrame?.batch?.batch_id) {
+    const batch = gpmFrame.batch
+    const range = defaultGpmCapturedRange()
+    const capturedDate = String(batch.captured_at || '').slice(0, 10)
+    const outsideRange = capturedDate && (capturedDate < range.capturedFrom || capturedDate > range.capturedTo)
+    return gpmBatchLocation({
+      returnTo: heatmapReturnTo(route, gpmFrame, gpmState),
+      branchTag: batch.branch_tag,
+      platform: batch.platform,
+      mapName: gpmFrame.map?.map_name,
+      shadingQuality: batch.shading_quality,
+      focusBatchId: batch.batch_id,
+      rangeMode: outsideRange ? 'fixed' : 'rolling',
+      capturedFrom: outsideRange && capturedDate < range.capturedFrom ? capturedDate : range.capturedFrom,
+      capturedTo: outsideRange && capturedDate > range.capturedTo ? capturedDate : range.capturedTo,
+    })
+  }
   return {
     path: context.batchDomain === 'gpm'
       ? '/batch-management/gpm'

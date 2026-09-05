@@ -47,4 +47,12 @@ describe('GPM batch management route state', () => {
       query: { branch_tag: 'main', range_mode: 'rolling' },
     })
   })
+
+  it('定位批次进入 URL 和路由身份，普通翻页不携带定位', () => {
+    const location = gpmBatchLocation({ focusBatchId: '67526', page: 3 })
+    const parsed = parseGpmBatchRoute({ query: location.query })
+    expect(parsed).toMatchObject({ focusBatchId: '67526', page: 3 })
+    expect(gpmBatchRouteKey(parsed)).not.toBe(gpmBatchRouteKey({ ...parsed, focusBatchId: '' }))
+    expect(gpmBatchLocation({ page: 4 }).query.focus_batch).toBeUndefined()
+  })
 })

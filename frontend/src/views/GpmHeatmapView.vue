@@ -113,13 +113,11 @@ function syncRoute() {
   return wrapped
 }
 
-async function applyCurrentRoute({ preferLatest = false } = {}) {
+async function applyCurrentRoute() {
   if (!ownsCurrentRoute()) return
   const sequence = ++routeSequence
   try {
-    const requested = routeRequest()
-    if (preferLatest) requested.batchId = ''
-    await store.applyRoute(requested)
+    await store.applyRoute(routeRequest())
     if (sequence !== routeSequence || !ownsCurrentRoute()) return
     await syncRoute()
   } catch (error) {
@@ -240,7 +238,8 @@ watch(() => route.fullPath, () => {
 onMounted(() => {
   pageActive = true
   unregisterRefresh = registerPageRefresh(refresh)
-  applyCurrentRoute({ preferLatest: true })
+  // 返回页面或打开批次链接时保留指定批次；未指定批次才由接口选择最新。
+  applyCurrentRoute()
 })
 onBeforeRouteLeave(() => {
   // 离开守卫早于异步目标组件解析完成，立即使当前页的请求和路由写入失效。

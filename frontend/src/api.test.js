@@ -147,6 +147,21 @@ describe('api request encoding', () => {
     })
   })
 
+  it('按批次和分支下载离线包并保留服务端文件名', async () => {
+    const blob = new Blob(['offline'])
+    const filename = 'SceneScope-heatmap-engine-ue5-67526.ssheat'
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => `attachment; filename="${filename}"` },
+      blob: async () => blob,
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await api.exportGpmOfflinePackage('batch / 1', 'engine ue5')).toEqual({ blob, filename })
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/api/gpm-heatmaps/uploads/batch%20%2F%201/offline-package?branch_tag=engine%20ue5',
+    )
+  })
+
   it('支持热力图配置包导出、检查和应用', async () => {
     const archive = new Blob(['zip'], { type: 'application/zip' })
     const fetchMock = vi.fn()

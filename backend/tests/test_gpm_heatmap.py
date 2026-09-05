@@ -365,6 +365,38 @@ def test_upload_list_uses_database_id_desc_instead_of_capture_time(client, png_b
     assert items[0]["id"] > items[1]["id"]
 
 
+def test_upload_location_uses_filtered_id_order_and_current_page_size(client, png_bytes):
+    for index in range(5):
+        report = _report(map_name="Forest_WP", quality=0, p4_version=500 - index)
+        report["data"].append(_report(map_name="Other_WP", quality=0, p4_version=500 - index)["data"][0])
+        report["data"][1]["detail"] = []
+        uploaded = _upload(client, png_bytes(), batch_id=f"locate-{index}",
+                           captured_at=_captured_at(days_ago=index), report=report)
+        assert uploaded.status_code == 201, uploaded.text
+    assert _upload(client, png_bytes(), batch_id="other-quality",
+                   report=_report(map_name="Forest_WP", quality=4)).status_code == 201
+    assert _upload(client, png_bytes(), batch_id="other-branch", branch_tag="release",
+                   report=_report(map_name="Forest_WP", quality=0)).status_code == 201
+    filters = {"branch_tag": "main", "map_name": "Forest_WP", "platform": "Android",
+               "shading_quality": 0, "locate_batch_id": "locate-1"}
+    result = client.get("/api/gpm-heatmaps/uploads", params={**filters, "page_size": 2, "page": 99}).json()
+    assert result["page"] == 2
+    assert result["total"] == 5
+    assert result["located_batch_id"] == "locate-1"
+    assert [item["batch_id"] for item in result["items"]] == ["locate-2", "locate-1"]
+    resized = client.get("/api/gpm-heatmaps/uploads", params={**filters, "page_size": 1}).json()
+    assert resized["page"] == 4
+    assert resized["items"][0]["batch_id"] == "locate-1"
+    # 定位不能跨越分支、日期或画质筛选；缺失来源回到第一页正常浏览。
+    for overrides in ({"branch_tag": "release"}, {"shading_quality": 4},
+                      {"platform": "IOS"}, {"map_name": "Missing"},
+                      {"captured_from": "2026-08-29"}, {"locate_batch_id": "deleted"}):
+        missing = client.get("/api/gpm-heatmaps/uploads", params={**filters, **overrides, "page": 99}).json()
+        assert missing["located_batch_id"] is None
+        assert missing["page"] == 1
+        assert all(item["batch_id"] != "locate-1" for item in missing["items"]) or overrides == {"locate_batch_id": "deleted"}
+
+
 def test_removed_gpm_compatibility_endpoints_are_not_routable(client):
     for path in (
         "/api/gpm-heatmaps/meta",

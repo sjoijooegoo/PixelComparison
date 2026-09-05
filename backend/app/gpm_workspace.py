@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from .gpm_batch_catalog import batch_dto
 from .gpm_common import asset_url, http_error, require_identifier
 from .gpm_map_config import runtime_map_config
+from .gpm_metric_values import metric_change_percentages as _metric_change_percentages
 from .gpm_scale_config import resolve_heat_scales
 from .gpm_storage import connect_gpm_database, gpm_assets_dir
 
@@ -62,34 +63,6 @@ def _point_dto(row, *, detail: bool = False) -> dict:
         item["trend_data"] = json.loads(row["trend_data_json"])
         item["detail_data"] = json.loads(row["detail_data_json"])
     return item
-
-
-def _finite_number(value: object) -> float | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
-def _metric_change_percentages(
-    current_metrics: dict,
-    previous_metrics: dict | None,
-) -> dict[str, float]:
-    if not previous_metrics:
-        return {}
-    changes: dict[str, float] = {}
-    for key, current_value in current_metrics.items():
-        current_number = _finite_number(current_value)
-        previous_number = _finite_number(previous_metrics.get(key))
-        if current_number is None or previous_number is None or previous_number == 0:
-            continue
-        change = (current_number - previous_number) / abs(previous_number) * 100
-        if math.isfinite(change):
-            changes[key] = change
-    return changes
 
 
 def _latest_platform_p4(
@@ -273,32 +246,49 @@ def get_map_frame(
         connection.close()
 
 
-@router.get("/api/gpm-heatmaps/points/{point_id}")
-def get_point_detail(point_id: int):
+def get_point_details(point_ids: list[int]) -> dict[int, dict]:
+    """批量读取点位详情，供在线详情接口与离线包导出共同复用。"""
+
+    unique_ids = list(dict.fromkeys(int(point_id) for point_id in point_ids))
+    if not unique_ids:
+        return {}
     connection = connect_gpm_database()
     try:
-        row = connection.execute(
-            """
-            SELECT p.*, m.map_name, u.batch_id, u.branch_tag, u.captured_at,
-                   u.p4_version, u.platform, u.shading_quality
-            FROM gpm_points p JOIN gpm_upload_maps m ON m.id = p.upload_map_id
-            JOIN gpm_uploads u ON u.id = m.upload_id WHERE p.id = ?
-            """,
-            (point_id,),
-        ).fetchone()
-        if not row:
-            raise http_error(404, "GPM_POINT_NOT_FOUND", "点位不存在")
-        return {
-            **_point_dto(row, detail=True),
-            "map_name": row["map_name"],
-            "batch_id": row["batch_id"],
-            "captured_at": row["captured_at"],
-            "p4_version": row["p4_version"],
-            "platform": row["platform"],
-            "shading_quality": row["shading_quality"],
-        }
+        result = {}
+        # SQLite 的变量数量存在上限，分块后可兼容点位很多的地图。
+        for offset in range(0, len(unique_ids), 400):
+            chunk = unique_ids[offset:offset + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = connection.execute(
+                f"""
+                SELECT p.*, m.map_name, u.batch_id, u.branch_tag, u.captured_at,
+                       u.p4_version, u.platform, u.shading_quality
+                FROM gpm_points p JOIN gpm_upload_maps m ON m.id = p.upload_map_id
+                JOIN gpm_uploads u ON u.id = m.upload_id WHERE p.id IN ({placeholders})
+                """,
+                tuple(chunk),
+            ).fetchall()
+            for row in rows:
+                result[int(row["id"])] = {
+                    **_point_dto(row, detail=True),
+                    "map_name": row["map_name"],
+                    "batch_id": row["batch_id"],
+                    "captured_at": row["captured_at"],
+                    "p4_version": row["p4_version"],
+                    "platform": row["platform"],
+                    "shading_quality": row["shading_quality"],
+                }
+        return result
     finally:
         connection.close()
+
+
+@router.get("/api/gpm-heatmaps/points/{point_id}")
+def get_point_detail(point_id: int):
+    detail = get_point_details([point_id]).get(point_id)
+    if not detail:
+        raise http_error(404, "GPM_POINT_NOT_FOUND", "点位不存在")
+    return detail
 
 
 @router.get("/api/gpm-heatmaps/maps/{map_name}/trends")

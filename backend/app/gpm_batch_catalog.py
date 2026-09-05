@@ -128,6 +128,7 @@ def list_uploads(
     captured_to: str | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    locate_batch_id: str | None = Query(None, max_length=120),
 ):
     branch_tag = require_identifier(branch_tag.strip().lower(), "branch_tag", maximum=120)
     captured_from = _filter_date(captured_from, "captured_from")
@@ -155,6 +156,23 @@ def list_uploads(
 
     connection = connect_gpm_database()
     try:
+        # 定位、总数和当前页使用同一读取快照，页码与列表保持一致。
+        connection.execute("BEGIN")
+        located_batch_id = None
+        if locate_batch_id:
+            target = connection.execute(
+                f"SELECT u.id FROM gpm_uploads u WHERE {where} AND u.batch_id = ?",
+                (*params, locate_batch_id),
+            ).fetchone()
+            if target:
+                preceding = connection.execute(
+                    f"SELECT COUNT(*) FROM gpm_uploads u WHERE {where} AND u.id > ?",
+                    (*params, target["id"]),
+                ).fetchone()[0]
+                page = int(preceding) // page_size + 1
+                located_batch_id = locate_batch_id
+            else:
+                page = 1
         total = int(connection.execute(
             f"SELECT COUNT(*) FROM gpm_uploads u WHERE {where}", tuple(params)
         ).fetchone()[0])
@@ -193,7 +211,10 @@ def list_uploads(
                     "partial" if configured else "missing"
                 ),
             })
-        return {"items": items, "total": total, "page": page, "page_size": page_size}
+        return {
+            "items": items, "total": total, "page": page, "page_size": page_size,
+            "located_batch_id": located_batch_id,
+        }
     finally:
         connection.close()
 

@@ -7,6 +7,7 @@ import GpmConfigurationTransfer from './GpmConfigurationTransfer.vue'
 import { useBatchCatalogStore } from '../stores/batchCatalogStore'
 import { useProjectStore } from '../stores/projectStore'
 import { useScreenshotComparisonStore } from '../stores/screenshotComparisonStore'
+import { useGpmHeatmapStore } from '../stores/gpmHeatmapStore'
 import {
   batchManagementLocation,
   gpmSettingsLocation,
@@ -19,11 +20,17 @@ import {
 const project = useProjectStore()
 const catalog = useBatchCatalogStore()
 const screenshot = useScreenshotComparisonStore()
+const gpm = useGpmHeatmapStore()
 const route = useRoute()
 const router = useRouter()
 
-const tabs = primaryWorkspaces
 const context = computed(() => workspaceContext(route))
+const offlineHeatmap = computed(() => project.meta.runtime_mode === 'offline_heatmap')
+const tabs = computed(() => (
+  offlineHeatmap.value
+    ? primaryWorkspaces.filter((workspace) => workspace.id === 'gpm')
+    : primaryWorkspaces
+))
 const showRefresh = computed(() => context.value.isDataPage || context.value.isManagement)
 const showWorkspaceReturn = computed(() => context.value.isManagement || context.value.isSettings)
 const workspaceLabel = computed(() => ({
@@ -33,12 +40,12 @@ const workspaceLabel = computed(() => ({
 const showManualUpload = computed(() => (
   context.value.isDataPage && context.value.workspace !== 'gpm'
 ))
-const showBatchManagement = computed(() => context.value.isDataPage)
+const showBatchManagement = computed(() => context.value.isDataPage && !offlineHeatmap.value)
 const showScreenshotSettings = computed(() => (
   context.value.isDataPage && context.value.workspace === 'screenshot'
 ))
 const showGpmSettings = computed(() => (
-  context.value.isDataPage && context.value.workspace === 'gpm'
+  context.value.isDataPage && context.value.workspace === 'gpm' && !offlineHeatmap.value
 ))
 const showGpmConfigurationTransfer = computed(() => (
   context.value.isSettings && context.value.workspace === 'gpm'
@@ -97,7 +104,7 @@ function tabTarget(tab) {
 }
 
 function openBatchManagement() {
-  return router.push(batchManagementLocation(route))
+  return router.push(batchManagementLocation(route, gpm.frame, gpm.routeState()))
 }
 
 function openScreenshotSettings() {
@@ -167,6 +174,7 @@ onUnmounted(() => {
         @click="router.push(tabTarget(t))">{{ t.label }}</button>
     </nav>
     <div class="actions">
+      <span v-if="offlineHeatmap" class="offline-badge">离线数据</span>
       <a-tooltip v-if="showWorkspaceReturn" :content="`返回${workspaceLabel}`">
         <button class="icon-btn return-button" :aria-label="`返回${workspaceLabel}`"
           @click="returnToWorkspace">
@@ -266,6 +274,11 @@ onUnmounted(() => {
   height: 2px; background: rgb(var(--arcoblue-6)); border-radius: 2px;
 }
 .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.offline-badge {
+  padding: 3px 8px; border: 1px solid rgba(var(--arcoblue-5), .35); border-radius: 999px;
+  color: rgb(var(--arcoblue-6)); background: rgba(var(--arcoblue-6), .08);
+  font-size: 11px; line-height: 16px; white-space: nowrap;
+}
 .action-divider { width: 1px; height: 18px; margin: 0 2px; background: var(--color-border-2); }
 .icon-btn {
   width: 30px; height: 30px; border-radius: 6px; cursor: pointer;

@@ -3,6 +3,7 @@ import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { gpmBatchLocation } from '../gpmBatchRoute'
+import { api } from '../api'
 import { useGpmBatchStore } from '../stores/gpmBatchStore'
 import Pager from './Pager.vue'
 import { createBatchTableSizer } from './batchTableSizer'
@@ -11,6 +12,7 @@ const store = useGpmBatchStore()
 const route = useRoute()
 const router = useRouter()
 const deletingId = ref(null)
+const exportingId = ref(null)
 const tableWrap = ref(null)
 const tableSizer = createBatchTableSizer(store)
 let mounted = false
@@ -25,7 +27,7 @@ const columns = [
   { title: '采集时间', dataIndex: 'captured_at', slotName: 'captured', width: 170 },
   { title: '点位 / 截图', slotName: 'counts', width: 120 },
   { title: '地图配置', slotName: 'mapStatus', width: 130 },
-  { title: '操作', slotName: 'ops', width: 180, align: 'center' },
+  { title: '操作', slotName: 'ops', width: 230, align: 'center' },
 ]
 
 function formatTime(value) {
@@ -79,6 +81,42 @@ async function remove(record) {
   }
 }
 
+function isSourceBatch(record) {
+  return record.batch_id === store.focusBatchId && record.branch_tag === store.filters.branchTag
+}
+
+function rowClass(record) {
+  return isSourceBatch(record) ? 'focused-batch' : ''
+}
+
+watch(() => [store.batches, store.focusBatchId], async () => {
+  await nextTick()
+  if (mounted) tableWrap.value?.querySelector('.focused-batch')?.scrollIntoView?.({ block: 'nearest' })
+}, { flush: 'post' })
+
+async function exportOffline(record) {
+  if (exportingId.value !== null) return
+  exportingId.value = record.id
+  let url = null
+  let anchor = null
+  try {
+    const result = await api.exportGpmOfflinePackage(record.batch_id, record.branch_tag)
+    url = URL.createObjectURL(result.blob)
+    anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = result.filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    Message.success('离线包已生成，请将下载文件放入查看器的 data 目录后刷新')
+  } catch (error) {
+    Message.error(error?.message || '离线包导出失败')
+  } finally {
+    anchor?.remove()
+    if (url) URL.revokeObjectURL(url)
+    exportingId.value = null
+  }
+}
+
 function changePage(page) {
   return router.push(gpmBatchLocation({
     returnTo: route.query.return_to || '', ...store.filters, page,
@@ -101,14 +139,15 @@ onUnmounted(() => { mounted = false; tableSizer.disconnect() })
 <template>
   <section class="gpm-batch-panel card">
     <div ref="tableWrap" class="table-wrap">
+      <div v-if="store.locationMessage" class="location-message" role="status">{{ store.locationMessage }}</div>
       <div v-if="store.error" class="load-error">
         <span>{{ store.error }}</span>
         <a-button size="mini" type="primary" @click="store.loadBatches().catch(() => {})">
           重新加载
         </a-button>
       </div>
-      <a-table :columns="columns" :data="store.batches" :pagination="false"
-        :loading="store.loading" row-key="id" size="medium">
+      <a-table :columns="columns" :data="store.batches" :pagination="false" :hoverable="false"
+        :loading="store.loading" :row-class="rowClass" row-key="id" size="medium">
         <template #batch="{ record }">
           <a v-if="record.batch_url" class="batch-link mono" :href="record.batch_url"
             target="_blank" rel="noopener noreferrer" title="查看流水线">
@@ -131,10 +170,16 @@ onUnmounted(() => { mounted = false; tableSizer.disconnect() })
         </template>
         <template #ops="{ record }">
           <a-button size="mini" type="text" @click="openHeatmap(record)">查看热力图</a-button>
+          <a-button size="mini" type="text" class="export-button"
+            title="导出离线包，放入查看器的 data 目录后刷新"
+            :loading="exportingId === record.id"
+            :disabled="exportingId !== null || deletingId === record.id"
+            @click="exportOffline(record)">导出</a-button>
           <a-popconfirm position="br" type="warning" ok-text="删除" cancel-text="取消"
             :content="`删除批次 ${record.batch_id}？将删除其全部地图数据、点位、指标和截图；独立地图配置不会删除。`"
             @ok="remove(record)">
             <a-button size="mini" type="text" class="delete-button" title="删除批次"
+              :disabled="exportingId === record.id"
               :loading="deletingId === record.id">
               <template #icon>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -159,6 +204,7 @@ onUnmounted(() => { mounted = false; tableSizer.disconnect() })
 .table-wrap { flex: 1; min-height: 0; overflow: auto; margin: 12px 16px 0; }
 .table-footer { display: flex; justify-content: flex-end; padding: 10px 16px; }
 .batch-id { color: var(--color-text-2); }
+.location-message { padding: 8px 12px; color: var(--color-text-3); background: var(--color-fill-2); }
 .batch-link { color: rgb(var(--arcoblue-6)); text-decoration: none; }
 .batch-link:hover { text-decoration: underline; }
 .scene-label { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -172,5 +218,5 @@ onUnmounted(() => { mounted = false; tableSizer.disconnect() })
 :deep(.arco-table-td) { padding-top: 4px; padding-bottom: 4px; }
 :deep(.arco-table-th) { background: var(--color-fill-2); font-weight: 600; }
 :deep(.arco-table-tbody tr:nth-child(even) .arco-table-td) { background: var(--color-fill-1); }
-:deep(.arco-table-tbody tr:hover .arco-table-td) { background: var(--color-fill-3); }
+:deep(.arco-table-tr.focused-batch .arco-table-td) { background: var(--color-primary-light-1); }
 </style>

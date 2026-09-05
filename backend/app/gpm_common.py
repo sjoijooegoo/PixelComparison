@@ -8,10 +8,10 @@ from pathlib import PurePosixPath
 
 from fastapi import HTTPException
 
+from .gpm_offline_format import PLATFORMS, QUALITY_LABELS
+
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
-QUALITY_LABELS = {0: "节能", 1: "流畅", 2: "均衡", 3: "精美", 4: "极致", 5: "电影"}
-PLATFORMS = ("IOS", "Android", "Windows")
 SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._-]+")
 SAFE_IDENTIFIER = re.compile(r"[A-Za-z0-9._-]{1,200}")
 

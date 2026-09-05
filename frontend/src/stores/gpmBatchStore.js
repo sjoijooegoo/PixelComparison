@@ -27,6 +27,8 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
     batchTotal: 0,
     batchPage: 1,
     batchPageSize: PAGE_SIZE,
+    focusBatchId: '',
+    locationMessage: '',
     loading: false,
     error: '',
     initialized: false,
@@ -45,6 +47,7 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
       captured_to: state.filters.capturedTo,
       page: state.batchPage,
       page_size: state.batchPageSize,
+      ...(state.focusBatchId ? { locate_batch_id: state.focusBatchId } : {}),
     }),
   },
 
@@ -64,6 +67,9 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
 
     async applyRoute(requested) {
       const routeSequence = ++this.routeSequence
+      // 切换筛选后，即使新元数据尚未返回，旧定位响应也不能再修改页码和高亮。
+      this.requestSequence += 1
+      this.loading = false
       const isLatest = () => routeSequence === this.routeSequence
       let branchTag = String(requested.branchTag || 'main').trim().toLowerCase()
       let meta = await this.loadMeta(branchTag)
@@ -81,6 +87,8 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
       this.filters.capturedTo = requested.capturedTo || ''
       this.filters.rangeMode = requested.rangeMode === 'fixed' ? 'fixed' : 'rolling'
       this.batchPage = Number(requested.page) || 1
+      this.focusBatchId = requested.focusBatchId || ''
+      this.locationMessage = ''
       await this.loadBatches()
       if (!isLatest()) return null
       this.initialized = true
@@ -92,6 +100,7 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
         returnTo,
         ...this.filters,
         page: this.batchPage,
+        focusBatchId: this.focusBatchId,
       }
     },
 
@@ -104,6 +113,11 @@ export const useGpmBatchStore = defineStore('gpmBatch', {
         if (sequence !== this.requestSequence) return null
         this.batches = result.items || []
         this.batchTotal = Number(result.total) || 0
+        this.batchPage = Number(result.page) || this.batchPage
+        if (this.focusBatchId && result.located_batch_id !== this.focusBatchId) {
+          this.locationMessage = `来源批次 ${this.focusBatchId} 已删除或不在当前筛选范围内`
+          this.focusBatchId = ''
+        }
         return result
       } catch (error) {
         if (sequence !== this.requestSequence) return null

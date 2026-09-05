@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { api } from '../api'
 
 const DEFAULT_META = {
+  runtime_mode: 'online',
   branch_tags: ['main'],
   scene_ids: [],
   scene_data_flags: {},

@@ -84,6 +84,45 @@ describe('GpmHeatmapView route ownership', () => {
     }))
   })
 
+  it('从批次管理返回时重新挂载热力图仍恢复地址中的批次和点位', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/gpm-heatmap/:mapName?', component: GpmHeatmapView },
+        { path: '/batch-management/gpm', component: EmptyView },
+      ],
+    })
+    const source = '/gpm-heatmap/Forest_WP?platform=IOS&quality=1&batch=batch-1&point=13'
+    await router.push(source)
+    await router.isReady()
+    const wrapper = mount(AppView, {
+      global: {
+        plugins: [router],
+        stubs: {
+          GpmDetailPanel: true, GpmMapCanvas: true, GpmScreenshotStrip: true, GpmTrendCard: true,
+          'a-button': true, 'a-empty': true, 'a-option': true, 'a-radio': true,
+          'a-radio-group': true, 'a-select': true, 'a-spin': true,
+        },
+      },
+    })
+    try {
+      await flushRoute()
+      await router.push({ path: '/batch-management/gpm', query: { return_to: source } })
+      await flushRoute()
+      resolveApplyRoute()
+      await flushRoute()
+      storeMock.applyRoute.mockClear()
+
+      await router.push(router.currentRoute.value.query.return_to)
+      await flushRoute()
+      expect(storeMock.applyRoute).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        mapName: 'Forest_WP', platform: 'IOS', shadingQuality: '1', batchId: 'batch-1', point: '13',
+      }))
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it('快速离页时不会让尚未完成的热力图初始化覆盖目标页面', async () => {
     let resolveTargetView
     const router = createRouter({

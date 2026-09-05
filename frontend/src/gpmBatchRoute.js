@@ -29,6 +29,7 @@ export function parseGpmBatchRoute(route) {
   const page = Number(firstValue(route.query.page))
   return {
     returnTo: firstValue(route.query.return_to) || '',
+    focusBatchId: String(firstValue(route.query.focus_batch) || ''),
     branchTag: firstValue(route.query.branch_tag) || 'main',
     platform: firstValue(route.query.platform) || '',
     mapName: firstValue(route.query.map_name) || '',
@@ -43,6 +44,7 @@ export function parseGpmBatchRoute(route) {
 export function gpmBatchRouteKey(state) {
   return JSON.stringify({
     returnTo: state.returnTo || '', branchTag: state.branchTag || 'main',
+    focusBatchId: state.focusBatchId || '',
     platform: state.platform || '', mapName: state.mapName || '',
     shadingQuality: state.shadingQuality === '' ? '' : Number(state.shadingQuality),
     rangeMode: state.rangeMode === 'fixed' ? 'fixed' : 'rolling',
@@ -55,6 +57,7 @@ export function gpmBatchLocation(state) {
   const rangeMode = state.rangeMode === 'fixed' ? 'fixed' : 'rolling'
   const query = { branch_tag: state.branchTag || 'main', range_mode: rangeMode }
   if (state.returnTo) query.return_to = state.returnTo
+  if (state.focusBatchId) query.focus_batch = state.focusBatchId
   if (state.platform) query.platform = state.platform
   if (state.mapName) query.map_name = state.mapName
   if (state.shadingQuality !== '' && state.shadingQuality != null) {

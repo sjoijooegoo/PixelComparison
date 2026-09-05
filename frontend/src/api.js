@@ -252,6 +252,11 @@ export const api = {
     del(`/api/gpm-heatmaps/configuration/scale-sets/${encodeURIComponent(scaleSetId)}`),
   deleteGpmHeatmapUpload: (batchId, branchTag = 'main') =>
     del(`/api/gpm-heatmaps/uploads/${encodeURIComponent(batchId)}?branch_tag=${encodeURIComponent(branchTag)}`),
+  exportGpmOfflinePackage: (batchId, branchTag = 'main') =>
+    download(
+      `/api/gpm-heatmaps/uploads/${encodeURIComponent(batchId)}/offline-package?branch_tag=${encodeURIComponent(branchTag)}`,
+      'SceneScope-heatmap.ssheat',
+    ),
   baselines: (filters = {}) => get('/api/baselines', filters),
   settings: () => get('/api/settings'),
   saveSettings: (body) => put('/api/settings', body),
