@@ -405,7 +405,7 @@ describe('GPMHeatmap store request ordering', () => {
     expect(store.filters.batchId).toBe('ios-nearest')
   })
 
-  it('同一场景切换画质或批次时按点位序号保留当前点位', async () => {
+  it('同一场景切换画质时优先匹配完全相同的 P4 并保留点位序号', async () => {
     const oldPoints = [
       { id: 11, index: 1, screenshot_id: '01' },
       { id: 12, index: 2, screenshot_id: '02' },
@@ -435,6 +435,7 @@ describe('GPMHeatmap store request ordering', () => {
       'Village_Dimension_Main',
       expect.objectContaining({
         shading_quality: 3, batch_id: '', nearest_p4_version: null,
+        preferred_p4_version: 2960783,
       }),
       expect.any(Object),
     )
@@ -443,7 +444,7 @@ describe('GPMHeatmap store request ordering', () => {
     expect(apiMock.gpmHeatmapPoint).toHaveBeenCalledWith(22, expect.any(Object))
   })
 
-  it('切换场景时不匹配旧 P4，由后端选择目标范围最新批次', async () => {
+  it('切换场景时优先匹配完全相同的 P4', async () => {
     const store = useGpmHeatmapStore()
     Object.assign(store.filters, {
       mapName: 'OldScene', platform: 'Android', shadingQuality: 5, batchId: 'old-batch',
@@ -463,7 +464,7 @@ describe('GPMHeatmap store request ordering', () => {
     expect(apiMock.gpmHeatmapFrame).toHaveBeenCalledWith(
       'NewScene',
       expect.objectContaining({
-        batch_id: '', nearest_p4_version: null,
+        batch_id: '', nearest_p4_version: null, preferred_p4_version: 2960783,
       }),
       expect.any(Object),
     )

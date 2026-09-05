@@ -218,11 +218,12 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       }
     },
 
-    async loadFrame(
+    async loadFrame({
       requestedBatchId = this.filters.batchId,
       nearestP4Version = null,
       preferredPoint = null,
-    ) {
+      preferredP4Version = null,
+    } = {}) {
       if (!this.filters.mapName) {
         cancelChannel(this, 'frame')
         this.frame = null
@@ -247,6 +248,7 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
         shading_quality: this.filters.shadingQuality,
         batch_id: requestedBatchId,
         nearest_p4_version: requestedBatchId ? null : nearestP4Version,
+        preferred_p4_version: requestedBatchId ? null : preferredP4Version,
       }
       const key = JSON.stringify([this.filters.mapName, params])
       const request = begin(this, 'frame', key)
@@ -420,7 +422,10 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       this.days = [7, 14, 30].includes(Number(requested.days)) ? Number(requested.days) : 14
       const requestedPoint = pointIndexIdentity(requested.point)
       this.selectedPointId = null
-      await this.loadFrame(requested.batchId || '', null, requestedPoint)
+      await this.loadFrame({
+        requestedBatchId: requested.batchId || '',
+        preferredPoint: requestedPoint,
+      })
       if (!isCurrentRoute()) return null
       await Promise.all([this.loadPoint(), this.loadTrends()])
       if (!isCurrentRoute()) return null
@@ -433,7 +438,15 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       const routeSequence = runtime(this).routeSequence
       const isCurrent = () => routeSequence === runtime(this).routeSequence
       const switchingPlatform = platform !== undefined && platform !== this.filters.platform
+      const switchingMap = mapName !== undefined && mapName !== this.filters.mapName
+      const switchingQuality = (
+        shadingQuality !== undefined
+        && qualityValue(shadingQuality) !== qualityValue(this.filters.shadingQuality)
+      )
       const nearestP4Version = switchingPlatform
+        ? (this.frame?.batch?.p4_version ?? null)
+        : null
+      const preferredP4Version = (switchingMap || switchingQuality) && !switchingPlatform
         ? (this.frame?.batch?.p4_version ?? null)
         : null
       const selectingBatch = batchId !== undefined
@@ -453,11 +466,12 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
         this.pointDetail = null
         this.trends = null
       }
-      await this.loadFrame(
-        selectingBatch ? batchId : '',
-        selectingBatch ? null : nearestP4Version,
+      await this.loadFrame({
+        requestedBatchId: selectingBatch ? batchId : '',
+        nearestP4Version: selectingBatch ? null : nearestP4Version,
         preferredPoint,
-      )
+        preferredP4Version: selectingBatch ? null : preferredP4Version,
+      })
       if (!isCurrent()) return null
       await Promise.all([this.loadPoint(), this.loadTrends()])
       if (!isCurrent()) return null
@@ -469,7 +483,7 @@ export const useGpmHeatmapStore = defineStore('gpmHeatmap', {
       const preferredPoint = pointSelectionIdentity(this.selectedPoint)
       this.cancelAll()
       await this.loadMeta()
-      await this.loadFrame('', null, preferredPoint)
+      await this.loadFrame({ requestedBatchId: '', preferredPoint })
       await Promise.all([this.loadPoint(), this.loadTrends()])
     },
 

@@ -746,6 +746,49 @@ def test_frame_selects_newest_capture_within_latest_p4(client, png_bytes):
     ]
 
 
+def test_frame_prefers_exact_p4_and_falls_back_to_latest(client, png_bytes):
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="source-p4",
+        report=_report(map_name="Village_Dimension_Main", p4_version=300),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="target-same-p4",
+        report=_report(map_name="Forest_WP", p4_version=300),
+    ).status_code == 201
+    assert _upload(
+        client,
+        png_bytes(),
+        batch_id="target-latest-p4",
+        report=_report(map_name="Forest_WP", p4_version=400),
+    ).status_code == 201
+
+    exact = client.get(
+        "/api/gpm-heatmaps/maps/Forest_WP/frame",
+        params={
+            "platform": "Android",
+            "shading_quality": 5,
+            "preferred_p4_version": 300,
+        },
+    )
+    assert exact.status_code == 200
+    assert exact.json()["batch"]["batch_id"] == "target-same-p4"
+
+    fallback = client.get(
+        "/api/gpm-heatmaps/maps/Forest_WP/frame",
+        params={
+            "platform": "Android",
+            "shading_quality": 5,
+            "preferred_p4_version": 350,
+        },
+    )
+    assert fallback.status_code == 200
+    assert fallback.json()["batch"]["batch_id"] == "target-latest-p4"
+
+
 def test_frame_compares_with_previous_upload_id_in_the_same_scope(client, png_bytes):
     assert _upload(
         client,

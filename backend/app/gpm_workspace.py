@@ -120,6 +120,7 @@ def get_map_frame(
     shading_quality: int | None = Query(None, ge=0, le=5),
     batch_id: str | None = Query(None),
     nearest_p4_version: int | None = Query(None, ge=0),
+    preferred_p4_version: int | None = Query(None, ge=0),
 ):
     map_name = require_identifier(map_name, "map_name")
     connection = connect_gpm_database()
@@ -167,13 +168,23 @@ def get_map_frame(
                     ),
                 )
             else:
-                selected = next(
-                    (
-                        row for row in batches
-                        if latest_p4_version is not None
-                        and int(row["p4_version"]) == latest_p4_version
-                    ),
-                    batches[0],
+                selected = (
+                    next(
+                        (
+                            row for row in batches
+                            if preferred_p4_version is not None
+                            and int(row["p4_version"]) == preferred_p4_version
+                        ),
+                        None,
+                    )
+                    or next(
+                        (
+                            row for row in batches
+                            if latest_p4_version is not None
+                            and int(row["p4_version"]) == latest_p4_version
+                        ),
+                        batches[0],
+                    )
                 )
         if latest_p4_version is None:
             latest_p4_version = _latest_platform_p4(
